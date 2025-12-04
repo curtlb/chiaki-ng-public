@@ -2557,13 +2557,20 @@ DialogView {
                     }
 
                     Label {
+                        Layout.columnSpan: 3
+                        text: "DeepL Переводчик:"
+                        font.bold: true
+                    }
+
+                    Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "DeepL API ключ:"
+                        text: "API ключ:"
                     }
 
                     C.TextField {
                         id: deeplApiKeyField
-                        Layout.preferredWidth: 400
+                        Layout.columnSpan: 2
+                        Layout.fillWidth: true
                         text: Chiaki.settings.deeplApiKey
                         placeholderText: "Введите ваш DeepL API ключ"
                         echoMode: TextInput.Password
@@ -2572,12 +2579,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: ""
-                    }
-
-                    Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: "Бесплатный DeepL API:"
+                        text: "Бесплатный API:"
                     }
 
                     C.CheckBox {
@@ -2586,8 +2588,8 @@ DialogView {
                     }
 
                     Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: "(Включено)"
+                        text: "(Включено по умолчанию)"
+                        color: Material.accent
                     }
 
                     Label {

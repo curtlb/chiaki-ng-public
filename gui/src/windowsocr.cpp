@@ -3,7 +3,10 @@
 #include "windowsocr.h"
 #include <QDebug>
 
-#ifdef _WIN32
+// Windows OCR requires MSVC compiler with C++/WinRT support
+// For MSYS2/MinGW builds, OCR will be disabled
+#if defined(_WIN32) && defined(_MSC_VER) && !defined(__MINGW32__)
+#define CHIAKI_WINDOWS_OCR_AVAILABLE
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Graphics.Imaging.h>
@@ -22,7 +25,7 @@ using namespace Windows::Globalization;
 WindowsOCR::WindowsOCR(QObject *parent)
 	: QObject(parent)
 {
-#ifdef _WIN32
+#ifdef CHIAKI_WINDOWS_OCR_AVAILABLE
 	try {
 		winrt::init_apartment();
 	} catch (...) {
@@ -37,7 +40,7 @@ WindowsOCR::~WindowsOCR()
 
 bool WindowsOCR::isAvailable()
 {
-#ifdef _WIN32
+#ifdef CHIAKI_WINDOWS_OCR_AVAILABLE
 	return true;
 #else
 	return false;
@@ -46,14 +49,14 @@ bool WindowsOCR::isAvailable()
 
 void WindowsOCR::recognizeText(const QImage &image, const QString &language)
 {
-#ifdef _WIN32
+#ifdef CHIAKI_WINDOWS_OCR_AVAILABLE
 	processImage(image, language);
 #else
-	emit ocrError("Windows OCR not available on this platform");
+	emit ocrError("Windows OCR not available on this platform (requires MSVC compiler)");
 #endif
 }
 
-#ifdef _WIN32
+#ifdef CHIAKI_WINDOWS_OCR_AVAILABLE
 void WindowsOCR::processImage(const QImage &image, const QString &language)
 {
 	try {
