@@ -15,7 +15,8 @@
 #include <QtMath>
 #include <QGuiApplication>
 #include <QScreen>
-#include <QPixmap>
+#include <QtGui/QPixmap>
+#include <QtGui/QImage>
 
 #include <cstring>
 
@@ -2286,7 +2287,16 @@ void StreamSession::triggerTranslation()
 	
 	// Capture current frame from video
 	// We'll use the last rendered frame from the window
-	QImage screenshot = QGuiApplication::primaryScreen()->grabWindow(0).toImage();
+	QScreen *screen = QGuiApplication::primaryScreen();
+	if(!screen)
+	{
+		qWarning() << "Failed to get primary screen for OCR";
+		is_translating = false;
+		emit IsTranslatingChanged();
+		return;
+	}
+	QPixmap pixmap = screen->grabWindow(0);
+	QImage screenshot = pixmap.toImage();
 	
 	// Trigger OCR on the screenshot
 	ocr->recognizeText(screenshot, "en");
