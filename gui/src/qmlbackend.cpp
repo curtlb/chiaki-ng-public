@@ -141,7 +141,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     connect(settings, &Settings::CurrentProfileChanged, this, &QmlBackend::profileChanged);
     connect(&discovery_manager, &DiscoveryManager::HostsUpdated, this, &QmlBackend::updateDiscoveryHosts);
     discovery_manager.SetSettings(settings);
-    setDiscoveryEnabled(true);
+    setDiscoveryEnabled(false);
     connect(ControllerManager::GetInstance(), &ControllerManager::AvailableControllersUpdated, this, &QmlBackend::updateControllers);
     connect(settings_qml, &QmlSettings::allowJoystickBackgroundEventsChanged, this, &QmlBackend::setAllowJoystickBackgroundEvents);
     connect(window, &QmlMainWindow::activeChanged, this, &QmlBackend::setIsAppActive);

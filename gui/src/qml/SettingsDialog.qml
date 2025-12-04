@@ -602,7 +602,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "(Авто)"
+                        text: "(d3d11va)"
                     }
 
                     Label {

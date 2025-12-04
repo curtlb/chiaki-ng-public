@@ -663,7 +663,7 @@ void Settings::SetAutoConnectHost(const QByteArray &mac)
 
 QString Settings::GetHardwareDecoder() const
 {
-	return settings.value("settings/hw_decoder", "auto").toString();
+	return settings.value("settings/hw_decoder", "d3d11va").toString();
 }
 
 void Settings::SetHardwareDecoder(const QString &hw_decoder)
