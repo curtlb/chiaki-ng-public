@@ -417,9 +417,35 @@ Item {
                 checked: Chiaki.session && !Chiaki.session.muted
                 onToggled: Chiaki.session.muted = !Chiaki.session.muted
                 KeyNavigation.left: volumeSlider
-                KeyNavigation.right: zoomButton
+                KeyNavigation.right: translatorButton
                 Keys.onReturnPressed: toggled()
                 Keys.onEscapePressed: menuView.close()
+            }
+
+            ToolButton {
+                id: translatorButton
+                Layout.rightMargin: 20
+                text: "🌐"
+                padding: 10
+                enabled: Chiaki.session && Chiaki.session.connected
+                onClicked: {
+                    if (Chiaki.session)
+                        Chiaki.session.triggerTranslation();
+                    menuView.close();
+                }
+                KeyNavigation.left: muteButton
+                KeyNavigation.right: zoomButton
+                Keys.onReturnPressed: clicked()
+                Keys.onEscapePressed: menuView.close()
+                
+                Label {
+                    anchors {
+                        top: parent.bottom
+                        horizontalCenter: parent.horizontalCenter
+                    }
+                    text: "Перевод"
+                    font.pixelSize: 10
+                }
             }
 
             ToolButton {
@@ -429,7 +455,7 @@ Item {
                 checkable: true
                 checked: Chiaki.window.videoMode == ChiakiWindow.VideoMode.Zoom
                 onToggled: Chiaki.window.videoMode = Chiaki.window.videoMode == ChiakiWindow.VideoMode.Zoom ? ChiakiWindow.VideoMode.Normal : ChiakiWindow.VideoMode.Zoom
-                KeyNavigation.left: muteButton
+                KeyNavigation.left: translatorButton
                 KeyNavigation.right: {
                     if(Chiaki.window.videoMode == ChiakiWindow.VideoMode.Zoom)
                         zoomFactor
