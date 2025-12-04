@@ -11,6 +11,15 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Concurrent Svg Qml Quick Widgets)
 find_package(Qt6 COMPONENTS WebEngineQuick)
 find_package(Qt6 COMPONENTS DBus)
 
+# Try to find Qt6::GuiPrivate for private API access
+if(TARGET Qt6::GuiPrivate)
+	set(QT_GUI_PRIVATE_TARGET Qt6::GuiPrivate)
+else()
+	# Fallback for MSYS2 or other systems where GuiPrivate target is not available
+	set(QT_GUI_PRIVATE_TARGET "")
+	message(STATUS "Qt6::GuiPrivate target not found, using include directories instead")
+endif()
+
 if(WIN32)
 	add_definitions(-DWIN32_LEAN_AND_MEAN)
 endif()
@@ -100,7 +109,11 @@ if(CHIAKI_ENABLE_CLI)
 	target_link_libraries(chiaki chiaki-cli-lib)
 endif()
 
-target_link_libraries(chiaki Qt::Core Qt::Gui Qt::GuiPrivate Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets)
+target_link_libraries(chiaki Qt::Core Qt::Gui ${QT_GUI_PRIVATE_TARGET} Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets)
+# For systems without GuiPrivate target, include private headers directly
+if(NOT TARGET Qt6::GuiPrivate)
+	target_include_directories(chiaki PRIVATE ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
+endif()
 if (${Qt6DBus_FOUND} AND NOT WIN32)
 	target_link_libraries(chiaki Qt::DBus)
 if (NOT APPLE)
