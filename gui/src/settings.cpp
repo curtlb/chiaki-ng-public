@@ -53,12 +53,16 @@ static void MigrateSettingsTo2(QSettings *settings)
 
 static void MigrateSettingsTo3(QSettings *settings)
 {
-	// Migrate hw_decoder from "auto" or "vulkan" to "d3d11va" for better default on Windows
-	QString hw_decoder = settings->value("settings/hw_decoder", "auto").toString();
-	if(hw_decoder == "auto" || hw_decoder == "vulkan")
-	{
-		CHIAKI_LOGI(NULL, "Migrating hw_decoder from '%s' to 'd3d11va'", hw_decoder.toUtf8().constData());
-		settings->setValue("settings/hw_decoder", "d3d11va");
+	try {
+		// Migrate hw_decoder from "auto" or "vulkan" to "d3d11va" for better default on Windows
+		QString hw_decoder = settings->value("settings/hw_decoder", "auto").toString();
+		if(hw_decoder == "auto" || hw_decoder == "vulkan")
+		{
+			CHIAKI_LOGI(NULL, "Migrating hw_decoder from '%s' to 'd3d11va'", hw_decoder.toUtf8().constData());
+			settings->setValue("settings/hw_decoder", "d3d11va");
+		}
+	} catch (...) {
+		CHIAKI_LOGE(NULL, "Error during settings migration to version 3");
 	}
 }
 
