@@ -297,7 +297,6 @@ class StreamSession : public QObject
 		void Start();
 		void Stop();
 		void GoToBed();
-		Q_INVOKABLE void triggerTranslation();
 		void ToggleMute();
 		void SetLoginPIN(const QString &pin);
 		void GoHome();
