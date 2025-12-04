@@ -15,6 +15,7 @@
 #include <QtMath>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QPixmap>
 
 #include <cstring>
 
