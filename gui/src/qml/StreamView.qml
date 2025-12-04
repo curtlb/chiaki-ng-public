@@ -13,6 +13,15 @@ Item {
     property bool sessionError: false
     property bool sessionLoading: true
     property list<Item> restoreFocusItems
+    
+    TranslationOverlay {
+        id: translationOverlay
+        anchors.fill: parent
+        z: 100
+        translatedText: Chiaki.session ? Chiaki.session.translatedText : ""
+        originalText: Chiaki.session ? Chiaki.session.originalText : ""
+        isTranslating: Chiaki.session ? Chiaki.session.isTranslating : false
+    }
 
     function grabInput(item) {
         Chiaki.window.grabInput();

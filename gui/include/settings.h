@@ -387,6 +387,11 @@ class Settings : public QObject
 		QString GetPsnAuthTokenExpiry() const;
 		void SetPsnAuthTokenExpiry(QString expiry_date);
 
+		QString GetDeepLApiKey() const;
+		void SetDeepLApiKey(const QString &api_key);
+		bool GetDeepLFreeApi() const;
+		void SetDeepLFreeApi(bool free_api);
+
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);
 

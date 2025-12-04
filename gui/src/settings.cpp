@@ -785,6 +785,26 @@ void Settings::SetPsnAuthTokenExpiry(QString expiry_date)
 	settings.setValue("settings/psn_auth_token_expiry", expiry_date);
 }
 
+QString Settings::GetDeepLApiKey() const
+{
+	return settings.value("settings/deepl_api_key").toString();
+}
+
+void Settings::SetDeepLApiKey(const QString &api_key)
+{
+	settings.setValue("settings/deepl_api_key", api_key);
+}
+
+bool Settings::GetDeepLFreeApi() const
+{
+	return settings.value("settings/deepl_free_api", true).toBool();
+}
+
+void Settings::SetDeepLFreeApi(bool free_api)
+{
+	settings.setValue("settings/deepl_free_api", free_api);
+}
+
 QString Settings::GetCurrentProfile() const
 {
 	return default_settings.value("settings/current_profile").toString();

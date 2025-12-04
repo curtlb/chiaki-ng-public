@@ -7,7 +7,7 @@ if(APPLE)
 	enable_language(OBJCXX)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Concurrent Svg Qml Quick Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Concurrent Svg Qml Quick Widgets Network)
 find_package(Qt6 COMPONENTS WebEngineQuick)
 find_package(Qt6 COMPONENTS DBus)
 
@@ -87,6 +87,10 @@ set(SOURCE_FILES
 	src/qmlsvgprovider.cpp
 	include/systemdinhibit.h
 	src/systemdinhibit.cpp
+	include/deepltranslator.h
+	src/deepltranslator.cpp
+	include/windowsocr.h
+	src/windowsocr.cpp
 	)
 set(RESOURCE_FILES "")
 
@@ -137,7 +141,7 @@ if(CHIAKI_ENABLE_CLI)
 	target_link_libraries(chiaki chiaki-cli-lib)
 endif()
 
-target_link_libraries(chiaki Qt::Core Qt::Gui ${QT_GUI_PRIVATE_TARGET} Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets)
+target_link_libraries(chiaki Qt::Core Qt::Gui ${QT_GUI_PRIVATE_TARGET} Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets Qt::Network)
 # For systems without GuiPrivate target, include private headers directly
 if(NOT TARGET Qt6::GuiPrivate)
 	if(QT_PRIVATE_INCLUDE_DIRS)
@@ -180,6 +184,10 @@ if(CHIAKI_ENABLE_STEAM_SHORTCUT)
 endif()
 if(NOT CHIAKI_ENABLE_FFMPEG_DECODER)
 	message(FATAL_ERROR "Chiaki GUI requires CHIAKI_ENABLE_FFMPEG_DECODER=ON")
+endif()
+if(WIN32)
+	# Link Windows Runtime for OCR
+	target_link_libraries(chiaki windowsapp)
 endif()
 if(APPLE)
 	target_link_libraries(chiaki "-framework AVFoundation" "-framework IOKit")

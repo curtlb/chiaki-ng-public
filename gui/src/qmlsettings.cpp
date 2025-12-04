@@ -625,6 +625,28 @@ void QmlSettings::setPsnAuthTokenExpiry(const QString &expiry)
     emit psnAuthTokenExpiryChanged();
 }
 
+QString QmlSettings::deeplApiKey() const
+{
+    return settings->GetDeepLApiKey();
+}
+
+void QmlSettings::setDeeplApiKey(const QString &api_key)
+{
+    settings->SetDeepLApiKey(api_key);
+    emit deeplApiKeyChanged();
+}
+
+bool QmlSettings::deeplFreeApi() const
+{
+    return settings->GetDeepLFreeApi();
+}
+
+void QmlSettings::setDeeplFreeApi(bool free_api)
+{
+    settings->SetDeepLFreeApi(free_api);
+    emit deeplFreeApiChanged();
+}
+
 QString QmlSettings::psnAccountId() const
 {
     return settings->GetPsnAccountId();

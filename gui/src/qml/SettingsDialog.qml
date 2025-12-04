@@ -2549,11 +2549,53 @@ DialogView {
 
                     C.Button {
                         id: exportButton
-                        text: qsTr("Export settings to file")
+                        text: "Экспорт настроек в файл"
                         onClicked: {
                             Chiaki.settings.exportSettings();
                         }
                         Material.roundedScale: Material.SmallScale
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "DeepL API ключ:"
+                    }
+
+                    C.TextField {
+                        id: deeplApiKeyField
+                        Layout.preferredWidth: 400
+                        text: Chiaki.settings.deeplApiKey
+                        placeholderText: "Введите ваш DeepL API ключ"
+                        echoMode: TextInput.Password
+                        onEditingFinished: Chiaki.settings.deeplApiKey = text
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: ""
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "Бесплатный DeepL API:"
+                    }
+
+                    C.CheckBox {
+                        checked: Chiaki.settings.deeplFreeApi
+                        onToggled: Chiaki.settings.deeplFreeApi = checked
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "(Включено)"
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.columnSpan: 3
+                        text: "Комбинация для перевода: Touchpad + L3 + R3"
+                        font.italic: true
+                        color: Material.accent
                     }
 
                     C.Button {

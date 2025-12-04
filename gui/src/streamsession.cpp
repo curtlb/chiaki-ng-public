@@ -13,6 +13,8 @@
 
 #include <QKeyEvent>
 #include <QtMath>
+#include <QGuiApplication>
+#include <QScreen>
 
 #include <cstring>
 
@@ -201,7 +203,37 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	dpad_regular = true;
 	dpad_regular_touch_switched = false;
 	fullscreen_combo_pressed = false;
+	translation_combo_pressed = false;
+	is_translating = false;
 	rumble_haptics_intensity = RumbleHapticsIntensity::Off;
+	
+	// Initialize translator
+	translator = new DeepLTranslator(connect_info.settings->GetDeepLApiKey(), connect_info.settings->GetDeepLFreeApi(), this);
+	connect(translator, &DeepLTranslator::translationReady, this, [this](const QString &text) {
+		translated_text = text;
+		is_translating = false;
+		emit TranslatedTextChanged();
+		emit IsTranslatingChanged();
+	});
+	connect(translator, &DeepLTranslator::translationError, this, [this](const QString &error) {
+		qWarning() << "Translation error:" << error;
+		is_translating = false;
+		emit IsTranslatingChanged();
+	});
+	
+	// Initialize OCR
+	ocr = new WindowsOCR(this);
+	connect(ocr, &WindowsOCR::textRecognized, this, [this](const QString &text) {
+		original_text = text;
+		emit OriginalTextChanged();
+		if(!text.isEmpty() && translator)
+			translator->translate(text, "EN", "RU");
+	});
+	connect(ocr, &WindowsOCR::ocrError, this, [this](const QString &error) {
+		qWarning() << "OCR error:" << error;
+		is_translating = false;
+		emit IsTranslatingChanged();
+	});
 	input_block = 0;
 	player_index = 0;
 	memset(led_color, 0, sizeof(led_color));
@@ -1085,6 +1117,21 @@ void StreamSession::SendFeedbackState()
 	}
 	else
 		fullscreen_combo_pressed = false;
+	
+	// Check for translation combo: Touchpad + L3 + R3
+	bool translation_combo = (state.buttons & CHIAKI_CONTROLLER_BUTTON_TOUCHPAD) && 
+	                         (state.buttons & CHIAKI_CONTROLLER_BUTTON_L3) && 
+	                         (state.buttons & CHIAKI_CONTROLLER_BUTTON_R3);
+	if(translation_combo)
+	{
+		if(!translation_combo_pressed)
+		{
+			translation_combo_pressed = true;
+			triggerTranslation();
+		}
+	}
+	else
+		translation_combo_pressed = false;
 	
 	if((dpad_touch_shortcut1 || dpad_touch_shortcut2 || dpad_touch_shortcut3 || dpad_touch_shortcut4) && (!dpad_touch_shortcut1 || (state.buttons & dpad_touch_shortcut1)) && (!dpad_touch_shortcut2 || (state.buttons & dpad_touch_shortcut2)) && (!dpad_touch_shortcut3 || (state.buttons & dpad_touch_shortcut3)) && (!dpad_touch_shortcut4 || (state.buttons & dpad_touch_shortcut4)))
 	{
@@ -2220,6 +2267,28 @@ void StreamSession::TriggerFfmpegFrameAvailable()
 		measured_bitrate = session.stream_connection.measured_bitrate;
 		emit MeasuredBitrateChanged();
 	}
+}
+
+void StreamSession::triggerTranslation()
+{
+	if(!translator || !ocr)
+		return;
+	
+	if(!translator->hasApiKey())
+	{
+		qWarning() << "DeepL API key not set. Please set it in Settings > Config.";
+		return;
+	}
+	
+	is_translating = true;
+	emit IsTranslatingChanged();
+	
+	// Capture current frame from video
+	// We'll use the last rendered frame from the window
+	QImage screenshot = QGuiApplication::primaryScreen()->grabWindow(0).toImage();
+	
+	// Trigger OCR on the screenshot
+	ocr->recognizeText(screenshot, "en");
 }
 
 class StreamSessionPrivate

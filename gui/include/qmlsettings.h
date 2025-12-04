@@ -72,6 +72,8 @@ class QmlSettings : public QObject
     Q_PROPERTY(QString psnAuthToken READ psnAuthToken WRITE setPsnAuthToken NOTIFY psnAuthTokenChanged)
     Q_PROPERTY(QString psnAuthTokenExpiry READ psnAuthTokenExpiry WRITE setPsnAuthTokenExpiry NOTIFY psnAuthTokenExpiryChanged)
     Q_PROPERTY(QString psnAccountId READ psnAccountId WRITE setPsnAccountId NOTIFY psnAccountIdChanged)
+    Q_PROPERTY(QString deeplApiKey READ deeplApiKey WRITE setDeeplApiKey NOTIFY deeplApiKeyChanged)
+    Q_PROPERTY(bool deeplFreeApi READ deeplFreeApi WRITE setDeeplFreeApi NOTIFY deeplFreeApiChanged)
     Q_PROPERTY(bool mouseTouchEnabled READ mouseTouchEnabled WRITE setMouseTouchEnabled NOTIFY mouseTouchEnabledChanged)
     Q_PROPERTY(bool keyboardEnabled READ keyboardEnabled WRITE setKeyboardEnabled NOTIFY keyboardEnabledChanged)
     Q_PROPERTY(bool dpadTouchEnabled READ dpadTouchEnabled WRITE setDpadTouchEnabled NOTIFY dpadTouchEnabledChanged)
@@ -486,6 +488,11 @@ public:
     QString psnAuthToken() const;
     void setPsnAuthToken(const QString &auth_token);
 
+    QString deeplApiKey() const;
+    void setDeeplApiKey(const QString &api_key);
+    bool deeplFreeApi() const;
+    void setDeeplFreeApi(bool free_api);
+
     QString psnRefreshToken() const;
     void setPsnRefreshToken(const QString &refresh_token);
 
@@ -622,6 +629,8 @@ signals:
     void psnAuthTokenChanged();
     void psnRefreshTokenChanged();
     void psnAuthTokenExpiryChanged();
+    void deeplApiKeyChanged();
+    void deeplFreeApiChanged();
     void psnAccountIdChanged();
     void mouseTouchEnabledChanged();
     void keyboardEnabledChanged();
