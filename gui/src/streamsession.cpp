@@ -212,12 +212,6 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	// Initialize translator
 	translator = new DeepLTranslator(connect_info.settings->GetDeepLApiKey(), connect_info.settings->GetDeepLFreeApi(), this);
 	
-	// Update translator API key when settings change
-	connect(connect_info.settings, &Settings::SettingsChanged, this, [this, connect_info]() {
-		if(translator)
-			translator->setApiKey(connect_info.settings->GetDeepLApiKey());
-	});
-	
 	connect(translator, &DeepLTranslator::translationReady, this, [this](const QString &text) {
 		translated_text = text;
 		is_translating = false;
