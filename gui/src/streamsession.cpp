@@ -210,10 +210,15 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	rumble_haptics_intensity = RumbleHapticsIntensity::Off;
 	
 	// Initialize translator (safe initialization)
+	// Temporarily disabled to diagnose startup crash
 	translator = nullptr;
 	ocr = nullptr;
 	ocr_space = nullptr;
 	
+	// TODO: Re-enable translator after fixing crash
+	bool enable_translator = false; // Set to true after fixing
+	
+	if(enable_translator) {
 	try {
 		translator = new DeepLTranslator(connect_info.settings->GetDeepLApiKey(), connect_info.settings->GetDeepLFreeApi(), this);
 		
@@ -270,6 +275,8 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	} catch (...) {
 		CHIAKI_LOGE(GetChiakiLog(), "Failed to initialize translation services: unknown error");
 	}
+	} // end if(enable_translator)
+	
 	input_block = 0;
 	player_index = 0;
 	memset(led_color, 0, sizeof(led_color));
