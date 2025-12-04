@@ -429,8 +429,7 @@ Item {
                 padding: 10
                 enabled: Chiaki.session && Chiaki.session.connected
                 onClicked: {
-                    if (Chiaki.session)
-                        Chiaki.session.triggerTranslation();
+                    translationDialog.open();
                     menuView.close();
                 }
                 KeyNavigation.left: muteButton
@@ -786,6 +785,17 @@ Item {
                 }
             }
         }
+    }
+
+    TranslationDialog {
+        id: translationDialog
+        parent: Overlay.overlay
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        modal: true
+        
+        onOpened: view.grabInput()
+        onClosed: view.releaseInput()
     }
 
     Dialog {

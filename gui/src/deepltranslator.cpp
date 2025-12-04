@@ -29,7 +29,7 @@ void DeepLTranslator::translate(const QString &text, const QString &source_lang,
 {
 	if(api_key.isEmpty())
 	{
-		emit translationError("DeepL API key not set");
+		emit translationError("DeepL API ключ не установлен. Установите его в Настройках → Конфигурация");
 		return;
 	}
 
