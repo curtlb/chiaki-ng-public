@@ -116,7 +116,7 @@ Pane {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 400
                 flat: true
-                text: "Refresh PSN Hosts"
+                text: "Обновить PSN хосты"
                 icon.source: "qrc:/icons/r1.svg"
                 focusPolicy: Qt.NoFocus
                 onClicked: Chiaki.refreshPsnToken();
@@ -137,7 +137,7 @@ Pane {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 300
                 flat: true
-                text: "Add Manual Host"
+                text: "Добавить хост"
                 focusPolicy: Qt.NoFocus
                 onClicked: root.showManualHostDialog()
                 Material.roundedScale: Material.SmallScale
@@ -308,7 +308,7 @@ Pane {
 
                     Button {
                         Layout.alignment: Qt.AlignCenter
-                        text: modelData.manual ? qsTr("Delete") : qsTr("Hide")
+                        text: modelData.manual ? "Удалить" : "Скрыть"
                         flat: true
                         padding: 20
                         leftPadding: delegate.highlighted ? 50 : undefined
@@ -333,7 +333,7 @@ Pane {
 
                     Button {
                         Layout.alignment: Qt.AlignCenter
-                        text: qsTr("Wake Up")
+                        text: "Разбудить"
                         flat: true
                         padding: 20
                         leftPadding: delegate.highlighted ? 50 : undefined
@@ -358,7 +358,7 @@ Pane {
 
                     Button {
                         Layout.alignment: Qt.AlignCenter
-                        text: qsTr("Update Console Pin")
+                        text: "Изменить PIN"
                         flat: true
                         padding: 20
                         leftPadding: delegate.highlighted ? 50 : undefined

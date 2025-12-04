@@ -1,0 +1,38 @@
+=== Инструкция по применению патча ===
+
+1. В файле gui/src/streamsession.cpp найдите строку 1072 (после "chiaki_controller_state_set_idle(&keyboard_state);")
+   Добавьте ПЕРЕД строкой с "if((dpad_touch_shortcut1...":
+
+	// Check for fullscreen combo: L2 + R2 + L3 + R3
+	bool fullscreen_combo = (state.l2_state > 200) && (state.r2_state > 200) && 
+	                        (state.buttons & CHIAKI_CONTROLLER_BUTTON_L3) && 
+	                        (state.buttons & CHIAKI_CONTROLLER_BUTTON_R3);
+	if(fullscreen_combo)
+	{
+		if(!fullscreen_combo_pressed)
+		{
+			fullscreen_combo_pressed = true;
+			emit FullscreenComboPressed();
+		}
+	}
+	else
+		fullscreen_combo_pressed = false;
+
+
+2. В файле gui/src/qmlmainwindow.cpp найдите функцию UpdateSession() (примерно строка 600)
+   Добавьте подключение сигнала:
+
+	connect(session, &StreamSession::FullscreenComboPressed, this, [this]() {
+		if (windowState() != Qt::WindowFullScreen)
+			fullscreenTime();
+		else
+			normalTime();
+	});
+
+3. Уже сделано:
+   - gui/include/streamsession.h: добавлена переменная fullscreen_combo_pressed
+   - gui/include/streamsession.h: добавлен сигнал FullscreenComboPressed()
+   - gui/src/streamsession.cpp: инициализация fullscreen_combo_pressed = false
+
+Теперь комбинация L2+R2+L3+R3 будет переключать полноэкранный режим!
+
