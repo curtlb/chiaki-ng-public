@@ -200,6 +200,7 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	allow_unmute = false;
 	dpad_regular = true;
 	dpad_regular_touch_switched = false;
+	fullscreen_combo_pressed = false;
 	rumble_haptics_intensity = RumbleHapticsIntensity::Off;
 	input_block = 0;
 	player_index = 0;

@@ -216,6 +216,7 @@ class StreamSession : public QObject
 		bool mouse_touch_enabled;
 		bool dpad_regular;
 		bool dpad_regular_touch_switched;
+		bool fullscreen_combo_pressed;
 		uint dpad_touch_shortcut1;
 		uint dpad_touch_shortcut2;
 		uint dpad_touch_shortcut3;
@@ -328,6 +329,7 @@ class StreamSession : public QObject
 
 	signals:
 		void FfmpegFrameAvailable();
+		void FullscreenComboPressed();
 		void RumbleHapticPushed(uint16_t strength);
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 		void SdeckHapticPushed(haptic_packet_t packetl, haptic_packet_t packetr);
