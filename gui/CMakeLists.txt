@@ -14,10 +14,25 @@ find_package(Qt6 COMPONENTS DBus)
 # Try to find Qt6::GuiPrivate for private API access
 if(TARGET Qt6::GuiPrivate)
 	set(QT_GUI_PRIVATE_TARGET Qt6::GuiPrivate)
+	message(STATUS "Qt6::GuiPrivate target found")
 else()
 	# Fallback for MSYS2 or other systems where GuiPrivate target is not available
 	set(QT_GUI_PRIVATE_TARGET "")
-	message(STATUS "Qt6::GuiPrivate target not found, using include directories instead")
+	message(STATUS "Qt6::GuiPrivate target not found, setting up include directories manually")
+	
+	# Get Qt6Gui version and build private include path
+	get_target_property(Qt6Gui_INCLUDE_DIRS Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
+	message(STATUS "Qt6Gui include dirs: ${Qt6Gui_INCLUDE_DIRS}")
+	
+	# Try to find the Qt version from the package
+	set(QT_PRIVATE_INCLUDE_DIRS "")
+	foreach(dir ${Qt6Gui_INCLUDE_DIRS})
+		if(dir MATCHES "QtGui$")
+			set(QT_PRIVATE_INCLUDE_DIRS "${dir}/${Qt6Gui_VERSION}" "${dir}/${Qt6Gui_VERSION}/QtGui")
+			message(STATUS "Qt private include dirs: ${QT_PRIVATE_INCLUDE_DIRS}")
+			break()
+		endif()
+	endforeach()
 endif()
 
 if(WIN32)
@@ -112,7 +127,13 @@ endif()
 target_link_libraries(chiaki Qt::Core Qt::Gui ${QT_GUI_PRIVATE_TARGET} Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets)
 # For systems without GuiPrivate target, include private headers directly
 if(NOT TARGET Qt6::GuiPrivate)
-	target_include_directories(chiaki PRIVATE ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
+	if(QT_PRIVATE_INCLUDE_DIRS)
+		target_include_directories(chiaki PRIVATE ${QT_PRIVATE_INCLUDE_DIRS})
+	endif()
+	# Also try standard Qt private include directories variable
+	if(Qt6Gui_PRIVATE_INCLUDE_DIRS)
+		target_include_directories(chiaki PRIVATE ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
+	endif()
 endif()
 if (${Qt6DBus_FOUND} AND NOT WIN32)
 	target_link_libraries(chiaki Qt::DBus)
