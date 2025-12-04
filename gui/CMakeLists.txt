@@ -20,19 +20,32 @@ else()
 	set(QT_GUI_PRIVATE_TARGET "")
 	message(STATUS "Qt6::GuiPrivate target not found, setting up include directories manually")
 	
-	# Get Qt6Gui version and build private include path
+	# Get Qt6Gui version and include directories
 	get_target_property(Qt6Gui_INCLUDE_DIRS Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
 	message(STATUS "Qt6Gui include dirs: ${Qt6Gui_INCLUDE_DIRS}")
+	message(STATUS "Qt6Gui version: ${Qt6Gui_VERSION}")
 	
-	# Try to find the Qt version from the package
+	# Build private include paths for MSYS2 and other systems
 	set(QT_PRIVATE_INCLUDE_DIRS "")
 	foreach(dir ${Qt6Gui_INCLUDE_DIRS})
 		if(dir MATCHES "QtGui$")
-			set(QT_PRIVATE_INCLUDE_DIRS "${dir}/${Qt6Gui_VERSION}" "${dir}/${Qt6Gui_VERSION}/QtGui")
+			# Add versioned private include directories
+			list(APPEND QT_PRIVATE_INCLUDE_DIRS 
+				"${dir}/${Qt6Gui_VERSION}"
+				"${dir}/${Qt6Gui_VERSION}/QtGui")
 			message(STATUS "Qt private include dirs: ${QT_PRIVATE_INCLUDE_DIRS}")
 			break()
 		endif()
 	endforeach()
+	
+	# Fallback: try to construct path from Qt6_DIR for MSYS2
+	if(NOT QT_PRIVATE_INCLUDE_DIRS AND Qt6_DIR)
+		get_filename_component(QT_INSTALL_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
+		list(APPEND QT_PRIVATE_INCLUDE_DIRS
+			"${QT_INSTALL_PREFIX}/include/qt6/QtGui/${Qt6Gui_VERSION}"
+			"${QT_INSTALL_PREFIX}/include/qt6/QtGui/${Qt6Gui_VERSION}/QtGui")
+		message(STATUS "Using fallback Qt private include dirs: ${QT_PRIVATE_INCLUDE_DIRS}")
+	endif()
 endif()
 
 if(WIN32)
