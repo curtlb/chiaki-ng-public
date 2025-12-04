@@ -209,55 +209,67 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	is_translating = false;
 	rumble_haptics_intensity = RumbleHapticsIntensity::Off;
 	
-	// Initialize translator
-	translator = new DeepLTranslator(connect_info.settings->GetDeepLApiKey(), connect_info.settings->GetDeepLFreeApi(), this);
+	// Initialize translator (safe initialization)
+	translator = nullptr;
+	ocr = nullptr;
+	ocr_space = nullptr;
 	
-	connect(translator, &DeepLTranslator::translationReady, this, [this](const QString &text) {
-		translated_text = text;
-		is_translating = false;
-		emit TranslatedTextChanged();
-		emit IsTranslatingChanged();
+	try {
+		translator = new DeepLTranslator(connect_info.settings->GetDeepLApiKey(), connect_info.settings->GetDeepLFreeApi(), this);
 		
-		// Log successful translation
-		CHIAKI_LOGI(GetChiakiLog(), "Translation completed: %zu chars", text.length());
-	});
-	connect(translator, &DeepLTranslator::translationError, this, [this](const QString &error) {
-		qWarning() << "Translation error:" << error;
-		translated_text = QString("Ошибка перевода: %1").arg(error);
-		is_translating = false;
-		emit TranslatedTextChanged();
-		emit IsTranslatingChanged();
-	});
-	
-	// Initialize OCR (Windows native - only works with MSVC)
-	ocr = new WindowsOCR(this);
-	connect(ocr, &WindowsOCR::textRecognized, this, [this](const QString &text) {
-		original_text = text;
-		emit OriginalTextChanged();
-		if(!text.isEmpty() && translator)
-			translator->translate(text, "EN", "RU");
-	});
-	connect(ocr, &WindowsOCR::ocrError, this, [this](const QString &error) {
-		qWarning() << "Windows OCR error:" << error;
-		is_translating = false;
-		emit IsTranslatingChanged();
-	});
-	
-	// Initialize OCR.space (cloud-based, works everywhere)
-	ocr_space = new OCRSpaceClient(connect_info.settings->GetOCRSpaceApiKey(), this);
-	connect(ocr_space, &OCRSpaceClient::textRecognized, this, [this](const QString &text) {
-		original_text = text;
-		emit OriginalTextChanged();
-		if(!text.isEmpty() && translator)
-			translator->translate(text, "EN", "RU");
-	});
-	connect(ocr_space, &OCRSpaceClient::ocrError, this, [this](const QString &error) {
-		qWarning() << "OCR.space error:" << error;
-		translated_text = QString("Ошибка OCR: %1").arg(error);
-		is_translating = false;
-		emit TranslatedTextChanged();
-		emit IsTranslatingChanged();
-	});
+		connect(translator, &DeepLTranslator::translationReady, this, [this](const QString &text) {
+			translated_text = text;
+			is_translating = false;
+			emit TranslatedTextChanged();
+			emit IsTranslatingChanged();
+			
+			// Log successful translation
+			CHIAKI_LOGI(GetChiakiLog(), "Translation completed: %zu chars", text.length());
+		});
+		connect(translator, &DeepLTranslator::translationError, this, [this](const QString &error) {
+			qWarning() << "Translation error:" << error;
+			translated_text = QString("Ошибка перевода: %1").arg(error);
+			is_translating = false;
+			emit TranslatedTextChanged();
+			emit IsTranslatingChanged();
+		});
+		
+		// Initialize OCR (Windows native - only works with MSVC)
+		ocr = new WindowsOCR(this);
+		connect(ocr, &WindowsOCR::textRecognized, this, [this](const QString &text) {
+			original_text = text;
+			emit OriginalTextChanged();
+			if(!text.isEmpty() && translator)
+				translator->translate(text, "EN", "RU");
+		});
+		connect(ocr, &WindowsOCR::ocrError, this, [this](const QString &error) {
+			qWarning() << "Windows OCR error:" << error;
+			is_translating = false;
+			emit IsTranslatingChanged();
+		});
+		
+		// Initialize OCR.space (cloud-based, works everywhere)
+		ocr_space = new OCRSpaceClient(connect_info.settings->GetOCRSpaceApiKey(), this);
+		connect(ocr_space, &OCRSpaceClient::textRecognized, this, [this](const QString &text) {
+			original_text = text;
+			emit OriginalTextChanged();
+			if(!text.isEmpty() && translator)
+				translator->translate(text, "EN", "RU");
+		});
+		connect(ocr_space, &OCRSpaceClient::ocrError, this, [this](const QString &error) {
+			qWarning() << "OCR.space error:" << error;
+			translated_text = QString("Ошибка OCR: %1").arg(error);
+			is_translating = false;
+			emit TranslatedTextChanged();
+			emit IsTranslatingChanged();
+		});
+		
+		CHIAKI_LOGI(GetChiakiLog(), "Translation services initialized successfully");
+	} catch (const std::exception &e) {
+		CHIAKI_LOGE(GetChiakiLog(), "Failed to initialize translation services: %s", e.what());
+	} catch (...) {
+		CHIAKI_LOGE(GetChiakiLog(), "Failed to initialize translation services: unknown error");
+	}
 	input_block = 0;
 	player_index = 0;
 	memset(led_color, 0, sizeof(led_color));
@@ -2296,13 +2308,18 @@ void StreamSession::TriggerFfmpegFrameAvailable()
 void StreamSession::translateText(const QString &text, const QString &source_lang, const QString &target_lang)
 {
 	if(!translator)
+	{
+		qWarning() << "Translator not initialized";
 		return;
+	}
 	
 	if(!translator->hasApiKey())
 	{
 		qWarning() << "DeepL API key not set. Please set it in Settings > Config.";
-		translated_text = "Ошибка: DeepL API ключ не установлен";
+		translated_text = "Ошибка: DeepL API ключ не установлен. Установите в Настройках → Конфигурация";
+		is_translating = false;
 		emit TranslatedTextChanged();
+		emit IsTranslatingChanged();
 		return;
 	}
 	
@@ -2311,7 +2328,9 @@ void StreamSession::translateText(const QString &text, const QString &source_lan
 	
 	is_translating = true;
 	original_text = text;
+	translated_text = ""; // Clear previous translation
 	emit OriginalTextChanged();
+	emit TranslatedTextChanged();
 	emit IsTranslatingChanged();
 	
 	translator->translate(text, source_lang, target_lang);
@@ -2320,11 +2339,18 @@ void StreamSession::translateText(const QString &text, const QString &source_lan
 void StreamSession::triggerTranslation()
 {
 	if(!translator)
+	{
+		qWarning() << "Translator not initialized";
 		return;
+	}
 	
 	if(!translator->hasApiKey())
 	{
 		qWarning() << "DeepL API key not set. Please set it in Settings > Config.";
+		translated_text = "Ошибка: DeepL API ключ не установлен";
+		is_translating = false;
+		emit TranslatedTextChanged();
+		emit IsTranslatingChanged();
 		return;
 	}
 	
@@ -2335,36 +2361,66 @@ void StreamSession::triggerTranslation()
 	if(!use_ocr_space && !use_windows_ocr)
 	{
 		qWarning() << "No OCR available. Please set OCR.space API key in Settings > Config.";
-		translated_text = "Ошибка: Нет доступного OCR. Установите OCR.space API ключ в настройках.";
+		translated_text = "Нет доступного OCR.\nУстановите OCR.space API ключ в Настройках → Конфигурация\n\nБесплатный ключ: https://ocr.space/ocrapi";
+		is_translating = false;
 		emit TranslatedTextChanged();
+		emit IsTranslatingChanged();
 		return;
 	}
 	
 	is_translating = true;
+	translated_text = ""; // Clear previous
+	emit TranslatedTextChanged();
 	emit IsTranslatingChanged();
 	
-	// Capture current frame from video
-	QScreen *screen = QGuiApplication::primaryScreen();
-	if(!screen)
-	{
-		qWarning() << "Failed to get primary screen for OCR";
+	try {
+		// Capture current frame from video
+		QScreen *screen = QGuiApplication::primaryScreen();
+		if(!screen)
+		{
+			qWarning() << "Failed to get primary screen for OCR";
+			translated_text = "Ошибка: не удалось получить снимок экрана";
+			is_translating = false;
+			emit TranslatedTextChanged();
+			emit IsTranslatingChanged();
+			return;
+		}
+		QPixmap pixmap = screen->grabWindow(0);
+		QImage screenshot = pixmap.toImage();
+		
+		if(screenshot.isNull())
+		{
+			qWarning() << "Screenshot is null";
+			translated_text = "Ошибка: пустой скриншот";
+			is_translating = false;
+			emit TranslatedTextChanged();
+			emit IsTranslatingChanged();
+			return;
+		}
+		
+		// Trigger OCR
+		if(use_ocr_space)
+		{
+			CHIAKI_LOGI(GetChiakiLog(), "Using OCR.space for text recognition");
+			ocr_space->recognizeText(screenshot, "eng");
+		}
+		else
+		{
+			CHIAKI_LOGI(GetChiakiLog(), "Using Windows OCR for text recognition");
+			ocr->recognizeText(screenshot, "en");
+		}
+	} catch (const std::exception &e) {
+		qWarning() << "Exception in triggerTranslation:" << e.what();
+		translated_text = QString("Ошибка: %1").arg(e.what());
 		is_translating = false;
+		emit TranslatedTextChanged();
 		emit IsTranslatingChanged();
-		return;
-	}
-	QPixmap pixmap = screen->grabWindow(0);
-	QImage screenshot = pixmap.toImage();
-	
-	// Trigger OCR
-	if(use_ocr_space)
-	{
-		CHIAKI_LOGI(GetChiakiLog(), "Using OCR.space for text recognition");
-		ocr_space->recognizeText(screenshot, "eng");
-	}
-	else
-	{
-		CHIAKI_LOGI(GetChiakiLog(), "Using Windows OCR for text recognition");
-		ocr->recognizeText(screenshot, "en");
+	} catch (...) {
+		qWarning() << "Unknown exception in triggerTranslation";
+		translated_text = "Неизвестная ошибка при распознавании";
+		is_translating = false;
+		emit TranslatedTextChanged();
+		emit IsTranslatingChanged();
 	}
 }
 
