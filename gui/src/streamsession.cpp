@@ -1070,6 +1070,22 @@ void StreamSession::SendFeedbackState()
 			chiaki_controller_state_set_idle(&keyboard_state);
 		}
 	}
+	
+	// Check for fullscreen combo: L2 + R2 + L3 + R3
+	bool fullscreen_combo = (state.l2_state > 200) && (state.r2_state > 200) && 
+	                        (state.buttons & CHIAKI_CONTROLLER_BUTTON_L3) && 
+	                        (state.buttons & CHIAKI_CONTROLLER_BUTTON_R3);
+	if(fullscreen_combo)
+	{
+		if(!fullscreen_combo_pressed)
+		{
+			fullscreen_combo_pressed = true;
+			emit FullscreenComboPressed();
+		}
+	}
+	else
+		fullscreen_combo_pressed = false;
+	
 	if((dpad_touch_shortcut1 || dpad_touch_shortcut2 || dpad_touch_shortcut3 || dpad_touch_shortcut4) && (!dpad_touch_shortcut1 || (state.buttons & dpad_touch_shortcut1)) && (!dpad_touch_shortcut2 || (state.buttons & dpad_touch_shortcut2)) && (!dpad_touch_shortcut3 || (state.buttons & dpad_touch_shortcut3)) && (!dpad_touch_shortcut4 || (state.buttons & dpad_touch_shortcut4)))
 	{
 		if(!dpad_regular_touch_switched)

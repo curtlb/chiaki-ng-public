@@ -528,6 +528,15 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
         {
             connect(session, &StreamSession::SessionQuit, qGuiApp, &QGuiApplication::quit);
         }
+        if(session)
+        {
+            connect(session, &StreamSession::FullscreenComboPressed, this, [this]() {
+                if (windowState() != Qt::WindowFullScreen)
+                    fullscreenTime();
+                else
+                    normalTime();
+            });
+        }
         if(!session)
         {
             setStreamWindowAdjustable(false);
