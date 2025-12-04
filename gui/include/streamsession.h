@@ -31,9 +31,6 @@
 #include "sessionlog.h"
 #include "controllermanager.h"
 #include "settings.h"
-#include "deepltranslator.h"
-#include "windowsocr.h"
-#include "ocrspaceclient.h"
 
 #include <QObject>
 #include <QImage>
@@ -148,9 +145,6 @@ class StreamSession : public QObject
 	Q_PROPERTY(bool connected READ GetConnected NOTIFY ConnectedChanged)
 	Q_PROPERTY(double measuredBitrate READ GetMeasuredBitrate NOTIFY MeasuredBitrateChanged)
 	Q_PROPERTY(double averagePacketLoss READ GetAveragePacketLoss NOTIFY AveragePacketLossChanged)
-	Q_PROPERTY(QString translatedText READ GetTranslatedText NOTIFY TranslatedTextChanged)
-	Q_PROPERTY(QString originalText READ GetOriginalText NOTIFY OriginalTextChanged)
-	Q_PROPERTY(bool isTranslating READ IsTranslating NOTIFY IsTranslatingChanged)
 	Q_PROPERTY(bool muted READ GetMuted WRITE SetMuted NOTIFY MutedChanged)
 	Q_PROPERTY(bool cantDisplay READ GetCantDisplay NOTIFY CantDisplayChanged)
 
@@ -223,13 +217,6 @@ class StreamSession : public QObject
 		bool dpad_regular;
 		bool dpad_regular_touch_switched;
 		bool fullscreen_combo_pressed;
-		bool translation_combo_pressed;
-		DeepLTranslator *translator;
-		WindowsOCR *ocr;
-		OCRSpaceClient *ocr_space;
-		QString translated_text;
-		QString original_text;
-		bool is_translating;
 		uint dpad_touch_shortcut1;
 		uint dpad_touch_shortcut2;
 		uint dpad_touch_shortcut3;
@@ -306,20 +293,6 @@ class StreamSession : public QObject
 
 		bool IsConnected()	{ return connected; }
 		bool IsConnecting()	{ return connect_timer.isValid(); }
-		
-		QString GetTranslatedText() const { return translated_text; }
-		QString GetOriginalText() const { return original_text; }
-		bool IsTranslating() const { return is_translating; }
-		
-		Q_INVOKABLE void setOriginalText(const QString &text) { 
-			original_text = text; 
-			emit OriginalTextChanged(); 
-		}
-		Q_INVOKABLE void setIsTranslating(bool translating) { 
-			is_translating = translating; 
-			emit IsTranslatingChanged(); 
-		}
-		Q_INVOKABLE void translateText(const QString &text, const QString &source_lang = "EN", const QString &target_lang = "RU");
 
 		void Start();
 		void Stop();
@@ -373,9 +346,6 @@ class StreamSession : public QObject
 		void AveragePacketLossChanged();
 		void MutedChanged();
 		void CantDisplayChanged(bool cant_display);
-		void TranslatedTextChanged();
-		void OriginalTextChanged();
-		void IsTranslatingChanged();
 
 	private slots:
 		void UpdateGamepads();

@@ -13,15 +13,6 @@ Item {
     property bool sessionError: false
     property bool sessionLoading: true
     property list<Item> restoreFocusItems
-    
-    TranslationOverlay {
-        id: translationOverlay
-        anchors.fill: parent
-        z: 100
-        translatedText: Chiaki.session ? Chiaki.session.translatedText : ""
-        originalText: Chiaki.session ? Chiaki.session.originalText : ""
-        isTranslating: Chiaki.session ? Chiaki.session.isTranslating : false
-    }
 
     function grabInput(item) {
         Chiaki.window.grabInput();
@@ -417,34 +408,9 @@ Item {
                 checked: Chiaki.session && !Chiaki.session.muted
                 onToggled: Chiaki.session.muted = !Chiaki.session.muted
                 KeyNavigation.left: volumeSlider
-                KeyNavigation.right: translatorButton
+                KeyNavigation.right: zoomButton
                 Keys.onReturnPressed: toggled()
                 Keys.onEscapePressed: menuView.close()
-            }
-
-            ToolButton {
-                id: translatorButton
-                Layout.rightMargin: 20
-                text: "🌐"
-                padding: 10
-                enabled: Chiaki.session && Chiaki.session.connected
-                onClicked: {
-                    translationDialog.open();
-                    menuView.close();
-                }
-                KeyNavigation.left: muteButton
-                KeyNavigation.right: zoomButton
-                Keys.onReturnPressed: clicked()
-                Keys.onEscapePressed: menuView.close()
-                
-                Label {
-                    anchors {
-                        top: parent.bottom
-                        horizontalCenter: parent.horizontalCenter
-                    }
-                    text: "Перевод"
-                    font.pixelSize: 10
-                }
             }
 
             ToolButton {
@@ -454,7 +420,7 @@ Item {
                 checkable: true
                 checked: Chiaki.window.videoMode == ChiakiWindow.VideoMode.Zoom
                 onToggled: Chiaki.window.videoMode = Chiaki.window.videoMode == ChiakiWindow.VideoMode.Zoom ? ChiakiWindow.VideoMode.Normal : ChiakiWindow.VideoMode.Zoom
-                KeyNavigation.left: translatorButton
+                KeyNavigation.left: muteButton
                 KeyNavigation.right: {
                     if(Chiaki.window.videoMode == ChiakiWindow.VideoMode.Zoom)
                         zoomFactor
@@ -785,17 +751,6 @@ Item {
                 }
             }
         }
-    }
-
-    TranslationDialog {
-        id: translationDialog
-        parent: Overlay.overlay
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
-        modal: true
-        
-        onOpened: view.grabInput()
-        onClosed: view.releaseInput()
     }
 
     Dialog {

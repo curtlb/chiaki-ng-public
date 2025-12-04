@@ -2556,64 +2556,6 @@ DialogView {
                         Material.roundedScale: Material.SmallScale
                     }
 
-                    Label {
-                        text: "Автоматический переводчик (EN → RU):"
-                        font.bold: true
-                        font.pointSize: 12
-                    }
-
-                    Label {
-                        text: "OCR.space API ключ (распознавание текста):"
-                        leftPadding: 10
-                    }
-
-                    C.TextField {
-                        id: ocrSpaceApiKeyField
-                        Layout.fillWidth: true
-                        Layout.preferredWidth: 400
-                        text: Chiaki.settings.ocrSpaceApiKey
-                        placeholderText: "Введите OCR.space API ключ (бесплатно: 500 запросов/день)"
-                        echoMode: TextInput.Password
-                        onEditingFinished: Chiaki.settings.ocrSpaceApiKey = text
-                    }
-
-                    Label {
-                        text: "DeepL API ключ (перевод текста):"
-                        leftPadding: 10
-                    }
-
-                    C.TextField {
-                        id: deeplApiKeyField
-                        Layout.fillWidth: true
-                        Layout.preferredWidth: 400
-                        text: Chiaki.settings.deeplApiKey
-                        placeholderText: "Введите DeepL API ключ (бесплатно: 500K символов/месяц)"
-                        echoMode: TextInput.Password
-                        onEditingFinished: Chiaki.settings.deeplApiKey = text
-                    }
-
-                    C.CheckBox {
-                        text: "Использовать бесплатный DeepL API (включено по умолчанию)"
-                        checked: Chiaki.settings.deeplFreeApi
-                        onToggled: Chiaki.settings.deeplFreeApi = checked
-                    }
-
-                    Label {
-                        text: "Горячие клавиши: Touchpad + L3 + R3 или Ctrl+O → 🌐 Перевод"
-                        font.italic: true
-                        color: Material.accent
-                        leftPadding: 10
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Label {
-                        text: "• OCR.space (бесплатно): https://ocr.space/ocrapi\n• DeepL (бесплатно): https://www.deepl.com/pro-api"
-                        font.italic: true
-                        color: Material.color(Material.Blue, Material.Shade300)
-                        leftPadding: 10
-                        wrapMode: Text.WordWrap
-                    }
-
                     C.Button {
                         id: importButton
                         text: "Импорт настроек из файла"

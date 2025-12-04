@@ -10,7 +10,7 @@
 
 #include <chiaki/config.h>
 
-#define SETTINGS_VERSION 3
+#define SETTINGS_VERSION 2
 
 static void MigrateSettingsTo2(QSettings *settings)
 {
@@ -51,21 +51,6 @@ static void MigrateSettingsTo2(QSettings *settings)
 		settings->setValue("settings/hw_decoder", hw_decoder);
 }
 
-static void MigrateSettingsTo3(QSettings *settings)
-{
-	try {
-		// Migrate hw_decoder from "auto" or "vulkan" to "d3d11va" for better default on Windows
-		QString hw_decoder = settings->value("settings/hw_decoder", "auto").toString();
-		if(hw_decoder == "auto" || hw_decoder == "vulkan")
-		{
-			CHIAKI_LOGI(NULL, "Migrating hw_decoder from '%s' to 'd3d11va'", hw_decoder.toUtf8().constData());
-			settings->setValue("settings/hw_decoder", "d3d11va");
-		}
-	} catch (...) {
-		CHIAKI_LOGE(NULL, "Error during settings migration to version 3");
-	}
-}
-
 static void MigrateSettings(QSettings *settings)
 {
 	int version_prev = settings->value("version", 0).toInt();
@@ -84,10 +69,6 @@ static void MigrateSettings(QSettings *settings)
 			case 2:
 				CHIAKI_LOGI(NULL, "Migrating settings to 2");
 				MigrateSettingsTo2(settings);
-				break;
-			case 3:
-				CHIAKI_LOGI(NULL, "Migrating settings to 3");
-				MigrateSettingsTo3(settings);
 				break;
 			default:
 				break;
@@ -802,36 +783,6 @@ QString Settings::GetPsnAuthTokenExpiry() const
 void Settings::SetPsnAuthTokenExpiry(QString expiry_date)
 {
 	settings.setValue("settings/psn_auth_token_expiry", expiry_date);
-}
-
-QString Settings::GetDeepLApiKey() const
-{
-	return settings.value("settings/deepl_api_key").toString();
-}
-
-void Settings::SetDeepLApiKey(const QString &api_key)
-{
-	settings.setValue("settings/deepl_api_key", api_key);
-}
-
-bool Settings::GetDeepLFreeApi() const
-{
-	return settings.value("settings/deepl_free_api", true).toBool();
-}
-
-void Settings::SetDeepLFreeApi(bool free_api)
-{
-	settings.setValue("settings/deepl_free_api", free_api);
-}
-
-QString Settings::GetOCRSpaceApiKey() const
-{
-	return settings.value("settings/ocrspace_api_key").toString();
-}
-
-void Settings::SetOCRSpaceApiKey(const QString &api_key)
-{
-	settings.setValue("settings/ocrspace_api_key", api_key);
 }
 
 QString Settings::GetCurrentProfile() const
