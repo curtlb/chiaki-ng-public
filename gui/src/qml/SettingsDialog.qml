@@ -2557,47 +2557,46 @@ DialogView {
                     }
 
                     Label {
-                        Layout.columnSpan: 3
                         text: "DeepL Переводчик:"
                         font.bold: true
+                        font.pointSize: 12
                     }
 
                     Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: "API ключ:"
+                        text: "API ключ DeepL:"
+                        leftPadding: 10
                     }
 
                     C.TextField {
                         id: deeplApiKeyField
-                        Layout.columnSpan: 2
                         Layout.fillWidth: true
+                        Layout.preferredWidth: 400
                         text: Chiaki.settings.deeplApiKey
-                        placeholderText: "Введите ваш DeepL API ключ"
+                        placeholderText: "Введите ваш DeepL API ключ (бесплатный или платный)"
                         echoMode: TextInput.Password
                         onEditingFinished: Chiaki.settings.deeplApiKey = text
                     }
 
-                    Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: "Бесплатный API:"
-                    }
-
                     C.CheckBox {
+                        text: "Использовать бесплатный DeepL API (включено по умолчанию)"
                         checked: Chiaki.settings.deeplFreeApi
                         onToggled: Chiaki.settings.deeplFreeApi = checked
                     }
 
                     Label {
-                        text: "(Включено по умолчанию)"
+                        text: "Комбинация для активации перевода: Touchpad + L3 + R3"
+                        font.italic: true
                         color: Material.accent
+                        leftPadding: 10
+                        wrapMode: Text.WordWrap
                     }
 
                     Label {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.columnSpan: 3
-                        text: "Комбинация для перевода: Touchpad + L3 + R3"
+                        text: "Получить бесплатный API ключ: https://www.deepl.com/pro-api"
                         font.italic: true
-                        color: Material.accent
+                        color: Material.color(Material.Blue, Material.Shade300)
+                        leftPadding: 10
+                        wrapMode: Text.WordWrap
                     }
 
                     C.Button {

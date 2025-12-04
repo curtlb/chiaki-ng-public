@@ -10,7 +10,7 @@
 
 #include <chiaki/config.h>
 
-#define SETTINGS_VERSION 2
+#define SETTINGS_VERSION 3
 
 static void MigrateSettingsTo2(QSettings *settings)
 {
@@ -51,6 +51,17 @@ static void MigrateSettingsTo2(QSettings *settings)
 		settings->setValue("settings/hw_decoder", hw_decoder);
 }
 
+static void MigrateSettingsTo3(QSettings *settings)
+{
+	// Migrate hw_decoder from "auto" or "vulkan" to "d3d11va" for better default on Windows
+	QString hw_decoder = settings->value("settings/hw_decoder", "auto").toString();
+	if(hw_decoder == "auto" || hw_decoder == "vulkan")
+	{
+		CHIAKI_LOGI(NULL, "Migrating hw_decoder from '%s' to 'd3d11va'", hw_decoder.toUtf8().constData());
+		settings->setValue("settings/hw_decoder", "d3d11va");
+	}
+}
+
 static void MigrateSettings(QSettings *settings)
 {
 	int version_prev = settings->value("version", 0).toInt();
@@ -69,6 +80,10 @@ static void MigrateSettings(QSettings *settings)
 			case 2:
 				CHIAKI_LOGI(NULL, "Migrating settings to 2");
 				MigrateSettingsTo2(settings);
+				break;
+			case 3:
+				CHIAKI_LOGI(NULL, "Migrating settings to 3");
+				MigrateSettingsTo3(settings);
 				break;
 			default:
 				break;
