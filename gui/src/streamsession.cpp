@@ -229,7 +229,7 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 		emit IsTranslatingChanged();
 	});
 	
-	// Initialize OCR
+	// Initialize OCR (Windows native - only works with MSVC)
 	ocr = new WindowsOCR(this);
 	connect(ocr, &WindowsOCR::textRecognized, this, [this](const QString &text) {
 		original_text = text;
@@ -238,8 +238,24 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 			translator->translate(text, "EN", "RU");
 	});
 	connect(ocr, &WindowsOCR::ocrError, this, [this](const QString &error) {
-		qWarning() << "OCR error:" << error;
+		qWarning() << "Windows OCR error:" << error;
 		is_translating = false;
+		emit IsTranslatingChanged();
+	});
+	
+	// Initialize OCR.space (cloud-based, works everywhere)
+	ocr_space = new OCRSpaceClient(connect_info.settings->GetOCRSpaceApiKey(), this);
+	connect(ocr_space, &OCRSpaceClient::textRecognized, this, [this](const QString &text) {
+		original_text = text;
+		emit OriginalTextChanged();
+		if(!text.isEmpty() && translator)
+			translator->translate(text, "EN", "RU");
+	});
+	connect(ocr_space, &OCRSpaceClient::ocrError, this, [this](const QString &error) {
+		qWarning() << "OCR.space error:" << error;
+		translated_text = QString("Ошибка OCR: %1").arg(error);
+		is_translating = false;
+		emit TranslatedTextChanged();
 		emit IsTranslatingChanged();
 	});
 	input_block = 0;
@@ -2303,7 +2319,7 @@ void StreamSession::translateText(const QString &text, const QString &source_lan
 
 void StreamSession::triggerTranslation()
 {
-	if(!translator || !ocr)
+	if(!translator)
 		return;
 	
 	if(!translator->hasApiKey())
@@ -2312,11 +2328,22 @@ void StreamSession::triggerTranslation()
 		return;
 	}
 	
+	// Prefer OCR.space (cloud-based, works everywhere)
+	bool use_ocr_space = ocr_space && ocr_space->hasApiKey();
+	bool use_windows_ocr = !use_ocr_space && ocr && WindowsOCR::isAvailable();
+	
+	if(!use_ocr_space && !use_windows_ocr)
+	{
+		qWarning() << "No OCR available. Please set OCR.space API key in Settings > Config.";
+		translated_text = "Ошибка: Нет доступного OCR. Установите OCR.space API ключ в настройках.";
+		emit TranslatedTextChanged();
+		return;
+	}
+	
 	is_translating = true;
 	emit IsTranslatingChanged();
 	
 	// Capture current frame from video
-	// We'll use the last rendered frame from the window
 	QScreen *screen = QGuiApplication::primaryScreen();
 	if(!screen)
 	{
@@ -2328,8 +2355,17 @@ void StreamSession::triggerTranslation()
 	QPixmap pixmap = screen->grabWindow(0);
 	QImage screenshot = pixmap.toImage();
 	
-	// Trigger OCR on the screenshot
-	ocr->recognizeText(screenshot, "en");
+	// Trigger OCR
+	if(use_ocr_space)
+	{
+		CHIAKI_LOGI(GetChiakiLog(), "Using OCR.space for text recognition");
+		ocr_space->recognizeText(screenshot, "eng");
+	}
+	else
+	{
+		CHIAKI_LOGI(GetChiakiLog(), "Using Windows OCR for text recognition");
+		ocr->recognizeText(screenshot, "en");
+	}
 }
 
 class StreamSessionPrivate

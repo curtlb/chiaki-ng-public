@@ -647,6 +647,17 @@ void QmlSettings::setDeeplFreeApi(bool free_api)
     emit deeplFreeApiChanged();
 }
 
+QString QmlSettings::ocrSpaceApiKey() const
+{
+    return settings->GetOCRSpaceApiKey();
+}
+
+void QmlSettings::setOcrSpaceApiKey(const QString &api_key)
+{
+    settings->SetOCRSpaceApiKey(api_key);
+    emit ocrSpaceApiKeyChanged();
+}
+
 QString QmlSettings::psnAccountId() const
 {
     return settings->GetPsnAccountId();

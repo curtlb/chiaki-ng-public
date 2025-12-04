@@ -91,6 +91,8 @@ set(SOURCE_FILES
 	src/deepltranslator.cpp
 	include/windowsocr.h
 	src/windowsocr.cpp
+	include/ocrspaceclient.h
+	src/ocrspaceclient.cpp
 	)
 set(RESOURCE_FILES "")
 

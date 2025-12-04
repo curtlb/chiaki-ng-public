@@ -33,6 +33,7 @@
 #include "settings.h"
 #include "deepltranslator.h"
 #include "windowsocr.h"
+#include "ocrspaceclient.h"
 
 #include <QObject>
 #include <QImage>
@@ -225,6 +226,7 @@ class StreamSession : public QObject
 		bool translation_combo_pressed;
 		DeepLTranslator *translator;
 		WindowsOCR *ocr;
+		OCRSpaceClient *ocr_space;
 		QString translated_text;
 		QString original_text;
 		bool is_translating;

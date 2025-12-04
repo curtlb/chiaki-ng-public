@@ -129,7 +129,7 @@ DialogView {
             }
             
             Label {
-                text: "Примечание: OCR (распознавание с экрана) недоступен в MSYS2 сборке"
+                text: "Примечание: Для автоматического распознавания (Touchpad+L3+R3) нужен OCR.space API ключ"
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
                 font.italic: true

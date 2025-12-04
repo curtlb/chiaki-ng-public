@@ -820,6 +820,16 @@ void Settings::SetDeepLFreeApi(bool free_api)
 	settings.setValue("settings/deepl_free_api", free_api);
 }
 
+QString Settings::GetOCRSpaceApiKey() const
+{
+	return settings.value("settings/ocrspace_api_key").toString();
+}
+
+void Settings::SetOCRSpaceApiKey(const QString &api_key)
+{
+	settings.setValue("settings/ocrspace_api_key", api_key);
+}
+
 QString Settings::GetCurrentProfile() const
 {
 	return default_settings.value("settings/current_profile").toString();

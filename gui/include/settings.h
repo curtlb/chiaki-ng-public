@@ -391,6 +391,8 @@ class Settings : public QObject
 		void SetDeepLApiKey(const QString &api_key);
 		bool GetDeepLFreeApi() const;
 		void SetDeepLFreeApi(bool free_api);
+		QString GetOCRSpaceApiKey() const;
+		void SetOCRSpaceApiKey(const QString &api_key);
 
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);
