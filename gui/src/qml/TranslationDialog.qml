@@ -14,14 +14,8 @@ DialogView {
     buttonEnabled: inputField.text.length > 0 && (!Chiaki.session || !Chiaki.session.isTranslating)
     onAccepted: {
         if (inputField.text.length > 0 && Chiaki.session) {
-            // Set original text manually
-            Chiaki.session.setOriginalText(inputField.text);
-            
-            // Start translation
-            if (Chiaki.session.translator) {
-                Chiaki.session.setIsTranslating(true);
-                Chiaki.session.translator.translate(inputField.text, "EN", "RU");
-            }
+            // Call translateText method
+            Chiaki.session.translateText(inputField.text, "EN", "RU");
         }
     }
     

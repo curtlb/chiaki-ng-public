@@ -150,7 +150,6 @@ class StreamSession : public QObject
 	Q_PROPERTY(QString translatedText READ GetTranslatedText NOTIFY TranslatedTextChanged)
 	Q_PROPERTY(QString originalText READ GetOriginalText NOTIFY OriginalTextChanged)
 	Q_PROPERTY(bool isTranslating READ IsTranslating NOTIFY IsTranslatingChanged)
-	Q_PROPERTY(DeepLTranslator* translator READ GetTranslator CONSTANT)
 	Q_PROPERTY(bool muted READ GetMuted WRITE SetMuted NOTIFY MutedChanged)
 	Q_PROPERTY(bool cantDisplay READ GetCantDisplay NOTIFY CantDisplayChanged)
 
@@ -309,7 +308,6 @@ class StreamSession : public QObject
 		QString GetTranslatedText() const { return translated_text; }
 		QString GetOriginalText() const { return original_text; }
 		bool IsTranslating() const { return is_translating; }
-		DeepLTranslator* GetTranslator() const { return translator; }
 		
 		Q_INVOKABLE void setOriginalText(const QString &text) { 
 			original_text = text; 
@@ -319,6 +317,7 @@ class StreamSession : public QObject
 			is_translating = translating; 
 			emit IsTranslatingChanged(); 
 		}
+		Q_INVOKABLE void translateText(const QString &text, const QString &source_lang = "EN", const QString &target_lang = "RU");
 
 		void Start();
 		void Stop();

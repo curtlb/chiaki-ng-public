@@ -2277,6 +2277,30 @@ void StreamSession::TriggerFfmpegFrameAvailable()
 	}
 }
 
+void StreamSession::translateText(const QString &text, const QString &source_lang, const QString &target_lang)
+{
+	if(!translator)
+		return;
+	
+	if(!translator->hasApiKey())
+	{
+		qWarning() << "DeepL API key not set. Please set it in Settings > Config.";
+		translated_text = "Ошибка: DeepL API ключ не установлен";
+		emit TranslatedTextChanged();
+		return;
+	}
+	
+	if(text.trimmed().isEmpty())
+		return;
+	
+	is_translating = true;
+	original_text = text;
+	emit OriginalTextChanged();
+	emit IsTranslatingChanged();
+	
+	translator->translate(text, source_lang, target_lang);
+}
+
 void StreamSession::triggerTranslation()
 {
 	if(!translator || !ocr)
