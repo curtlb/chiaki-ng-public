@@ -14,19 +14,18 @@ Dialog {
     property string statusMessage: ""
     property string errorMessage: ""
     
-    // Фиксированный размер
-    implicitWidth: 550
-    implicitHeight: 550
+    implicitWidth: 530
+    implicitHeight: 500
     
     padding: 20
     
     contentItem: Item {
-        implicitWidth: 510
-        implicitHeight: 510
+        implicitWidth: 490
+        implicitHeight: 460
         
         ColumnLayout {
             anchors.fill: parent
-            spacing: 10
+            spacing: 8
         
         Item {
             Layout.fillWidth: true
