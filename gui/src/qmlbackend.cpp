@@ -31,6 +31,7 @@
 #include <QDesktopServices>
 #include <QtConcurrent>
 #include <QTemporaryFile>
+#include <QNetworkCookie>
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
