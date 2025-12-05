@@ -27,8 +27,8 @@ Item {
             
             x: modelData.boundingBox.x * scaleX
             y: modelData.boundingBox.y * scaleY
-            width: modelData.boundingBox.width * scaleX * 1.2  // +20% ширины для размещения текста
-            height: modelData.boundingBox.height * scaleY * 1.5  // +50% высоты для размещения текста
+            width: modelData.boundingBox.width * scaleX * 1.4  // +40% ширины для размещения текста
+            height: modelData.boundingBox.height * scaleY * 2.0  // +100% высоты для размещения текста
 
             // Мягкий полупрозрачный темный фон
             color: Qt.rgba(0, 0, 0, 0.75)
@@ -37,13 +37,16 @@ Item {
             border.color: Qt.rgba(0.3, 0.6, 1.0, 0.6)
             border.width: 1
             radius: 6
+            
+            // Обрезаем текст по границам блока чтобы не было наложений
+            clip: true
 
             Text {
                 anchors.fill: parent
                 anchors.margins: 6
                 text: modelData.translated
                 color: "white"
-                font.pixelSize: Math.max(10, Math.min(parent.height / 2.5, 28))
+                font.pixelSize: Math.max(10, Math.min(parent.height / 3, 26))
                 font.bold: false
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -68,7 +71,7 @@ Item {
 
         Text {
             anchors.centerIn: parent
-            text: qsTr("🌍 Translation Active\nAlt+T new | Ctrl+Y hide")
+            text: qsTr("🌍 Translation Active\nAlt+T new | Alt+Y hide")
             color: Qt.rgba(0.7, 1.0, 0.7, 1.0)  // Светло-зеленый
             font.pixelSize: 11
             font.family: "Segoe UI"

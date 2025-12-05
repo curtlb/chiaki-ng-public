@@ -1136,6 +1136,15 @@ bool QmlMainWindow::handleShortcut(QKeyEvent *event)
             qCInfo(chiakiGui) << "Alt+T pressed - triggering translation toggle";
             toggleTranslation();
             return true;
+        case Qt::Key_Y:
+            // Alt+Y для скрытия перевода
+            qCInfo(chiakiGui) << "Alt+Y pressed - hiding translation overlay";
+            if (text_overlay) {
+                text_overlay->clear();
+                scheduleUpdate();
+                qCInfo(chiakiGui) << "Translation overlay cleared";
+            }
+            return true;
         default:
             break;
         }
@@ -1164,15 +1173,6 @@ bool QmlMainWindow::handleShortcut(QKeyEvent *event)
 #ifndef Q_OS_MACOS
         close();
 #endif
-        return true;
-    case Qt::Key_Y:
-        // Ctrl+Y для скрытия перевода
-        qCInfo(chiakiGui) << "Ctrl+Y pressed - hiding translation overlay";
-        if (text_overlay) {
-            text_overlay->clear();
-            scheduleUpdate();
-            qCInfo(chiakiGui) << "Translation overlay cleared";
-        }
         return true;
     default:
         return false;
@@ -1351,6 +1351,13 @@ void QmlMainWindow::toggleTranslation()
     qCInfo(chiakiGui) << "toggleTranslation() called";
     qCInfo(chiakiGui) << "  text_overlay exists:" << (text_overlay != nullptr);
     qCInfo(chiakiGui) << "  text_overlay->isActive():" << (text_overlay ? text_overlay->isActive() : false);
+    qCInfo(chiakiGui) << "  translation_in_progress:" << translation_in_progress;
+    
+    // Если уже идет распознавание - игнорируем
+    if (translation_in_progress) {
+        qCInfo(chiakiGui) << "Translation already in progress, ignoring";
+        return;
+    }
     
     if (text_overlay && text_overlay->isActive()) {
         // Если оверлей активен - очищаем его и запускаем новое распознавание
@@ -1359,6 +1366,7 @@ void QmlMainWindow::toggleTranslation()
         scheduleUpdate();
         // Небольшая задержка перед новым распознаванием
         QTimer::singleShot(100, this, [this]() {
+            qCInfo(chiakiGui) << "Delayed trigger of new translation after clear";
             triggerTranslation();
         });
     } else {
