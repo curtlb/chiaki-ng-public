@@ -3,6 +3,8 @@
 #include "yandexocr.h"
 #include <QObject>
 #include <QVector>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QPainter>
 #include <QFont>
 #include <QColor>
