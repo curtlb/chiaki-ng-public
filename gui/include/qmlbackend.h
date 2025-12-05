@@ -14,6 +14,7 @@
 #include <QFuture>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QNetworkCookieJar>
 #include <QJsonDocument>
 #include <QJsonObject>
 #ifdef CHIAKI_HAVE_WEBENGINE
