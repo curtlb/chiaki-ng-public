@@ -2319,27 +2319,49 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     query.addQueryItem("Password", password);
     url.setQuery(query);
     
-    qCInfo(chiakiGui) << "→ Request:" << url.toString();
+    qCInfo(chiakiGui) << "→ Full URL:" << url.toString();
+    qCInfo(chiakiGui) << "→ URL encoded:" << url.toEncoded();
     
     QNetworkRequest request(url);
-    // Добавляем заголовки как у браузера чтобы сервер не блокировал
+    // Добавляем заголовки как у браузера
     request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
     request.setRawHeader("Accept", "application/json, text/plain, */*");
     request.setRawHeader("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
     request.setRawHeader("Origin", "https://4cloud.pro");
     request.setRawHeader("Referer", "https://4cloud.pro/");
     
+    qCInfo(chiakiGui) << "→ Headers:";
+    qCInfo(chiakiGui) << "   User-Agent:" << request.rawHeader("User-Agent");
+    qCInfo(chiakiGui) << "   Accept:" << request.rawHeader("Accept");
+    qCInfo(chiakiGui) << "   Origin:" << request.rawHeader("Origin");
+    
     QNetworkReply *reply = network_manager->get(request);
     
-    qCInfo(chiakiGui) << "→ Waiting for response...";
+    qCInfo(chiakiGui) << "→ Request sent, waiting for response...";
     
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         qCInfo(chiakiGui) << "";
         qCInfo(chiakiGui) << "← RESPONSE: get-conf-token";
+        qCInfo(chiakiGui) << "← HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        qCInfo(chiakiGui) << "← HTTP Reason:" << reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString();
+        qCInfo(chiakiGui) << "← Error code:" << reply->error();
+        qCInfo(chiakiGui) << "← URL:" << reply->url().toString();
+        
         reply->deleteLater();
         
         if (reply->error() != QNetworkReply::NoError) {
             qCWarning(chiakiGui) << "✗ Network error:" << reply->errorString();
+            qCWarning(chiakiGui) << "✗ Full error details:";
+            qCWarning(chiakiGui) << "   Error code:" << reply->error();
+            qCWarning(chiakiGui) << "   Error string:" << reply->errorString();
+            qCWarning(chiakiGui) << "   HTTP status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            
+            // Читаем тело ответа даже при ошибке
+            QByteArray errorBody = reply->readAll();
+            if (!errorBody.isEmpty()) {
+                qCWarning(chiakiGui) << "   Response body:" << errorBody;
+            }
+            
             emit autoConfigError("Ошибка сети: " + reply->errorString());
             return;
         }
