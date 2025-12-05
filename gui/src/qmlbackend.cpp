@@ -2322,6 +2322,10 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     qCInfo(chiakiGui) << "→ Request:" << url.toString();
     
     QNetworkRequest request(url);
+    // Добавляем заголовки как у браузера чтобы сервер не блокировал
+    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    request.setRawHeader("Accept", "application/json, text/plain, */*");
+    
     QNetworkReply *reply = network_manager->get(request);
     
     qCInfo(chiakiGui) << "→ Waiting for response...";
@@ -2374,6 +2378,8 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         // Шаг 2: Загружаем конфигурационный файл
         QUrl configUrlObj(configUrl);
         QNetworkRequest configRequest(configUrlObj);
+        configRequest.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+        
         QNetworkReply *configReply = network_manager->get(configRequest);
         
         connect(configReply, &QNetworkReply::finished, this, [this, configReply, jwt]() {
