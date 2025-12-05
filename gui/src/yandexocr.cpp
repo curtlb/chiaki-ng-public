@@ -107,14 +107,9 @@ QString YandexOCR::encodeImageToBase64(const QImage &image)
 
 void YandexOCR::recognizeText(const QImage &image)
 {
-    qCInfo(chiakiGui) << "=== YandexOCR::recognizeText() START ===";
-    qCInfo(chiakiGui) << "  Image size:" << image.size();
-    qCInfo(chiakiGui) << "  Image isNull:" << image.isNull();
-    qCInfo(chiakiGui) << "  isConfigured:" << isConfigured();
-    
     if (!isConfigured()) {
-        qCWarning(chiakiGui) << "⚠️ YandexOCR not configured. Set IAM token and folder ID first.";
-        emit errorOccurred("YandexOCR not configured. Set IAM token and folder ID first.");
+        qCWarning(chiakiGui) << "YandexOCR: Not configured";
+        emit errorOccurred("YandexOCR not configured");
         return;
     }
 
@@ -123,19 +118,19 @@ void YandexOCR::recognizeText(const QImage &image)
     translationsCompleted_ = 0;
     translationsTotal_ = 0;
 
-    qCInfo(chiakiGui) << "Encoding image to base64...";
     QString base64Image = encodeImageToBase64(image);
-    qCInfo(chiakiGui) << "  Base64 image length:" << base64Image.length();
+    if (base64Image.isEmpty()) {
+        qCWarning(chiakiGui) << "YandexOCR: Failed to encode image";
+        emit errorOccurred("Failed to encode image");
+        return;
+    }
 
     QJsonObject requestBody;
-    // Определяем mimeType по размеру - если большой (PNG), указываем PNG
     QString mimeType = (base64Image.length() > 500000) ? "PNG" : "JPEG";
     requestBody["mimeType"] = mimeType;
     requestBody["languageCodes"] = QJsonArray{"en"};
     requestBody["model"] = "page";
     requestBody["content"] = base64Image;
-    
-    qCInfo(chiakiGui) << "  Using MIME type:" << mimeType;
 
     QJsonDocument doc(requestBody);
     QByteArray jsonData = doc.toJson();
@@ -146,37 +141,8 @@ void YandexOCR::recognizeText(const QImage &image)
     request.setRawHeader("x-folder-id", folderId_.toUtf8());
     request.setRawHeader("x-data-logging-enabled", "true");
 
-    qCInfo(chiakiGui) << "";
-    qCInfo(chiakiGui) << "=== OCR REQUEST DETAILS ===";
-    qCInfo(chiakiGui) << "URL:" << request.url().toString();
-    qCInfo(chiakiGui) << "Method: POST";
-    qCInfo(chiakiGui) << "";
-    qCInfo(chiakiGui) << "HEADERS:";
-    qCInfo(chiakiGui) << "  Content-Type:" << request.header(QNetworkRequest::ContentTypeHeader).toString();
-    qCInfo(chiakiGui) << "  Authorization: Bearer" << iamToken_.left(30) << "..." << iamToken_.right(30);
-    qCInfo(chiakiGui) << "    (IAM Token length:" << iamToken_.length() << "chars)";
-    qCInfo(chiakiGui) << "  x-folder-id:" << folderId_;
-    qCInfo(chiakiGui) << "  x-data-logging-enabled: true";
-    qCInfo(chiakiGui) << "";
-    qCInfo(chiakiGui) << "REQUEST BODY:";
-    qCInfo(chiakiGui) << "  Total size:" << jsonData.size() << "bytes";
-    qCInfo(chiakiGui) << "  JSON structure:";
-    qCInfo(chiakiGui) << "  {";
-    qCInfo(chiakiGui) << "    \"mimeType\": \"" << mimeType << "\"";
-    qCInfo(chiakiGui) << "    \"languageCodes\": [\"en\"]";
-    qCInfo(chiakiGui) << "    \"model\": \"page\"";
-    qCInfo(chiakiGui) << "    \"content\": \"<base64 image data, length:" << base64Image.length() << ">\"";
-    qCInfo(chiakiGui) << "      First 100 chars:" << base64Image.left(100);
-    qCInfo(chiakiGui) << "      Last 100 chars: ..." << base64Image.right(100);
-    qCInfo(chiakiGui) << "  }";
-    qCInfo(chiakiGui) << "=== END OCR REQUEST ===";
-    qCInfo(chiakiGui) << "";
-
     QNetworkReply *reply = networkManager_->post(request, jsonData);
     connect(reply, &QNetworkReply::finished, this, &YandexOCR::onRecognitionReplyFinished);
-    
-    qCInfo(chiakiGui) << "Request sent, waiting for response...";
-    qCInfo(chiakiGui) << "=== YandexOCR::recognizeText() END ===";
 }
 
 QRect YandexOCR::parseVertices(const QJsonArray &vertices)
@@ -244,10 +210,6 @@ void YandexOCR::parseRecognitionResponse(const QJsonDocument &doc)
             block.languageCode = languageCode;
             recognizedBlocks_.append(block);
 
-            qCInfo(chiakiGui) << "YandexOCR: Block" << recognizedBlocks_.size() 
-                              << "- Text:" << fullText
-                              << "Lang:" << languageCode
-                              << "Rect:" << rect;
         }
     }
 
@@ -300,9 +262,6 @@ void YandexOCR::translateBlock(int blockIndex)
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", QString("Bearer %1").arg(iamToken_).toUtf8());
 
-    qCInfo(chiakiGui) << "=== TRANSLATION REQUEST for block" << blockIndex << "===";
-    qCInfo(chiakiGui) << "URL:" << request.url().toString();
-    qCInfo(chiakiGui) << "BODY:" << doc.toJson(QJsonDocument::Compact);
 
     QNetworkReply *reply = networkManager_->post(request, jsonData);
     

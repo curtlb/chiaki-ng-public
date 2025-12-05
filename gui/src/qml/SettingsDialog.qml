@@ -2490,17 +2490,31 @@ DialogView {
 
             Item {
                 // Config (PSN Remote Connection Setup and Import/Export)
-                GridLayout {
-                    anchors {
-                        top: parent.top
-                        horizontalCenter: parent.horizontalCenter
-                        topMargin: 50
+                Flickable {
+                    id: configFlick
+                    anchors.fill: parent
+                    contentWidth: width
+                    contentHeight: configLayout.implicitHeight + 100
+                    clip: true
+                    
+                    ScrollBar.vertical: ScrollBar {
+                        id: configScrollbar
+                        policy: ScrollBar.AlwaysOn
                     }
-                    columns: 1
-                    rowSpacing: 20
-                    columnSpacing: 10
+                    
+                    GridLayout {
+                        id: configLayout
+                        anchors {
+                            top: parent.top
+                            horizontalCenter: parent.horizontalCenter
+                            topMargin: 50
+                        }
+                        width: parent.width * 0.9
+                        columns: 1
+                        rowSpacing: 20
+                        columnSpacing: 10
 
-                    Label {
+                        Label {
                         text: {
                             if(Chiaki.settings.currentProfile)
                                 qsTr("Current Profile: ") + Chiaki.settings.currentProfile
@@ -2605,11 +2619,12 @@ DialogView {
                         Material.roundedScale: Material.SmallScale
                     }
 
-                    C.CheckBox {
-                        text: "Подробное логирование (выключено)"
-                        checked: Chiaki.settings.logVerbose
-                        lastInFocusChain: true
-                        onToggled: Chiaki.settings.logVerbose = checked
+                        C.CheckBox {
+                            text: "Подробное логирование (выключено)"
+                            checked: Chiaki.settings.logVerbose
+                            lastInFocusChain: true
+                            onToggled: Chiaki.settings.logVerbose = checked
+                        }
                     }
                 }
             }

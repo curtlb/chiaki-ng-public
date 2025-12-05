@@ -93,7 +93,19 @@ Pane {
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 350
+                Layout.preferredWidth: 280
+                flat: true
+                text: "Автоматическая настройка"
+                focusPolicy: Qt.NoFocus
+                onClicked: autoConfigDialog.open()
+                Material.roundedScale: Material.SmallScale
+            }
+
+            Item { Layout.preferredWidth: 10 }
+
+            Button {
+                Layout.fillHeight: true
+                Layout.preferredWidth: 280
                 flat: true
                 text: "Добавить конфиг"
                 focusPolicy: Qt.NoFocus
@@ -426,5 +438,9 @@ Pane {
             easing.type: Easing.OutCubic
             running: true
         }
+    }
+    
+    AutoConfigDialog {
+        id: autoConfigDialog
     }
 }

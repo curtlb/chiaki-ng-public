@@ -1285,111 +1285,73 @@ QObject *QmlMainWindow::focusObject() const
 
 void QmlMainWindow::triggerTranslation()
 {
-    qCInfo(chiakiGui) << "=== triggerTranslation() START ===";
-    
     // Проверяем ограничение по времени (5 секунд между переводами)
     qint64 current_time = QDateTime::currentMSecsSinceEpoch();
     qint64 time_since_last = current_time - last_translation_time;
-    const qint64 MIN_INTERVAL_MS = 5000;  // 5 секунд
+    const qint64 MIN_INTERVAL_MS = 5000;
     
     if (last_translation_time > 0 && time_since_last < MIN_INTERVAL_MS) {
-        qint64 wait_seconds = (MIN_INTERVAL_MS - time_since_last + 999) / 1000;  // Округляем вверх
-        qCWarning(chiakiGui) << "⏱️ Translation cooldown:" << wait_seconds << "seconds remaining";
-        qCWarning(chiakiGui) << "   Please wait before triggering new translation";
+        qint64 wait_seconds = (MIN_INTERVAL_MS - time_since_last + 999) / 1000;
+        qCWarning(chiakiGui) << "Translation cooldown:" << wait_seconds << "sec";
         return;
     }
-    
-    qCInfo(chiakiGui) << "  translation_in_progress:" << translation_in_progress;
     
     if (translation_in_progress) {
-        qCInfo(chiakiGui) << "Translation already in progress, ignoring request";
         return;
     }
 
-    qCInfo(chiakiGui) << "  has_video:" << has_video;
     if (!has_video) {
-        qCWarning(chiakiGui) << "No video available for translation";
+        qCWarning(chiakiGui) << "No video for translation";
         return;
     }
     
-    // Обновляем время последнего перевода
     last_translation_time = current_time;
-    qCInfo(chiakiGui) << "  Translation cooldown reset, next allowed at:" << (current_time + MIN_INTERVAL_MS);
 
-    // Обновляем учетные данные из настроек перед каждым запросом
     QString iamToken = settings->GetYandexIamToken();
     QString folderId = settings->GetYandexFolderId();
     
-    qCInfo(chiakiGui) << "  IAM Token length:" << iamToken.length();
-    qCInfo(chiakiGui) << "  Folder ID:" << folderId;
-    
     if (iamToken.isEmpty() || folderId.isEmpty()) {
-        qCWarning(chiakiGui) << "⚠️ Yandex OCR credentials not configured!";
-        qCWarning(chiakiGui) << "  IAM Token empty:" << iamToken.isEmpty();
-        qCWarning(chiakiGui) << "  Folder ID empty:" << folderId.isEmpty();
-        qCWarning(chiakiGui) << "Please set IAM Token and Folder ID in Settings -> Configuration tab";
+        qCWarning(chiakiGui) << "Translation: Not configured";
         return;
     }
     
     yandex_ocr->setIamToken(iamToken);
     yandex_ocr->setFolderId(folderId);
 
-    qCInfo(chiakiGui) << "Starting translation process...";
     translation_in_progress = true;
 
-    // Захватываем текущий фрейм
-    qCInfo(chiakiGui) << "Capturing current frame...";
     QImage screenshot = captureCurrentFrame();
     
     if (screenshot.isNull()) {
-        qCWarning(chiakiGui) << "⚠️ Failed to capture frame for translation";
+        qCWarning(chiakiGui) << "Translation: Failed to capture frame";
         translation_in_progress = false;
         return;
     }
-
-    qCInfo(chiakiGui) << "✓ Frame captured successfully, size:" << screenshot.size();
-    qCInfo(chiakiGui) << "Sending to Yandex OCR...";
     
-    // Отправляем на распознавание
     yandex_ocr->recognizeText(screenshot);
-    qCInfo(chiakiGui) << "=== triggerTranslation() END ===";
 }
 
 void QmlMainWindow::clearTranslation()
 {
     if (text_overlay) {
         text_overlay->clear();
-        scheduleUpdate(); // Перерисовываем экран
-        qCInfo(chiakiGui) << "Translation overlay cleared";
+        scheduleUpdate();
     }
 }
 
 void QmlMainWindow::toggleTranslation()
 {
-    qCInfo(chiakiGui) << "toggleTranslation() called";
-    qCInfo(chiakiGui) << "  text_overlay exists:" << (text_overlay != nullptr);
-    qCInfo(chiakiGui) << "  text_overlay->isActive():" << (text_overlay ? text_overlay->isActive() : false);
-    qCInfo(chiakiGui) << "  translation_in_progress:" << translation_in_progress;
-    
-    // Если уже идет распознавание - игнорируем
     if (translation_in_progress) {
-        qCInfo(chiakiGui) << "Translation already in progress, ignoring";
         return;
     }
     
     if (text_overlay && text_overlay->isActive()) {
-        // Если оверлей активен - очищаем его и запускаем новое распознавание
-        qCInfo(chiakiGui) << "Overlay active, clearing and triggering new translation";
         text_overlay->clear();
         scheduleUpdate();
-        // Небольшая задержка перед новым распознаванием
         QTimer::singleShot(100, this, [this]() {
-            qCInfo(chiakiGui) << "Delayed trigger of new translation after clear";
             triggerTranslation();
         });
     } else {
-        // Если оверлей не активен, запускаем распознавание
-        qCInfo(chiakiGui) << "Overlay not active, triggering new translation";
         triggerTranslation();
     }
 }

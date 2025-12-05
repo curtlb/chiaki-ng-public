@@ -30,6 +30,7 @@
 #include <QProcessEnvironment>
 #include <QDesktopServices>
 #include <QtConcurrent>
+#include <QTemporaryFile>
 
 #define PSN_DEVICES_TRIES 2
 #define MAX_PSN_RECONNECT_TRIES 6
@@ -2287,6 +2288,189 @@ void QmlBackend::refreshPsnToken()
         refreshAuth();
     else
         updatePsnHosts();
+}
+
+void QmlBackend::startAutoConfig(const QString &login, const QString &password)
+{
+    if (!network_manager) {
+        network_manager = new QNetworkAccessManager(this);
+    }
+    
+    emit autoConfigStatus("Получение токена конфигурации...");
+    
+    // Шаг 1: Получаем config token
+    QUrl url("https://4cloud.pro/api.php");
+    QUrlQuery query;
+    query.addQueryItem("method", "get-conf-token");
+    query.addQueryItem("login", login);
+    query.addQueryItem("Password", password);
+    url.setQuery(query);
+    
+    QNetworkRequest request(url);
+    QNetworkReply *reply = network_manager->get(request);
+    
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        
+        if (reply->error() != QNetworkReply::NoError) {
+            emit autoConfigError("Ошибка сети: " + reply->errorString());
+            return;
+        }
+        
+        QByteArray data = reply->readAll();
+        QJsonDocument doc = QJsonDocument::fromJson(data);
+        QJsonObject obj = doc.object();
+        
+        QString status = obj.value("status").toString();
+        if (status != "success") {
+            QString msg = obj.value("message").toString();
+            emit autoConfigError(msg.isEmpty() ? "Неизвестная ошибка" : msg);
+            return;
+        }
+        
+        QString configUrl = obj.value("ChiakiConfig").toString();
+        QString dateExp = obj.value("Date_exp").toString();
+        
+        if (configUrl.isEmpty()) {
+            emit autoConfigError("Ответ не содержит ChiakiConfig");
+            return;
+        }
+        
+        emit autoConfigStatus("✓ Токен получен (срок: " + dateExp + ")");
+        emit autoConfigStatus("Загрузка конфигурации...");
+        
+        // Шаг 2: Загружаем конфигурационный файл
+        QNetworkRequest configRequest(QUrl(configUrl));
+        QNetworkReply *configReply = network_manager->get(configRequest);
+        
+        connect(configReply, &QNetworkReply::finished, this, [this, configReply]() {
+            configReply->deleteLater();
+            
+            if (configReply->error() != QNetworkReply::NoError) {
+                emit autoConfigError("Ошибка загрузки конфига: " + configReply->errorString());
+                return;
+            }
+            
+            QByteArray configData = configReply->readAll();
+            emit autoConfigStatus("✓ Конфигурация загружена");
+            emit autoConfigStatus("Импорт настроек...");
+            
+            // Импортируем настройки
+            QTemporaryFile tempFile;
+            if (!tempFile.open()) {
+                emit autoConfigError("Не удалось создать временный файл");
+                return;
+            }
+            
+            tempFile.write(configData);
+            tempFile.flush();
+            QString filePath = tempFile.fileName();
+            
+            settings->ImportSettings(filePath);
+            emit autoConfigStatus("✓ Настройки импортированы");
+            
+            // Шаг 3: confnewuser
+            emit autoConfigStatus("Настройка пользователя (1/4)...");
+            
+            QUrl url2("https://4cloud.pro/api.php");
+            QUrlQuery query2;
+            query2.addQueryItem("method", "confnewuser");
+            url2.setQuery(query2);
+            
+            QNetworkRequest request2(url2);
+            QNetworkReply *reply2 = network_manager->get(request2);
+            
+            connect(reply2, &QNetworkReply::finished, this, [this, reply2]() {
+                reply2->deleteLater();
+                
+                if (reply2->error() != QNetworkReply::NoError) {
+                    emit autoConfigError("Ошибка confnewuser: " + reply2->errorString());
+                    return;
+                }
+                
+                QByteArray data2 = reply2->readAll();
+                QJsonDocument doc2 = QJsonDocument::fromJson(data2);
+                QJsonObject obj2 = doc2.object();
+                
+                QString status2 = obj2.value("Status").toString();
+                if (status2 == "False") {
+                    emit autoConfigError("confnewuser вернул статус False");
+                    return;
+                }
+                
+                emit autoConfigStatus("✓ Шаг 1/4 завершен");
+                
+                // Шаг 4: checkanddeleteexistingip
+                emit autoConfigStatus("Настройка пользователя (2/4)...");
+                
+                QUrl url3("https://4cloud.pro/api.php");
+                QUrlQuery query3;
+                query3.addQueryItem("method", "checkanddeleteexistingip");
+                url3.setQuery(query3);
+                
+                QNetworkRequest request3(url3);
+                QNetworkReply *reply3 = network_manager->get(request3);
+                
+                connect(reply3, &QNetworkReply::finished, this, [this, reply3]() {
+                    reply3->deleteLater();
+                    
+                    if (reply3->error() != QNetworkReply::NoError) {
+                        emit autoConfigError("Ошибка checkanddeleteexistingip: " + reply3->errorString());
+                        return;
+                    }
+                    
+                    QByteArray data3 = reply3->readAll();
+                    QJsonDocument doc3 = QJsonDocument::fromJson(data3);
+                    QJsonObject obj3 = doc3.object();
+                    
+                    QString status3 = obj3.value("Status").toString();
+                    if (status3 == "False") {
+                        emit autoConfigError("checkanddeleteexistingip вернул статус False");
+                        return;
+                    }
+                    
+                    emit autoConfigStatus("✓ Шаг 2/4 завершен");
+                    
+                    // Шаг 5: confuserip
+                    emit autoConfigStatus("Настройка пользователя (3/4)...");
+                    
+                    QUrl url4("https://4cloud.pro/api.php");
+                    QUrlQuery query4;
+                    query4.addQueryItem("method", "confuserip");
+                    url4.setQuery(query4);
+                    
+                    QNetworkRequest request4(url4);
+                    request4.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
+                    
+                    QNetworkReply *reply4 = network_manager->post(request4, QByteArray());
+                    
+                    connect(reply4, &QNetworkReply::finished, this, [this, reply4]() {
+                        reply4->deleteLater();
+                        
+                        if (reply4->error() != QNetworkReply::NoError) {
+                            emit autoConfigError("Ошибка confuserip: " + reply4->errorString());
+                            return;
+                        }
+                        
+                        QByteArray data4 = reply4->readAll();
+                        QJsonDocument doc4 = QJsonDocument::fromJson(data4);
+                        QJsonObject obj4 = doc4.object();
+                        
+                        QString status4 = obj4.value("Status").toString();
+                        if (status4 == "False") {
+                            emit autoConfigError("confuserip вернул статус False");
+                            return;
+                        }
+                        
+                        QString userIP = obj4.value("UserIP").toString();
+                        emit autoConfigStatus("✓ Шаг 3/4 завершен (IP: " + userIP + ")");
+                        emit autoConfigStatus("✓ Шаг 4/4 завершен");
+                        emit autoConfigSuccess();
+                    });
+                });
+            });
+        });
+    });
 }
 
 void PsnConnectionWorker::ConnectPsnConnection(StreamSession *session, const QString &duid, const bool &ps5)

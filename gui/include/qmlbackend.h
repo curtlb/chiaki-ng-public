@@ -12,6 +12,10 @@
 #include <QUrl>
 #include <QFutureWatcher>
 #include <QFuture>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
 #ifdef CHIAKI_HAVE_WEBENGINE
 #include <QQuickWebEngineProfile>
 #include <QWebEngineUrlRequestInterceptor>
@@ -201,6 +205,7 @@ public:
     Q_INVOKABLE void controllerMappingButtonQuit();
     Q_INVOKABLE void controllerMappingApply();
     Q_INVOKABLE void autoRegister();
+    Q_INVOKABLE void startAutoConfig(const QString &login, const QString &password);
 #if CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
     Q_INVOKABLE void createSteamShortcut(QString shortcutName, QString launchOptions, const QJSValue &callback, QString steamDir);
 #endif
@@ -240,6 +245,9 @@ signals:
     void registDialogRequested(const QString &host, bool ps5, const QString &duid);
     void psnLoginAccountIdDone(const QString &accountId);
     void psnLoginAccountIdError(const QString &error);
+    void autoConfigStatus(const QString &message);
+    void autoConfigSuccess();
+    void autoConfigError(const QString &errorMessage);
 
 private:
     struct DisplayServer {
@@ -316,6 +324,7 @@ private:
     bool resume_session = false;
     bool settings_allocd = false;
     HostMAC auto_connect_mac = {};
+    QNetworkAccessManager *network_manager = nullptr;
     QString auto_connect_nickname = "";
     QString wakeup_nickname = "";
     bool wakeup_start = false;

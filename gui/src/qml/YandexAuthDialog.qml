@@ -9,21 +9,34 @@ Dialog {
     id: authDialog
     title: qsTr("Авторизация Yandex Cloud")
     modal: true
-    width: 400
-    height: 250
     
     property bool isAuthorizing: false
     property string errorMessage: ""
     
-    ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: 20
+    // Фиксированный размер диалога
+    width: 450
+    height: 350
+    
+    // Контент диалога с явными размерами
+    contentItem: ColumnLayout {
+        width: authDialog.availableWidth
+        height: authDialog.availableHeight
         spacing: 15
+        
+        Item {
+            Layout.fillWidth: true
+            Layout.topMargin: 10
+        }
         
         Label {
             text: qsTr("Введите логин и пароль для получения IAM токена")
             wrapMode: Text.Wrap
             Layout.fillWidth: true
+        }
+        
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 10
         }
         
         Label {
@@ -33,10 +46,16 @@ Dialog {
         TextField {
             id: loginField
             Layout.fillWidth: true
+            Layout.preferredHeight: 40
             placeholderText: qsTr("Введите логин")
             enabled: !authDialog.isAuthorizing
             Keys.onReturnPressed: passwordField.forceActiveFocus()
             Keys.onEnterPressed: passwordField.forceActiveFocus()
+        }
+        
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 5
         }
         
         Label {
@@ -46,6 +65,7 @@ Dialog {
         TextField {
             id: passwordField
             Layout.fillWidth: true
+            Layout.preferredHeight: 40
             placeholderText: qsTr("Введите пароль")
             echoMode: TextInput.Password
             enabled: !authDialog.isAuthorizing
@@ -60,11 +80,18 @@ Dialog {
             visible: authDialog.errorMessage !== ""
             wrapMode: Text.Wrap
             Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
+        }
+        
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
         }
         
         RowLayout {
             Layout.fillWidth: true
-            Layout.topMargin: 10
+            Layout.bottomMargin: 10
+            spacing: 10
             
             Item {
                 Layout.fillWidth: true
@@ -74,6 +101,8 @@ Dialog {
                 text: qsTr("Отмена")
                 enabled: !authDialog.isAuthorizing
                 onClicked: authDialog.reject()
+                Layout.preferredHeight: 40
+                Layout.preferredWidth: 100
             }
             
             Button {
@@ -81,6 +110,8 @@ Dialog {
                 text: authDialog.isAuthorizing ? qsTr("Авторизация...") : qsTr("Войти")
                 enabled: !authDialog.isAuthorizing && loginField.text.length > 0 && passwordField.text.length > 0
                 highlighted: true
+                Layout.preferredHeight: 40
+                Layout.preferredWidth: 120
                 onClicked: {
                     authDialog.errorMessage = ""
                     authDialog.isAuthorizing = true
