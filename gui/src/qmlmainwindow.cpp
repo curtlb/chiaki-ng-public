@@ -128,6 +128,11 @@ QmlMainWindow::~QmlMainWindow()
     delete qml_engine;
     delete qt_vk_inst;
 
+    // Освобождаем screenshot_frame
+    if (screenshot_frame) {
+        av_frame_free(&screenshot_frame);
+    }
+
     av_buffer_unref(&vulkan_hw_dev_ctx);
 
     pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
@@ -312,6 +317,16 @@ void QmlMainWindow::presentFrame(AVFrame *frame, int32_t frames_lost)
         av_frame_free(&av_frame);
     }
     av_frame = frame;
+    
+    // Сохраняем копию фрейма для скриншотов (каждый 30й фрейм чтобы не нагружать систему)
+    static int frame_counter = 0;
+    if (frame && (++frame_counter % 30 == 0)) {
+        if (screenshot_frame) {
+            av_frame_free(&screenshot_frame);
+        }
+        screenshot_frame = av_frame_clone(frame);
+    }
+    
     frame_mutex.unlock();
 
     dropped_frames_current += frames_lost;
@@ -613,6 +628,9 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
     }
     setZoomFactor(settings->GetZoomFactor());
 
+    // Initialize screenshot frame to nullptr
+    screenshot_frame = nullptr;
+    
     // Initialize Yandex OCR for translation overlay
     yandex_ocr = new YandexOCR(this);
     text_overlay = new TextOverlay(this);
@@ -1342,25 +1360,27 @@ QImage QmlMainWindow::captureCurrentFrame()
     qCInfo(chiakiGui) << "=== captureCurrentFrame() START ===";
     QMutexLocker locker(&frame_mutex);
     
-    qCInfo(chiakiGui) << "  av_frame exists:" << (av_frame != nullptr);
+    qCInfo(chiakiGui) << "  screenshot_frame exists:" << (screenshot_frame != nullptr);
     
-    if (!av_frame) {
-        qCWarning(chiakiGui) << "⚠️ No frame available to capture";
+    if (!screenshot_frame) {
+        qCWarning(chiakiGui) << "⚠️ No screenshot frame available";
+        qCWarning(chiakiGui) << "  This is normal during first few seconds of streaming";
+        qCWarning(chiakiGui) << "  Try again in a moment when frames are being rendered";
         return QImage();
     }
 
     // Получаем параметры фрейма
-    int width = av_frame->width;
-    int height = av_frame->height;
-    AVPixelFormat format = static_cast<AVPixelFormat>(av_frame->format);
+    int width = screenshot_frame->width;
+    int height = screenshot_frame->height;
+    AVPixelFormat format = static_cast<AVPixelFormat>(screenshot_frame->format);
 
-    qCInfo(chiakiGui) << "  Frame info: " << width << "x" << height << "format:" << format;
-    qCInfo(chiakiGui) << "  hw_frames_ctx:" << (av_frame->hw_frames_ctx != nullptr);
+    qCInfo(chiakiGui) << "  Frame info:" << width << "x" << height << "format:" << format;
+    qCInfo(chiakiGui) << "  hw_frames_ctx:" << (screenshot_frame->hw_frames_ctx != nullptr);
 
     // Создаем временный фрейм для конвертации в RGB
     AVFrame *rgb_frame = av_frame_alloc();
     if (!rgb_frame) {
-        qCWarning(chiakiGui) << "Failed to allocate RGB frame";
+        qCWarning(chiakiGui) << "⚠️ Failed to allocate RGB frame";
         return QImage();
     }
 
@@ -1370,27 +1390,30 @@ QImage QmlMainWindow::captureCurrentFrame()
 
     int ret = av_frame_get_buffer(rgb_frame, 0);
     if (ret < 0) {
-        qCWarning(chiakiGui) << "Failed to allocate RGB frame buffer";
+        qCWarning(chiakiGui) << "⚠️ Failed to allocate RGB frame buffer";
         av_frame_free(&rgb_frame);
         return QImage();
     }
 
     // Если это hardware фрейм, сначала переносим в системную память
-    AVFrame *sw_frame = av_frame;
+    AVFrame *sw_frame = screenshot_frame;
     AVFrame *temp_sw_frame = nullptr;
     
-    if (av_frame->hw_frames_ctx) {
+    if (screenshot_frame->hw_frames_ctx) {
+        qCInfo(chiakiGui) << "  Transferring from hardware...";
         temp_sw_frame = av_frame_alloc();
-        if (av_hwframe_transfer_data(temp_sw_frame, av_frame, 0) < 0) {
-            qCWarning(chiakiGui) << "Failed to transfer frame from hardware";
+        if (av_hwframe_transfer_data(temp_sw_frame, screenshot_frame, 0) < 0) {
+            qCWarning(chiakiGui) << "⚠️ Failed to transfer frame from hardware";
             av_frame_free(&rgb_frame);
             av_frame_free(&temp_sw_frame);
             return QImage();
         }
-        av_frame_copy_props(temp_sw_frame, av_frame);
+        av_frame_copy_props(temp_sw_frame, screenshot_frame);
         sw_frame = temp_sw_frame;
+        qCInfo(chiakiGui) << "  ✓ Hardware transfer successful";
     }
 
+    qCInfo(chiakiGui) << "  Converting to RGB24...";
     // Конвертируем в RGB24
     struct SwsContext *sws_ctx = sws_getContext(
         width, height, static_cast<AVPixelFormat>(sw_frame->format),
@@ -1398,7 +1421,7 @@ QImage QmlMainWindow::captureCurrentFrame()
         SWS_BILINEAR, nullptr, nullptr, nullptr);
 
     if (!sws_ctx) {
-        qCWarning(chiakiGui) << "Failed to create SwsContext";
+        qCWarning(chiakiGui) << "⚠️ Failed to create SwsContext";
         av_frame_free(&rgb_frame);
         if (temp_sw_frame)
             av_frame_free(&temp_sw_frame);
@@ -1407,6 +1430,8 @@ QImage QmlMainWindow::captureCurrentFrame()
 
     sws_scale(sws_ctx, sw_frame->data, sw_frame->linesize, 0, height,
               rgb_frame->data, rgb_frame->linesize);
+
+    qCInfo(chiakiGui) << "  ✓ Conversion successful, creating QImage...";
 
     // Создаем QImage из RGB данных
     QImage image(rgb_frame->data[0], width, height, rgb_frame->linesize[0], 

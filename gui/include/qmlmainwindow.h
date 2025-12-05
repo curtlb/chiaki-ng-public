@@ -180,6 +180,7 @@ private:
     QMutex frame_mutex;
     QThread *render_thread = {};
     AVFrame *av_frame = {};
+    AVFrame *screenshot_frame = {};  // Сохраненный фрейм для скриншотов
     pl_frame current_frame = {};
     pl_frame previous_frame = {};
     std::atomic<bool> render_scheduled = {false};
