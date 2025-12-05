@@ -1487,9 +1487,6 @@ void QmlMainWindow::onRecognitionFinished(bool success)
     if (screenshot_frame) {
         imageSize = QSize(screenshot_frame->width, screenshot_frame->height);
         qCInfo(chiakiGui) << "Image size from screenshot_frame:" << imageSize;
-    } else if (current_frame.num_planes > 0) {
-        imageSize = QSize(current_frame.repr.w, current_frame.repr.h);
-        qCInfo(chiakiGui) << "Image size from current_frame:" << imageSize;
     } else {
         qCInfo(chiakiGui) << "Using default image size:" << imageSize;
     }
