@@ -9,20 +9,24 @@ Dialog {
     id: autoConfigDialog
     title: qsTr("Автоматическая настройка")
     modal: true
-    standardButtons: Dialog.NoButton
-    closePolicy: Popup.NoAutoClose
     
     property bool isConfiguring: false
     property string statusMessage: ""
     property string errorMessage: ""
     
-    width: 550
-    height: 550
+    // Фиксированный размер
+    implicitWidth: 550
+    implicitHeight: 550
     
-    ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: 15
-        spacing: 10
+    padding: 20
+    
+    contentItem: Item {
+        implicitWidth: 510
+        implicitHeight: 510
+        
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 10
         
         Item {
             Layout.fillWidth: true
@@ -74,70 +78,76 @@ Dialog {
             Keys.onEnterPressed: startButton.clicked()
         }
         
-        Label {
-            text: qsTr("Статус:")
-            Layout.topMargin: 10
-            font.bold: true
-        }
-        
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.minimumHeight: 200
-            border.color: "#555"
-            border.width: 1
-            color: "#2a2a2a"
-            radius: 4
+            Label {
+                text: qsTr("Статус:")
+                Layout.topMargin: 10
+                font.bold: true
+            }
             
-            ScrollView {
-                anchors.fill: parent
-                anchors.margins: 5
-                clip: true
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 180
+                Layout.maximumHeight: 200
+                border.color: "#555"
+                border.width: 1
+                color: "#2a2a2a"
+                radius: 4
                 
-                TextArea {
-                    id: statusArea
-                    readOnly: true
-                    text: autoConfigDialog.statusMessage
-                    wrapMode: Text.Wrap
-                    background: null
+                ScrollView {
+                    anchors.fill: parent
+                    anchors.margins: 5
+                    clip: true
+                    
+                    TextArea {
+                        id: statusArea
+                        readOnly: true
+                        text: autoConfigDialog.statusMessage
+                        wrapMode: Text.Wrap
+                        background: null
+                    }
                 }
             }
-        }
-        
-        Label {
-            id: errorLabel
-            text: autoConfigDialog.errorMessage
-            color: Material.color(Material.Red)
-            visible: autoConfigDialog.errorMessage !== ""
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
-        
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.topMargin: 10
-            spacing: 10
             
-            Item {
+            Label {
+                id: errorLabel
+                text: autoConfigDialog.errorMessage
+                color: Material.color(Material.Red)
+                visible: autoConfigDialog.errorMessage !== ""
+                wrapMode: Text.Wrap
                 Layout.fillWidth: true
+                Layout.maximumHeight: 40
             }
             
-            Button {
-                text: qsTr("Закрыть")
-                enabled: !autoConfigDialog.isConfiguring
-                onClicked: autoConfigDialog.reject()
-            }
-            
-            Button {
-                id: startButton
-                text: autoConfigDialog.isConfiguring ? qsTr("Настройка...") : qsTr("Начать")
-                enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
-                highlighted: true
-                onClicked: {
-                    autoConfigDialog.errorMessage = ""
-                    autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
-                    autoConfigDialog.isConfiguring = true
-                    Chiaki.backend.startAutoConfig(loginField.text, passwordField.text)
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 10
+                spacing: 10
+                
+                Item {
+                    Layout.fillWidth: true
+                }
+                
+                Button {
+                    text: qsTr("Закрыть")
+                    enabled: !autoConfigDialog.isConfiguring
+                    onClicked: autoConfigDialog.reject()
+                }
+                
+                Button {
+                    id: startButton
+                    text: autoConfigDialog.isConfiguring ? qsTr("Настройка...") : qsTr("Начать")
+                    enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
+                    highlighted: true
+                    onClicked: {
+                        console.log("Start button clicked!")
+                        autoConfigDialog.errorMessage = ""
+                        autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
+                        autoConfigDialog.isConfiguring = true
+                        console.log("Calling startAutoConfig...")
+                        Chiaki.backend.startAutoConfig(loginField.text, passwordField.text)
+                        console.log("startAutoConfig called")
+                    }
                 }
             }
         }
