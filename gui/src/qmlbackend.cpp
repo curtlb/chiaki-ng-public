@@ -2371,12 +2371,16 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         qCInfo(chiakiGui) << "";
         reply->deleteLater();
         
-        if (reply->error() != QNetworkReply::NoError) {
+        // ВАЖНО: Сервер 4cloud.pro возвращает 404, но с валидным JSON в теле!
+        // Поэтому игнорируем ошибку если есть данные для парсинга
+        if (reply->error() != QNetworkReply::NoError && responseData.isEmpty()) {
             QString errorMsg = QString("Ошибка сети: %1").arg(reply->errorString());
             qCWarning(chiakiGui) << "AutoConfig error:" << errorMsg;
             emit autoConfigError(errorMsg);
             return;
         }
+        
+        emit autoConfigStatus("→ Парсинг JSON ответа...");
         
         QJsonParseError parseError;
         QJsonDocument doc = QJsonDocument::fromJson(responseData, &parseError);
