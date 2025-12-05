@@ -2598,10 +2598,15 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                                 tempFile.flush();
                                 QString filePath = tempFile.fileName();
                                 
-                                qCInfo(chiakiGui) << "→ Calling ImportSettings with:" << filePath;
-                                settings->ImportSettings(filePath);
-                                qCInfo(chiakiGui) << "✓ Settings imported";
-                                emit autoConfigStatus("✓ Настройки импортированы");
+                            qCInfo(chiakiGui) << "→ Calling ImportSettings with:" << filePath;
+                            settings->ImportSettings(filePath);
+                            qCInfo(chiakiGui) << "✓ Settings imported";
+                            
+                            // Автоматически устанавливаем декодер на d3d11va после импорта
+                            settings->SetHardwareDecoder("d3d11va");
+                            qCInfo(chiakiGui) << "✓ Hardware decoder set to d3d11va";
+                            
+                            emit autoConfigStatus("✓ Настройки импортированы");
                                 
                                 qCInfo(chiakiGui) << "";
                                 qCInfo(chiakiGui) << "============================================";
