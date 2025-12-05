@@ -258,8 +258,15 @@ void YandexOCR::parseRecognitionResponse(const QJsonDocument &doc)
     }
 
     translationsTotal_ = recognizedBlocks_.size();
+    
+    // Отправляем запросы перевода с небольшой задержкой чтобы избежать rate limit (20 req/sec)
     for (int i = 0; i < recognizedBlocks_.size(); ++i) {
-        translateBlock(i);
+        // Задержка 60ms между запросами = макс 16 req/sec (безопасно для лимита 20 req/sec)
+        QTimer::singleShot(i * 60, this, [this, i]() {
+            if (i < recognizedBlocks_.size()) {
+                translateBlock(i);
+            }
+        });
     }
 }
 

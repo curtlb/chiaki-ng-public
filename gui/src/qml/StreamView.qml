@@ -848,4 +848,11 @@ Item {
                 sessionLoading = false;
         }
     }
+
+    // Translation Overlay - отображение переведенного текста
+    TranslationOverlay {
+        id: translationOverlay
+        anchors.fill: parent
+        z: 1000  // Поверх всего остального
+    }
 }

@@ -8,6 +8,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QJsonDocument>
+#include <QTimer>
 
 /**
  * Структура для хранения распознанного текстового блока
