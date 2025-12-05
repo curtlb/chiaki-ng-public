@@ -2330,9 +2330,15 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         
         QString configUrl = obj.value("ChiakiConfig").toString();
         QString dateExp = obj.value("Date_exp").toString();
+        QString jwt = obj.value("jwt").toString();
         
         if (configUrl.isEmpty()) {
             emit autoConfigError("Ответ не содержит ChiakiConfig");
+            return;
+        }
+        
+        if (jwt.isEmpty()) {
+            emit autoConfigError("Ответ не содержит JWT токен");
             return;
         }
         
@@ -2344,7 +2350,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         QNetworkRequest configRequest(configUrlObj);
         QNetworkReply *configReply = network_manager->get(configRequest);
         
-        connect(configReply, &QNetworkReply::finished, this, [this, configReply]() {
+        connect(configReply, &QNetworkReply::finished, this, [this, configReply, jwt]() {
             configReply->deleteLater();
             
             if (configReply->error() != QNetworkReply::NoError) {
@@ -2370,18 +2376,19 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
             settings->ImportSettings(filePath);
             emit autoConfigStatus("✓ Настройки импортированы");
             
-            // Шаг 3: confnewuser
+            // Шаг 3: confnewuser (с JWT)
             emit autoConfigStatus("Настройка пользователя (1/4)...");
             
             QUrl url2("https://4cloud.pro/api.php");
             QUrlQuery query2;
             query2.addQueryItem("method", "confnewuser");
+            query2.addQueryItem("jwt", jwt);
             url2.setQuery(query2);
             
             QNetworkRequest request2(url2);
             QNetworkReply *reply2 = network_manager->get(request2);
             
-            connect(reply2, &QNetworkReply::finished, this, [this, reply2]() {
+            connect(reply2, &QNetworkReply::finished, this, [this, reply2, jwt]() {
                 reply2->deleteLater();
                 
                 if (reply2->error() != QNetworkReply::NoError) {
@@ -2401,18 +2408,19 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                 
                 emit autoConfigStatus("✓ Шаг 1/4 завершен");
                 
-                // Шаг 4: checkanddeleteexistingip
+                // Шаг 4: checkanddeleteexistingip (с JWT)
                 emit autoConfigStatus("Настройка пользователя (2/4)...");
                 
                 QUrl url3("https://4cloud.pro/api.php");
                 QUrlQuery query3;
                 query3.addQueryItem("method", "checkanddeleteexistingip");
+                query3.addQueryItem("jwt", jwt);
                 url3.setQuery(query3);
                 
                 QNetworkRequest request3(url3);
                 QNetworkReply *reply3 = network_manager->get(request3);
                 
-                connect(reply3, &QNetworkReply::finished, this, [this, reply3]() {
+                connect(reply3, &QNetworkReply::finished, this, [this, reply3, jwt]() {
                     reply3->deleteLater();
                     
                     if (reply3->error() != QNetworkReply::NoError) {
@@ -2432,12 +2440,13 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                     
                     emit autoConfigStatus("✓ Шаг 2/4 завершен");
                     
-                    // Шаг 5: confuserip
+                    // Шаг 5: confuserip (с JWT)
                     emit autoConfigStatus("Настройка пользователя (3/4)...");
                     
                     QUrl url4("https://4cloud.pro/api.php");
                     QUrlQuery query4;
                     query4.addQueryItem("method", "confuserip");
+                    query4.addQueryItem("jwt", jwt);
                     url4.setQuery(query4);
                     
                     QNetworkRequest request4(url4);
