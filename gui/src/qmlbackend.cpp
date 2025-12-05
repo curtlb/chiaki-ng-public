@@ -2375,66 +2375,22 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         
         qCInfo(chiakiGui) << "AutoConfig: Token received, expiry:" << dateExp;
         emit autoConfigStatus("✓ Токен получен (срок: " + dateExp + ")");
-        emit autoConfigStatus("Шаг 2/5: Загрузка конфигурации...");
+        
+        // Шаг 2: token-confnewuser (СНАЧАЛА все API вызовы, ПОТОМ загрузка конфига)
+        emit autoConfigStatus("Шаг 2/6: Настройка пользователя (1/4)...");
         qCInfo(chiakiGui) << "";
-        qCInfo(chiakiGui) << "→ Request: Download config from" << configUrl;
+        qCInfo(chiakiGui) << "→ Request: token-confnewuser";
         
-        // Шаг 2: Загружаем конфигурационный файл
-        QUrl configUrlObj(configUrl);
-        QNetworkRequest configRequest(configUrlObj);
+        QUrl url2("https://4cloud.pro/api.php");
+        QUrlQuery query2;
+        query2.addQueryItem("method", "token-confnewuser");
+        query2.addQueryItem("jwt", jwt);
+        url2.setQuery(query2);
         
-        QNetworkReply *configReply = network_manager->get(configRequest);
+        QNetworkRequest request2(url2);
+        QNetworkReply *reply2 = network_manager->get(request2);
         
-        connect(configReply, &QNetworkReply::finished, this, [this, configReply, jwt]() {
-            qCInfo(chiakiGui) << "";
-            qCInfo(chiakiGui) << "← RESPONSE: Config file";
-            configReply->deleteLater();
-            
-            if (configReply->error() != QNetworkReply::NoError) {
-                qCWarning(chiakiGui) << "✗ Download error:" << configReply->errorString();
-                emit autoConfigError("Ошибка загрузки конфига: " + configReply->errorString());
-                return;
-            }
-            
-            QByteArray configData = configReply->readAll();
-            qCInfo(chiakiGui) << "✓ Config size:" << configData.size() << "bytes";
-            emit autoConfigStatus("✓ Конфигурация загружена (" + QString::number(configData.size()) + " байт)");
-            
-            emit autoConfigStatus("Импорт настроек...");
-            qCInfo(chiakiGui) << "→ Importing settings...";
-            
-            // Импортируем настройки
-            QTemporaryFile tempFile;
-            if (!tempFile.open()) {
-                qCWarning(chiakiGui) << "✗ Failed to create temp file";
-                emit autoConfigError("Не удалось создать временный файл");
-                return;
-            }
-            
-            tempFile.write(configData);
-            tempFile.flush();
-            QString filePath = tempFile.fileName();
-            
-            qCInfo(chiakiGui) << "→ Calling ImportSettings with:" << filePath;
-            settings->ImportSettings(filePath);
-            qCInfo(chiakiGui) << "✓ Settings imported";
-            emit autoConfigStatus("✓ Настройки импортированы");
-            
-            // Шаг 3: token-confnewuser
-            emit autoConfigStatus("Шаг 3/5: Настройка пользователя (1/3)...");
-            qCInfo(chiakiGui) << "";
-            qCInfo(chiakiGui) << "→ Request: token-confnewuser";
-            
-            QUrl url2("https://4cloud.pro/api.php");
-            QUrlQuery query2;
-            query2.addQueryItem("method", "token-confnewuser");
-            query2.addQueryItem("jwt", jwt);
-            url2.setQuery(query2);
-            
-            QNetworkRequest request2(url2);
-            QNetworkReply *reply2 = network_manager->get(request2);
-            
-            connect(reply2, &QNetworkReply::finished, this, [this, reply2, jwt]() {
+        connect(reply2, &QNetworkReply::finished, this, [this, reply2, jwt, configUrl]() {
                 qCInfo(chiakiGui) << "";
                 qCInfo(chiakiGui) << "← RESPONSE: token-confnewuser";
                 reply2->deleteLater();
@@ -2464,8 +2420,8 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                 qCInfo(chiakiGui) << "✓ Step 1/3 OK:" << message2;
                 emit autoConfigStatus("✓ Шаг 1/3: " + message2);
                 
-                // Шаг 4: token-checkanddeleteexistingip
-                emit autoConfigStatus("Шаг 4/5: Настройка пользователя (2/3)...");
+                // Шаг 3: token-checkanddeleteexistingip
+                emit autoConfigStatus("Шаг 3/6: Настройка пользователя (2/4)...");
                 qCInfo(chiakiGui) << "";
                 qCInfo(chiakiGui) << "→ Request: token-checkanddeleteexistingip";
                 
@@ -2478,7 +2434,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                 QNetworkRequest request3(url3);
                 QNetworkReply *reply3 = network_manager->get(request3);
                 
-                connect(reply3, &QNetworkReply::finished, this, [this, reply3, jwt]() {
+                connect(reply3, &QNetworkReply::finished, this, [this, reply3, jwt, configUrl]() {
                     qCInfo(chiakiGui) << "";
                     qCInfo(chiakiGui) << "← RESPONSE: token-checkanddeleteexistingip";
                     reply3->deleteLater();
@@ -2505,8 +2461,8 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                     qCInfo(chiakiGui) << "✓ Step 2/3 OK";
                     emit autoConfigStatus("✓ Шаг 2/3: IP проверен");
                     
-                    // Шаг 5: token-confuserip
-                    emit autoConfigStatus("Шаг 5/5: Настройка IP (3/3)...");
+                    // Шаг 4: token-confuserip
+                    emit autoConfigStatus("Шаг 4/6: Настройка IP (3/4)...");
                     qCInfo(chiakiGui) << "";
                     qCInfo(chiakiGui) << "→ Request: token-confuserip";
                     
@@ -2519,7 +2475,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                     QNetworkRequest request4(url4);
                     QNetworkReply *reply4 = network_manager->get(request4);
                     
-                    connect(reply4, &QNetworkReply::finished, this, [this, reply4, jwt]() {
+                    connect(reply4, &QNetworkReply::finished, this, [this, reply4, jwt, configUrl]() {
                         qCInfo(chiakiGui) << "";
                         qCInfo(chiakiGui) << "← RESPONSE: token-confuserip";
                         reply4->deleteLater();
@@ -2551,8 +2507,8 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                         qCInfo(chiakiGui) << "✓ Step 3/3 OK - IP:" << userIP;
                         emit autoConfigStatus("✓ Шаг 3/3: IP настроен (" + userIP + ")");
                         
-                        // Финальная проверка: token-checkdirectconf
-                        emit autoConfigStatus("Проверка прямого подключения...");
+                        // Шаг 5: Финальная проверка: token-checkdirectconf
+                        emit autoConfigStatus("Шаг 5/6: Проверка прямого подключения...");
                         qCInfo(chiakiGui) << "";
                         qCInfo(chiakiGui) << "→ Request: token-checkdirectconf";
                         
@@ -2565,7 +2521,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                         QNetworkRequest request5(url5);
                         QNetworkReply *reply5 = network_manager->get(request5);
                         
-                        connect(reply5, &QNetworkReply::finished, this, [this, reply5]() {
+                        connect(reply5, &QNetworkReply::finished, this, [this, reply5, configUrl]() {
                             qCInfo(chiakiGui) << "";
                             qCInfo(chiakiGui) << "← RESPONSE: token-checkdirectconf";
                             reply5->deleteLater();
@@ -2594,14 +2550,62 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                                 return;
                             }
                             
-                            qCInfo(chiakiGui) << "";
-                            qCInfo(chiakiGui) << "============================================";
-                            qCInfo(chiakiGui) << "=== AUTO CONFIG SUCCESS ===";
-                            qCInfo(chiakiGui) << "============================================";
-                            qCInfo(chiakiGui) << "";
-                            
+                            qCInfo(chiakiGui) << "✓ Проверка завершена: " << message5;
                             emit autoConfigStatus("✓ Проверка завершена: " + message5);
-                            emit autoConfigSuccess();
+                            
+                            // Шаг 6: ТЕПЕРЬ загружаем и импортируем конфиг (ПОСЛЕ всех API вызовов)
+                            emit autoConfigStatus("Шаг 6/6: Загрузка и импорт конфигурации...");
+                            qCInfo(chiakiGui) << "";
+                            qCInfo(chiakiGui) << "→ Request: Download config from" << configUrl;
+                            
+                            QUrl configUrlObj(configUrl);
+                            QNetworkRequest configRequest(configUrlObj);
+                            
+                            QNetworkReply *configReply = network_manager->get(configRequest);
+                            
+                            connect(configReply, &QNetworkReply::finished, this, [this, configReply]() {
+                                qCInfo(chiakiGui) << "";
+                                qCInfo(chiakiGui) << "← RESPONSE: Config file";
+                                configReply->deleteLater();
+                                
+                                if (configReply->error() != QNetworkReply::NoError) {
+                                    qCWarning(chiakiGui) << "✗ Download error:" << configReply->errorString();
+                                    emit autoConfigError("Ошибка загрузки конфига: " + configReply->errorString());
+                                    return;
+                                }
+                                
+                                QByteArray configData = configReply->readAll();
+                                qCInfo(chiakiGui) << "✓ Config size:" << configData.size() << "bytes";
+                                emit autoConfigStatus("✓ Конфигурация загружена (" + QString::number(configData.size()) + " байт)");
+                                
+                                emit autoConfigStatus("Импорт настроек...");
+                                qCInfo(chiakiGui) << "→ Importing settings...";
+                                
+                                // Импортируем настройки
+                                QTemporaryFile tempFile;
+                                if (!tempFile.open()) {
+                                    qCWarning(chiakiGui) << "✗ Failed to create temp file";
+                                    emit autoConfigError("Не удалось создать временный файл");
+                                    return;
+                                }
+                                
+                                tempFile.write(configData);
+                                tempFile.flush();
+                                QString filePath = tempFile.fileName();
+                                
+                                qCInfo(chiakiGui) << "→ Calling ImportSettings with:" << filePath;
+                                settings->ImportSettings(filePath);
+                                qCInfo(chiakiGui) << "✓ Settings imported";
+                                emit autoConfigStatus("✓ Настройки импортированы");
+                                
+                                qCInfo(chiakiGui) << "";
+                                qCInfo(chiakiGui) << "============================================";
+                                qCInfo(chiakiGui) << "=== AUTO CONFIG SUCCESS ===";
+                                qCInfo(chiakiGui) << "============================================";
+                                qCInfo(chiakiGui) << "";
+                                
+                                emit autoConfigSuccess();
+                            });
                         });
                     });
                 });
