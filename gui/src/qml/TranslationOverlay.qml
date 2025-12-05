@@ -25,11 +25,18 @@ Item {
             property real scaleX: root.width / root.originalImageSize.width
             property real scaleY: root.height / root.originalImageSize.height
             
-            x: modelData.boundingBox.x * scaleX
-            y: modelData.boundingBox.y * scaleY
-            width: modelData.boundingBox.width * scaleX * 1.4  // +40% ширины для размещения текста
-            height: modelData.boundingBox.height * scaleY * 2.0  // +100% высоты для размещения текста
-
+            // Базовые координаты и размеры
+            property real baseX: modelData.boundingBox.x * scaleX
+            property real baseY: modelData.boundingBox.y * scaleY
+            property real baseWidth: modelData.boundingBox.width * scaleX
+            property real baseHeight: modelData.boundingBox.height * scaleY
+            
+            // Увеличиваем размер умеренно, но ограничиваем границами экрана
+            x: baseX
+            y: baseY
+            width: Math.min(baseWidth * 1.15, root.width - baseX - 10)  // +15%, не выходим за экран
+            height: baseHeight * 1.3  // +30% высоты
+            
             // Мягкий полупрозрачный темный фон
             color: Qt.rgba(0, 0, 0, 0.75)
             
@@ -43,14 +50,21 @@ Item {
 
             Text {
                 anchors.fill: parent
-                anchors.margins: 6
+                anchors.margins: 4
                 text: modelData.translated
                 color: "white"
-                font.pixelSize: Math.max(10, Math.min(parent.height / 3, 26))
+                
+                // Динамический размер шрифта - уменьшаем если текст длинный
+                property int baseSize: Math.max(9, Math.min(parent.height / 2, 24))
+                property real textRatio: contentHeight / (parent.height - 8)
+                font.pixelSize: textRatio > 1 ? Math.max(8, baseSize / textRatio) : baseSize
+                
                 font.bold: false
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.WordWrap
+                minimumPixelSize: 8
+                fontSizeMode: Text.Fit
                 // НЕ используем elide - текст полностью виден
             }
         }
