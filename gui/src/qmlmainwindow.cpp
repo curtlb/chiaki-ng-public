@@ -1165,6 +1165,15 @@ bool QmlMainWindow::handleShortcut(QKeyEvent *event)
         close();
 #endif
         return true;
+    case Qt::Key_Y:
+        // Ctrl+Y для скрытия перевода
+        qCInfo(chiakiGui) << "Ctrl+Y pressed - hiding translation overlay";
+        if (text_overlay) {
+            text_overlay->clear();
+            scheduleUpdate();
+            qCInfo(chiakiGui) << "Translation overlay cleared";
+        }
+        return true;
     default:
         return false;
     }
@@ -1344,10 +1353,14 @@ void QmlMainWindow::toggleTranslation()
     qCInfo(chiakiGui) << "  text_overlay->isActive():" << (text_overlay ? text_overlay->isActive() : false);
     
     if (text_overlay && text_overlay->isActive()) {
-        // Если оверлей активен, переключаем его видимость
-        text_overlay->setVisible(!text_overlay->isVisible());
+        // Если оверлей активен - очищаем его и запускаем новое распознавание
+        qCInfo(chiakiGui) << "Overlay active, clearing and triggering new translation";
+        text_overlay->clear();
         scheduleUpdate();
-        qCInfo(chiakiGui) << "Translation overlay toggled:" << (text_overlay->isVisible() ? "visible" : "hidden");
+        // Небольшая задержка перед новым распознаванием
+        QTimer::singleShot(100, this, [this]() {
+            triggerTranslation();
+        });
     } else {
         // Если оверлей не активен, запускаем распознавание
         qCInfo(chiakiGui) << "Overlay not active, triggering new translation";
