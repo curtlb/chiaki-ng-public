@@ -2611,7 +2611,6 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                 });
             });
         });
-    });
 }
 
 void PsnConnectionWorker::ConnectPsnConnection(StreamSession *session, const QString &duid, const bool &ps5)
