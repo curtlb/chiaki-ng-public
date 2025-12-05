@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import Qt5Compat.GraphicalEffects
 
 import org.streetpea.chiaking
 
@@ -19,7 +18,7 @@ Item {
     Repeater {
         model: root.textBlocks
 
-        delegate: Item {
+        delegate: Rectangle {
             id: textBlock
             
             // Масштабируем координаты из оригинального размера изображения в размер окна
@@ -28,59 +27,28 @@ Item {
             
             x: modelData.boundingBox.x * scaleX
             y: modelData.boundingBox.y * scaleY
-            width: modelData.boundingBox.width * scaleX
-            height: modelData.boundingBox.height * scaleY
+            width: modelData.boundingBox.width * scaleX * 1.2  // +20% ширины для размещения текста
+            height: modelData.boundingBox.height * scaleY * 1.5  // +50% высоты для размещения текста
 
-            // Текстовый элемент для измерения требуемого размера
+            // Мягкий полупрозрачный темный фон
+            color: Qt.rgba(0, 0, 0, 0.75)
+            
+            // Тонкая мягкая рамка (синяя вместо красной)
+            border.color: Qt.rgba(0.3, 0.6, 1.0, 0.6)
+            border.width: 1
+            radius: 6
+
             Text {
-                id: textMeasure
-                text: modelData.translated
-                font.pixelSize: Math.max(10, Math.min(parent.height / 2.5, 28))
-                font.bold: false
-                wrapMode: Text.WordWrap
-                width: parent.width - 12
-                visible: false
-            }
-
-            // Фон - адаптируется под размер текста
-            Rectangle {
-                id: background
-                anchors.centerIn: parent
-                width: Math.max(parent.width, Math.min(textMeasure.contentWidth + 12, parent.width * 1.5))
-                height: Math.max(parent.height, Math.min(textMeasure.contentHeight + 12, parent.height * 2))
-                
-                // Мягкий полупрозрачный темный фон
-                color: Qt.rgba(0, 0, 0, 0.75)
-                
-                // Тонкая мягкая рамка
-                border.color: Qt.rgba(0.3, 0.6, 1.0, 0.6)  // Мягкий синий
-                border.width: 1
-                radius: 6
-                
-                // Мягкая тень для глубины
-                layer.enabled: true
-                layer.effect: DropShadow {
-                    radius: 8
-                    samples: 17
-                    color: Qt.rgba(0, 0, 0, 0.5)
-                    horizontalOffset: 0
-                    verticalOffset: 2
-                }
-            }
-
-            // Переведенный текст
-            Text {
-                anchors.centerIn: parent
-                width: Math.min(textMeasure.contentWidth, background.width - 12)
+                anchors.fill: parent
+                anchors.margins: 6
                 text: modelData.translated
                 color: "white"
                 font.pixelSize: Math.max(10, Math.min(parent.height / 2.5, 28))
                 font.bold: false
-                font.family: "Segoe UI"
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.WordWrap
-                // Убираем elide - текст всегда показывается полностью
+                // НЕ используем elide - текст полностью виден
             }
         }
     }
