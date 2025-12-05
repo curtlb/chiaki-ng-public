@@ -2547,8 +2547,55 @@ DialogView {
                         visible: Chiaki.settings.psnRefreshToken && Chiaki.settings.psnAuthToken && Chiaki.settings.psnAuthTokenExpiry && Chiaki.settings.psnAccountId
                     }
 
+                    // Yandex Cloud Translation Settings
+                    Label {
+                        Layout.topMargin: 30
+                        text: qsTr("Настройки перевода Yandex Cloud (для Alt+T)")
+                        font.bold: true
+                        font.pixelSize: 16
+                    }
+
+                    Label {
+                        text: qsTr("IAM Токен:")
+                        Layout.topMargin: 10
+                    }
+
+                    C.TextField {
+                        id: yandexIamTokenField
+                        Layout.preferredWidth: 600
+                        text: Chiaki.settings.yandexIamToken
+                        placeholderText: qsTr("Введите IAM токен Yandex Cloud")
+                        echoMode: TextInput.Password
+                        onTextChanged: {
+                            Chiaki.settings.yandexIamToken = text
+                        }
+                    }
+
+                    Label {
+                        text: qsTr("ID Каталога:")
+                    }
+
+                    C.TextField {
+                        id: yandexFolderIdField
+                        Layout.preferredWidth: 600
+                        text: Chiaki.settings.yandexFolderId
+                        placeholderText: qsTr("Введите ID каталога Yandex Cloud")
+                        onTextChanged: {
+                            Chiaki.settings.yandexFolderId = text
+                        }
+                    }
+
+                    Label {
+                        Layout.preferredWidth: 600
+                        text: qsTr("Нажмите Alt+T во время игры для перевода текста на экране с английского на русский.")
+                        wrapMode: Text.Wrap
+                        font.pixelSize: 12
+                        opacity: 0.7
+                    }
+
                     C.Button {
                         id: exportButton
+                        Layout.topMargin: 20
                         text: "Экспорт настроек в файл"
                         onClicked: {
                             Chiaki.settings.exportSettings();

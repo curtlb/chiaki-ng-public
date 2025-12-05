@@ -9,6 +9,10 @@
 #define PL_LIBAV_IMPLEMENTATION 0
 #include <libplacebo/utils/libav.h>
 
+extern "C" {
+#include <libswscale/swscale.h>
+}
+
 #include <QDebug>
 #include <QThread>
 #include <QShortcut>
@@ -608,6 +612,25 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
         break;
     }
     setZoomFactor(settings->GetZoomFactor());
+
+    // Initialize Yandex OCR for translation overlay
+    yandex_ocr = new YandexOCR(this);
+    text_overlay = new TextOverlay(this);
+    
+    // Load credentials from settings
+    QString iamToken = settings->GetYandexIamToken();
+    QString folderId = settings->GetYandexFolderId();
+    
+    if (!iamToken.isEmpty() && !folderId.isEmpty()) {
+        yandex_ocr->setIamToken(iamToken);
+        yandex_ocr->setFolderId(folderId);
+        qCInfo(chiakiGui) << "Translation overlay initialized with credentials from settings";
+    } else {
+        qCInfo(chiakiGui) << "Translation overlay initialized (no credentials configured)";
+    }
+    
+    connect(yandex_ocr, &YandexOCR::recognitionFinished, this, &QmlMainWindow::onRecognitionFinished);
+    connect(yandex_ocr, &YandexOCR::errorOccurred, this, &QmlMainWindow::onRecognitionError);
 }
 
 void QmlMainWindow::normalTime()
@@ -1087,6 +1110,17 @@ bool QmlMainWindow::handleShortcut(QKeyEvent *event)
         }
     }
 
+    // Handle Alt modifier shortcuts
+    if (event->modifiers() == Qt::AltModifier) {
+        switch (event->key()) {
+        case Qt::Key_T:
+            toggleTranslation();
+            return true;
+        default:
+            break;
+        }
+    }
+
     if (!event->modifiers().testFlag(Qt::ControlModifier))
         return false;
 
@@ -1215,4 +1249,193 @@ bool QmlMainWindow::event(QEvent *event)
 QObject *QmlMainWindow::focusObject() const
 {
     return quick_window->focusObject();
+}
+
+// ========== Translation Overlay Implementation ==========
+
+void QmlMainWindow::triggerTranslation()
+{
+    if (translation_in_progress) {
+        qCInfo(chiakiGui) << "Translation already in progress, ignoring request";
+        return;
+    }
+
+    if (!has_video) {
+        qCWarning(chiakiGui) << "No video available for translation";
+        return;
+    }
+
+    // Обновляем учетные данные из настроек перед каждым запросом
+    QString iamToken = settings->GetYandexIamToken();
+    QString folderId = settings->GetYandexFolderId();
+    
+    if (iamToken.isEmpty() || folderId.isEmpty()) {
+        qCWarning(chiakiGui) << "Yandex OCR credentials not configured. Please set IAM Token and Folder ID in settings.";
+        return;
+    }
+    
+    yandex_ocr->setIamToken(iamToken);
+    yandex_ocr->setFolderId(folderId);
+
+    qCInfo(chiakiGui) << "Starting translation process...";
+    translation_in_progress = true;
+
+    // Захватываем текущий фрейм
+    QImage screenshot = captureCurrentFrame();
+    
+    if (screenshot.isNull()) {
+        qCWarning(chiakiGui) << "Failed to capture frame for translation";
+        translation_in_progress = false;
+        return;
+    }
+
+    qCInfo(chiakiGui) << "Frame captured, size:" << screenshot.size();
+    
+    // Отправляем на распознавание
+    yandex_ocr->recognizeText(screenshot);
+}
+
+void QmlMainWindow::clearTranslation()
+{
+    if (text_overlay) {
+        text_overlay->clear();
+        scheduleUpdate(); // Перерисовываем экран
+        qCInfo(chiakiGui) << "Translation overlay cleared";
+    }
+}
+
+void QmlMainWindow::toggleTranslation()
+{
+    if (text_overlay && text_overlay->isActive()) {
+        // Если оверлей активен, переключаем его видимость
+        text_overlay->setVisible(!text_overlay->isVisible());
+        scheduleUpdate();
+        qCInfo(chiakiGui) << "Translation overlay toggled:" << (text_overlay->isVisible() ? "visible" : "hidden");
+    } else {
+        // Если оверлей не активен, запускаем распознавание
+        triggerTranslation();
+    }
+}
+
+QImage QmlMainWindow::captureCurrentFrame()
+{
+    QMutexLocker locker(&frame_mutex);
+    
+    if (!av_frame) {
+        qCWarning(chiakiGui) << "No frame available to capture";
+        return QImage();
+    }
+
+    // Получаем параметры фрейма
+    int width = av_frame->width;
+    int height = av_frame->height;
+    AVPixelFormat format = static_cast<AVPixelFormat>(av_frame->format);
+
+    qCInfo(chiakiGui) << "Capturing frame:" << width << "x" << height << "format:" << format;
+
+    // Создаем временный фрейм для конвертации в RGB
+    AVFrame *rgb_frame = av_frame_alloc();
+    if (!rgb_frame) {
+        qCWarning(chiakiGui) << "Failed to allocate RGB frame";
+        return QImage();
+    }
+
+    rgb_frame->width = width;
+    rgb_frame->height = height;
+    rgb_frame->format = AV_PIX_FMT_RGB24;
+
+    int ret = av_frame_get_buffer(rgb_frame, 0);
+    if (ret < 0) {
+        qCWarning(chiakiGui) << "Failed to allocate RGB frame buffer";
+        av_frame_free(&rgb_frame);
+        return QImage();
+    }
+
+    // Если это hardware фрейм, сначала переносим в системную память
+    AVFrame *sw_frame = av_frame;
+    AVFrame *temp_sw_frame = nullptr;
+    
+    if (av_frame->hw_frames_ctx) {
+        temp_sw_frame = av_frame_alloc();
+        if (av_hwframe_transfer_data(temp_sw_frame, av_frame, 0) < 0) {
+            qCWarning(chiakiGui) << "Failed to transfer frame from hardware";
+            av_frame_free(&rgb_frame);
+            av_frame_free(&temp_sw_frame);
+            return QImage();
+        }
+        av_frame_copy_props(temp_sw_frame, av_frame);
+        sw_frame = temp_sw_frame;
+    }
+
+    // Конвертируем в RGB24
+    struct SwsContext *sws_ctx = sws_getContext(
+        width, height, static_cast<AVPixelFormat>(sw_frame->format),
+        width, height, AV_PIX_FMT_RGB24,
+        SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+    if (!sws_ctx) {
+        qCWarning(chiakiGui) << "Failed to create SwsContext";
+        av_frame_free(&rgb_frame);
+        if (temp_sw_frame)
+            av_frame_free(&temp_sw_frame);
+        return QImage();
+    }
+
+    sws_scale(sws_ctx, sw_frame->data, sw_frame->linesize, 0, height,
+              rgb_frame->data, rgb_frame->linesize);
+
+    // Создаем QImage из RGB данных
+    QImage image(rgb_frame->data[0], width, height, rgb_frame->linesize[0], 
+                 QImage::Format_RGB888);
+    
+    // Делаем глубокую копию, так как данные из AVFrame не будут постоянными
+    QImage result = image.copy();
+
+    // Освобождаем ресурсы
+    sws_freeContext(sws_ctx);
+    av_frame_free(&rgb_frame);
+    if (temp_sw_frame)
+        av_frame_free(&temp_sw_frame);
+
+    qCInfo(chiakiGui) << "Frame captured successfully, image size:" << result.size();
+    return result;
+}
+
+void QmlMainWindow::onRecognitionFinished(bool success)
+{
+    translation_in_progress = false;
+
+    if (!success) {
+        qCWarning(chiakiGui) << "Text recognition failed";
+        return;
+    }
+
+    QVector<RecognizedTextBlock> blocks = yandex_ocr->getRecognizedBlocks();
+    qCInfo(chiakiGui) << "Recognition finished successfully, found" << blocks.size() << "text blocks";
+
+    if (blocks.isEmpty()) {
+        qCInfo(chiakiGui) << "No text found in the image";
+        return;
+    }
+
+    // Устанавливаем блоки в оверлей
+    // Размер изображения берем из текущего фрейма
+    QMutexLocker locker(&frame_mutex);
+    if (av_frame) {
+        QSize imageSize(av_frame->width, av_frame->height);
+        locker.unlock();
+        
+        text_overlay->setTextBlocks(blocks, imageSize);
+        scheduleUpdate(); // Перерисовываем экран с оверлеем
+        
+        qCInfo(chiakiGui) << "Translation overlay activated with" << blocks.size() << "blocks";
+    } else {
+        qCWarning(chiakiGui) << "No frame available to determine image size";
+    }
+}
+
+void QmlMainWindow::onRecognitionError(const QString &errorMessage)
+{
+    translation_in_progress = false;
+    qCWarning(chiakiGui) << "Recognition error:" << errorMessage;
 }

@@ -2,11 +2,14 @@
 
 #include "streamsession.h"
 #include "settings.h"
+#include "yandexocr.h"
+#include "textoverlay.h"
 
 #include <QMutex>
 #include <QWindow>
 #include <QQuickWindow>
 #include <QLoggingCategory>
+#include <QImage>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -105,6 +108,11 @@ public:
 
     AVBufferRef *vulkanHwDeviceCtx();
 
+    // Translation overlay functions
+    Q_INVOKABLE void triggerTranslation();
+    Q_INVOKABLE void clearTranslation();
+    Q_INVOKABLE void toggleTranslation();
+
 signals:
     void hasVideoChanged();
     void droppedFramesChanged();
@@ -114,6 +122,10 @@ signals:
     void videoPresetChanged();
     void menuRequested();
     void directStreamChanged();
+
+private slots:
+    void onRecognitionFinished(bool success);
+    void onRecognitionError(const QString &errorMessage);
 
 private:
     void init(Settings *settings, bool exit_app_on_stream_exit = false);
@@ -130,6 +142,10 @@ private:
     bool handleShortcut(QKeyEvent *event);
     bool event(QEvent *event) override;
     QObject *focusObject() const override;
+    
+    // Translation helper functions
+    QImage captureCurrentFrame();
+    void renderTextOverlay();
 
     bool has_video = false;
     bool was_maximized = false;
@@ -182,6 +198,11 @@ private:
     std::atomic<bool> quick_need_render = {false};
     pl_options renderparams_opts = {};
     bool renderparams_changed = false;
+
+    // Translation overlay
+    YandexOCR *yandex_ocr = {};
+    TextOverlay *text_overlay = {};
+    bool translation_in_progress = false;
 
     struct {
         PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;

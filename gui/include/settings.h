@@ -378,14 +378,21 @@ class Settings : public QObject
 		uint GetWifiDroppedNotif() const;
 		void SetWifiDroppedNotif(uint percent);
 
-		QString GetPsnAuthToken() const;
-		void SetPsnAuthToken(QString auth_token);
+	QString GetPsnAuthToken() const;
+	void SetPsnAuthToken(QString auth_token);
 
-		QString GetPsnRefreshToken() const;
-		void SetPsnRefreshToken(QString refresh_token);
+	QString GetPsnRefreshToken() const;
+	void SetPsnRefreshToken(QString refresh_token);
 
-		QString GetPsnAuthTokenExpiry() const;
-		void SetPsnAuthTokenExpiry(QString expiry_date);
+	QString GetPsnAuthTokenExpiry() const;
+	void SetPsnAuthTokenExpiry(QString expiry_date);
+
+	// Yandex Cloud OCR Translation settings
+	QString GetYandexIamToken() const			{ return settings.value("settings/yandex_iam_token", "").toString(); }
+	void SetYandexIamToken(QString token)		{ settings.setValue("settings/yandex_iam_token", token); }
+
+	QString GetYandexFolderId() const			{ return settings.value("settings/yandex_folder_id", "").toString(); }
+	void SetYandexFolderId(QString folder_id)	{ settings.setValue("settings/yandex_folder_id", folder_id); }
 
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);

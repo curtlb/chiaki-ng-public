@@ -636,6 +636,28 @@ void QmlSettings::setPsnAccountId(const QString &account_id)
     emit psnAccountIdChanged();
 }
 
+QString QmlSettings::yandexIamToken() const
+{
+    return settings->GetYandexIamToken();
+}
+
+void QmlSettings::setYandexIamToken(const QString &token)
+{
+    settings->SetYandexIamToken(token);
+    emit yandexIamTokenChanged();
+}
+
+QString QmlSettings::yandexFolderId() const
+{
+    return settings->GetYandexFolderId();
+}
+
+void QmlSettings::setYandexFolderId(const QString &folder_id)
+{
+    settings->SetYandexFolderId(folder_id);
+    emit yandexFolderIdChanged();
+}
+
 bool QmlSettings::mouseTouchEnabled() const
 {
     return settings->GetMouseTouchEnabled();
