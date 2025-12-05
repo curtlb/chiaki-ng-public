@@ -2340,7 +2340,8 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         emit autoConfigStatus("Загрузка конфигурации...");
         
         // Шаг 2: Загружаем конфигурационный файл
-        QNetworkRequest configRequest(QUrl(configUrl));
+        QUrl configUrlObj(configUrl);
+        QNetworkRequest configRequest(configUrlObj);
         QNetworkReply *configReply = network_manager->get(configRequest);
         
         connect(configReply, &QNetworkReply::finished, this, [this, configReply]() {
