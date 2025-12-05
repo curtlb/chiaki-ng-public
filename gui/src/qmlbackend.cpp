@@ -2319,10 +2319,10 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     query.addQueryItem("Password", password);
     url.setQuery(query);
     
-    qCInfo(chiakiGui) << "AutoConfig request:" << url.toString(QUrl::RemoveQuery);
+    qCInfo(chiakiGui) << "AutoConfig request:" << url.toString();
     
     QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    // НЕ устанавливаем Content-Type для GET-запроса
     
     QNetworkReply *reply = network_manager->get(request);
     
