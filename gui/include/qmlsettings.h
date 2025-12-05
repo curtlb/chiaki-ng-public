@@ -1,6 +1,11 @@
 #pragma once
 
 #include "settings.h"
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QUrlQuery>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 class QmlSettings : public QObject
 {
@@ -72,8 +77,6 @@ class QmlSettings : public QObject
     Q_PROPERTY(QString psnAuthToken READ psnAuthToken WRITE setPsnAuthToken NOTIFY psnAuthTokenChanged)
     Q_PROPERTY(QString psnAuthTokenExpiry READ psnAuthTokenExpiry WRITE setPsnAuthTokenExpiry NOTIFY psnAuthTokenExpiryChanged)
     Q_PROPERTY(QString psnAccountId READ psnAccountId WRITE setPsnAccountId NOTIFY psnAccountIdChanged)
-    Q_PROPERTY(QString yandexIamToken READ yandexIamToken WRITE setYandexIamToken NOTIFY yandexIamTokenChanged)
-    Q_PROPERTY(QString yandexFolderId READ yandexFolderId WRITE setYandexFolderId NOTIFY yandexFolderIdChanged)
     Q_PROPERTY(bool mouseTouchEnabled READ mouseTouchEnabled WRITE setMouseTouchEnabled NOTIFY mouseTouchEnabledChanged)
     Q_PROPERTY(bool keyboardEnabled READ keyboardEnabled WRITE setKeyboardEnabled NOTIFY keyboardEnabledChanged)
     Q_PROPERTY(bool dpadTouchEnabled READ dpadTouchEnabled WRITE setDpadTouchEnabled NOTIFY dpadTouchEnabledChanged)
@@ -497,11 +500,7 @@ public:
     QString psnAccountId() const;
     void setPsnAccountId(const QString &account_id);
 
-    QString yandexIamToken() const;
-    void setYandexIamToken(const QString &token);
-
-    QString yandexFolderId() const;
-    void setYandexFolderId(const QString &folder_id);
+    Q_INVOKABLE void authorizeYandex(const QString &login, const QString &password);
 
     bool mouseTouchEnabled() const;
     void setMouseTouchEnabled(bool enabled);
@@ -631,8 +630,8 @@ signals:
     void psnRefreshTokenChanged();
     void psnAuthTokenExpiryChanged();
     void psnAccountIdChanged();
-    void yandexIamTokenChanged();
-    void yandexFolderIdChanged();
+    void yandexAuthSuccess(const QString &iamToken, const QString &folderId);
+    void yandexAuthError(const QString &errorMessage);
     void mouseTouchEnabledChanged();
     void keyboardEnabledChanged();
     void dpadTouchEnabledChanged();
@@ -718,4 +717,5 @@ private:
     Settings *settings = {};
     QStringList audio_in_devices;
     QStringList audio_out_devices;
+    QNetworkAccessManager *network_manager = nullptr;
 };

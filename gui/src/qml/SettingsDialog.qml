@@ -2555,42 +2555,28 @@ DialogView {
                         font.pixelSize: 16
                     }
 
+                    C.Button {
+                        id: yandexAuthButton
+                        Layout.topMargin: 20
+                        Layout.preferredWidth: 200
+                        text: qsTr("Авторизоваться")
+                        onClicked: {
+                            yandexAuthDialog.open()
+                        }
+                        Material.roundedScale: Material.SmallScale
+                    }
+
                     Label {
-                        text: qsTr("IAM Токен:")
                         Layout.topMargin: 10
-                    }
-
-                    C.TextField {
-                        id: yandexIamTokenField
-                        Layout.preferredWidth: 600
-                        text: Chiaki.settings.yandexIamToken
-                        placeholderText: qsTr("Введите IAM токен Yandex Cloud")
-                        echoMode: TextInput.Password
-                        onTextChanged: {
-                            Chiaki.settings.yandexIamToken = text
-                        }
-                    }
-
-                    Label {
-                        text: qsTr("ID Каталога:")
-                    }
-
-                    C.TextField {
-                        id: yandexFolderIdField
-                        Layout.preferredWidth: 600
-                        text: Chiaki.settings.yandexFolderId
-                        placeholderText: qsTr("Введите ID каталога Yandex Cloud")
-                        onTextChanged: {
-                            Chiaki.settings.yandexFolderId = text
-                        }
-                    }
-
-                    Label {
                         Layout.preferredWidth: 600
                         text: qsTr("Нажмите Alt+T во время игры для перевода текста на экране с английского на русский.")
                         wrapMode: Text.Wrap
                         font.pixelSize: 12
                         opacity: 0.7
+                    }
+                    
+                    YandexAuthDialog {
+                        id: yandexAuthDialog
                     }
 
                     C.Button {

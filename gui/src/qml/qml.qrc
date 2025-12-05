@@ -22,6 +22,7 @@
     <file>AutoConnectView.qml</file>
     <file>PsnView.qml</file>
     <file>TranslationOverlay.qml</file>
+    <file>YandexAuthDialog.qml</file>
     <file>controls/Button.qml</file>
     <file>controls/CheckBox.qml</file>
     <file>controls/ComboBox.qml</file>

@@ -9,6 +9,9 @@
 #include <QStandardPaths>
 #include <QFileDialog>
 #include <QApplication>
+#include <QUrlQuery>
+
+Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -636,26 +639,84 @@ void QmlSettings::setPsnAccountId(const QString &account_id)
     emit psnAccountIdChanged();
 }
 
-QString QmlSettings::yandexIamToken() const
+void QmlSettings::authorizeYandex(const QString &login, const QString &password)
 {
-    return settings->GetYandexIamToken();
-}
-
-void QmlSettings::setYandexIamToken(const QString &token)
-{
-    settings->SetYandexIamToken(token);
-    emit yandexIamTokenChanged();
-}
-
-QString QmlSettings::yandexFolderId() const
-{
-    return settings->GetYandexFolderId();
-}
-
-void QmlSettings::setYandexFolderId(const QString &folder_id)
-{
-    settings->SetYandexFolderId(folder_id);
-    emit yandexFolderIdChanged();
+    if (!network_manager) {
+        network_manager = new QNetworkAccessManager(this);
+    }
+    
+    // Формируем URL с параметрами
+    QUrl url("https://4cloud.pro/api.php");
+    QUrlQuery query;
+    query.addQueryItem("method", "get-iam-token");
+    query.addQueryItem("login", login);
+    query.addQueryItem("Password", password);
+    url.setQuery(query);
+    
+    qCInfo(chiakiGui) << "Yandex authorization request:" << url.toString(QUrl::RemoveQuery);
+    
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    
+    QNetworkReply *reply = network_manager->get(request);
+    
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        
+        if (reply->error() != QNetworkReply::NoError) {
+            QString errorMsg = QString("Ошибка сети: %1").arg(reply->errorString());
+            qCWarning(chiakiGui) << "Yandex auth error:" << errorMsg;
+            emit yandexAuthError(errorMsg);
+            return;
+        }
+        
+        QByteArray data = reply->readAll();
+        QJsonParseError parseError;
+        QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+        
+        if (parseError.error != QJsonParseError::NoError) {
+            QString errorMsg = QString("Ошибка парсинга ответа: %1").arg(parseError.errorString());
+            qCWarning(chiakiGui) << "Yandex auth parse error:" << errorMsg;
+            emit yandexAuthError(errorMsg);
+            return;
+        }
+        
+        QJsonObject obj = doc.object();
+        
+        // Проверяем статус ответа (может быть "Status" или "status")
+        QString status = obj.value("Status").toString();
+        if (status.isEmpty()) {
+            status = obj.value("status").toString();
+        }
+        
+        if (status.toLower() != "success") {
+            QString errorMsg = obj.value("message").toString();
+            if (errorMsg.isEmpty()) {
+                errorMsg = "Неверный логин или пароль";
+            }
+            qCWarning(chiakiGui) << "Yandex auth failed:" << errorMsg;
+            emit yandexAuthError(errorMsg);
+            return;
+        }
+        
+        // Извлекаем Key и Folder
+        QString iamToken = obj.value("Key").toString();
+        QString folderId = obj.value("Folder").toString();
+        
+        if (iamToken.isEmpty() || folderId.isEmpty()) {
+            QString errorMsg = "Ответ не содержит необходимых данных";
+            qCWarning(chiakiGui) << "Yandex auth error:" << errorMsg;
+            emit yandexAuthError(errorMsg);
+            return;
+        }
+        
+        // Сохраняем в настройки
+        settings->SetYandexIamToken(iamToken);
+        settings->SetYandexFolderId(folderId);
+        
+        qCInfo(chiakiGui) << "Yandex authorization successful, IAM token length:" << iamToken.length() << "Folder ID:" << folderId;
+        emit yandexAuthSuccess(iamToken, folderId);
+    });
 }
 
 bool QmlSettings::mouseTouchEnabled() const
