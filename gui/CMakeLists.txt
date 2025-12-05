@@ -132,8 +132,8 @@ add_executable(chiaki WIN32
 target_include_directories(chiaki PRIVATE include)
 
 add_library(placebo-libav-impl src/libav_impl.c)
-target_link_libraries(placebo-libav-impl PkgConfig::LIBPLACEBO FFMPEG::avcodec FFMPEG::avutil FFMPEG::avformat)
-target_link_libraries(chiaki PkgConfig::LIBPLACEBO placebo-libav-impl)
+target_link_libraries(placebo-libav-impl PkgConfig::LIBPLACEBO FFMPEG::avcodec FFMPEG::avutil FFMPEG::avformat FFMPEG::swscale)
+target_link_libraries(chiaki PkgConfig::LIBPLACEBO placebo-libav-impl FFMPEG::swscale)
 
 target_link_libraries(chiaki chiaki-lib)
 if(CHIAKI_ENABLE_CLI)
