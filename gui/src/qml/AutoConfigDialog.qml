@@ -15,13 +15,13 @@ Dialog {
     property string errorMessage: ""
     
     implicitWidth: 530
-    implicitHeight: 340
+    implicitHeight: 380
     
     padding: 20
     
     contentItem: Item {
         implicitWidth: 490
-        implicitHeight: 300
+        implicitHeight: 340
         
         ColumnLayout {
             anchors.fill: parent
