@@ -1112,8 +1112,10 @@ bool QmlMainWindow::handleShortcut(QKeyEvent *event)
 
     // Handle Alt modifier shortcuts
     if (event->modifiers() == Qt::AltModifier) {
+        qCInfo(chiakiGui) << "Alt key pressed with key:" << Qt::Key(event->key());
         switch (event->key()) {
         case Qt::Key_T:
+            qCInfo(chiakiGui) << "Alt+T pressed - triggering translation toggle";
             toggleTranslation();
             return true;
         default:
@@ -1255,11 +1257,15 @@ QObject *QmlMainWindow::focusObject() const
 
 void QmlMainWindow::triggerTranslation()
 {
+    qCInfo(chiakiGui) << "=== triggerTranslation() START ===";
+    qCInfo(chiakiGui) << "  translation_in_progress:" << translation_in_progress;
+    
     if (translation_in_progress) {
         qCInfo(chiakiGui) << "Translation already in progress, ignoring request";
         return;
     }
 
+    qCInfo(chiakiGui) << "  has_video:" << has_video;
     if (!has_video) {
         qCWarning(chiakiGui) << "No video available for translation";
         return;
@@ -1269,8 +1275,14 @@ void QmlMainWindow::triggerTranslation()
     QString iamToken = settings->GetYandexIamToken();
     QString folderId = settings->GetYandexFolderId();
     
+    qCInfo(chiakiGui) << "  IAM Token length:" << iamToken.length();
+    qCInfo(chiakiGui) << "  Folder ID:" << folderId;
+    
     if (iamToken.isEmpty() || folderId.isEmpty()) {
-        qCWarning(chiakiGui) << "Yandex OCR credentials not configured. Please set IAM Token and Folder ID in settings.";
+        qCWarning(chiakiGui) << "⚠️ Yandex OCR credentials not configured!";
+        qCWarning(chiakiGui) << "  IAM Token empty:" << iamToken.isEmpty();
+        qCWarning(chiakiGui) << "  Folder ID empty:" << folderId.isEmpty();
+        qCWarning(chiakiGui) << "Please set IAM Token and Folder ID in Settings -> Configuration tab";
         return;
     }
     
@@ -1281,18 +1293,21 @@ void QmlMainWindow::triggerTranslation()
     translation_in_progress = true;
 
     // Захватываем текущий фрейм
+    qCInfo(chiakiGui) << "Capturing current frame...";
     QImage screenshot = captureCurrentFrame();
     
     if (screenshot.isNull()) {
-        qCWarning(chiakiGui) << "Failed to capture frame for translation";
+        qCWarning(chiakiGui) << "⚠️ Failed to capture frame for translation";
         translation_in_progress = false;
         return;
     }
 
-    qCInfo(chiakiGui) << "Frame captured, size:" << screenshot.size();
+    qCInfo(chiakiGui) << "✓ Frame captured successfully, size:" << screenshot.size();
+    qCInfo(chiakiGui) << "Sending to Yandex OCR...";
     
     // Отправляем на распознавание
     yandex_ocr->recognizeText(screenshot);
+    qCInfo(chiakiGui) << "=== triggerTranslation() END ===";
 }
 
 void QmlMainWindow::clearTranslation()
@@ -1306,6 +1321,10 @@ void QmlMainWindow::clearTranslation()
 
 void QmlMainWindow::toggleTranslation()
 {
+    qCInfo(chiakiGui) << "toggleTranslation() called";
+    qCInfo(chiakiGui) << "  text_overlay exists:" << (text_overlay != nullptr);
+    qCInfo(chiakiGui) << "  text_overlay->isActive():" << (text_overlay ? text_overlay->isActive() : false);
+    
     if (text_overlay && text_overlay->isActive()) {
         // Если оверлей активен, переключаем его видимость
         text_overlay->setVisible(!text_overlay->isVisible());
@@ -1313,16 +1332,20 @@ void QmlMainWindow::toggleTranslation()
         qCInfo(chiakiGui) << "Translation overlay toggled:" << (text_overlay->isVisible() ? "visible" : "hidden");
     } else {
         // Если оверлей не активен, запускаем распознавание
+        qCInfo(chiakiGui) << "Overlay not active, triggering new translation";
         triggerTranslation();
     }
 }
 
 QImage QmlMainWindow::captureCurrentFrame()
 {
+    qCInfo(chiakiGui) << "=== captureCurrentFrame() START ===";
     QMutexLocker locker(&frame_mutex);
     
+    qCInfo(chiakiGui) << "  av_frame exists:" << (av_frame != nullptr);
+    
     if (!av_frame) {
-        qCWarning(chiakiGui) << "No frame available to capture";
+        qCWarning(chiakiGui) << "⚠️ No frame available to capture";
         return QImage();
     }
 
@@ -1331,7 +1354,8 @@ QImage QmlMainWindow::captureCurrentFrame()
     int height = av_frame->height;
     AVPixelFormat format = static_cast<AVPixelFormat>(av_frame->format);
 
-    qCInfo(chiakiGui) << "Capturing frame:" << width << "x" << height << "format:" << format;
+    qCInfo(chiakiGui) << "  Frame info: " << width << "x" << height << "format:" << format;
+    qCInfo(chiakiGui) << "  hw_frames_ctx:" << (av_frame->hw_frames_ctx != nullptr);
 
     // Создаем временный фрейм для конвертации в RGB
     AVFrame *rgb_frame = av_frame_alloc();
@@ -1397,7 +1421,10 @@ QImage QmlMainWindow::captureCurrentFrame()
     if (temp_sw_frame)
         av_frame_free(&temp_sw_frame);
 
-    qCInfo(chiakiGui) << "Frame captured successfully, image size:" << result.size();
+    qCInfo(chiakiGui) << "✓ Frame captured successfully!";
+    qCInfo(chiakiGui) << "  Result image size:" << result.size();
+    qCInfo(chiakiGui) << "  Result isNull:" << result.isNull();
+    qCInfo(chiakiGui) << "=== captureCurrentFrame() END ===";
     return result;
 }
 

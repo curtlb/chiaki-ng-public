@@ -54,7 +54,13 @@ QString YandexOCR::encodeImageToBase64(const QImage &image)
 
 void YandexOCR::recognizeText(const QImage &image)
 {
+    qCInfo(chiakiGui) << "=== YandexOCR::recognizeText() START ===";
+    qCInfo(chiakiGui) << "  Image size:" << image.size();
+    qCInfo(chiakiGui) << "  Image isNull:" << image.isNull();
+    qCInfo(chiakiGui) << "  isConfigured:" << isConfigured();
+    
     if (!isConfigured()) {
+        qCWarning(chiakiGui) << "⚠️ YandexOCR not configured. Set IAM token and folder ID first.";
         emit errorOccurred("YandexOCR not configured. Set IAM token and folder ID first.");
         return;
     }
@@ -64,7 +70,9 @@ void YandexOCR::recognizeText(const QImage &image)
     translationsCompleted_ = 0;
     translationsTotal_ = 0;
 
+    qCInfo(chiakiGui) << "Encoding image to base64...";
     QString base64Image = encodeImageToBase64(image);
+    qCInfo(chiakiGui) << "  Base64 image length:" << base64Image.length();
 
     QJsonObject requestBody;
     requestBody["mimeType"] = "JPEG";
@@ -81,8 +89,16 @@ void YandexOCR::recognizeText(const QImage &image)
     request.setRawHeader("x-folder-id", folderId_.toUtf8());
     request.setRawHeader("x-data-logging-enabled", "true");
 
+    qCInfo(chiakiGui) << "Sending OCR request to Yandex Cloud...";
+    qCInfo(chiakiGui) << "  URL:" << request.url();
+    qCInfo(chiakiGui) << "  Folder ID:" << folderId_;
+    qCInfo(chiakiGui) << "  Request size:" << jsonData.size() << "bytes";
+
     QNetworkReply *reply = networkManager_->post(request, jsonData);
     connect(reply, &QNetworkReply::finished, this, &YandexOCR::onRecognitionReplyFinished);
+    
+    qCInfo(chiakiGui) << "OCR request sent, waiting for response...";
+    qCInfo(chiakiGui) << "=== YandexOCR::recognizeText() END ===";
 }
 
 QRect YandexOCR::parseVertices(const QJsonArray &vertices)
@@ -210,14 +226,26 @@ void YandexOCR::translateBlock(int blockIndex)
 
 void YandexOCR::onRecognitionReplyFinished()
 {
+    qCInfo(chiakiGui) << "=== onRecognitionReplyFinished() START ===";
+    
     QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
     if (!reply) {
+        qCWarning(chiakiGui) << "⚠️ Reply is null!";
         return;
     }
 
+    qCInfo(chiakiGui) << "  HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    qCInfo(chiakiGui) << "  Error code:" << reply->error();
+
     if (reply->error() != QNetworkReply::NoError) {
         QString errorMsg = QString("Recognition error: %1").arg(reply->errorString());
-        qCWarning(chiakiGui) << "YandexOCR:" << errorMsg;
+        qCWarning(chiakiGui) << "⚠️ YandexOCR:" << errorMsg;
+        
+        QByteArray errorData = reply->readAll();
+        if (!errorData.isEmpty()) {
+            qCWarning(chiakiGui) << "  Error response:" << errorData;
+        }
+        
         emit errorOccurred(errorMsg);
         emit recognitionFinished(false);
         reply->deleteLater();
@@ -225,30 +253,45 @@ void YandexOCR::onRecognitionReplyFinished()
     }
 
     QByteArray responseData = reply->readAll();
+    qCInfo(chiakiGui) << "  Response size:" << responseData.size() << "bytes";
+
     QJsonDocument doc = QJsonDocument::fromJson(responseData);
 
     if (doc.isNull()) {
+        qCWarning(chiakiGui) << "⚠️ Failed to parse recognition response";
+        qCWarning(chiakiGui) << "  Raw response:" << responseData.left(500);
         emit errorOccurred("Failed to parse recognition response");
         emit recognitionFinished(false);
         reply->deleteLater();
         return;
     }
 
+    qCInfo(chiakiGui) << "✓ Response parsed successfully, processing...";
     parseRecognitionResponse(doc);
     reply->deleteLater();
+    qCInfo(chiakiGui) << "=== onRecognitionReplyFinished() END ===";
 }
 
 void YandexOCR::onTranslationReplyFinished()
 {
+    qCInfo(chiakiGui) << "=== onTranslationReplyFinished() ===";
+    
     QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
     if (!reply) {
+        qCWarning(chiakiGui) << "⚠️ Translation reply is null!";
         return;
     }
 
     int blockIndex = reply->property("blockIndex").toInt();
+    qCInfo(chiakiGui) << "  Block index:" << blockIndex;
+    qCInfo(chiakiGui) << "  HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
     if (reply->error() != QNetworkReply::NoError) {
-        qCWarning(chiakiGui) << "YandexOCR: Translation error:" << reply->errorString();
+        qCWarning(chiakiGui) << "⚠️ YandexOCR: Translation error:" << reply->errorString();
+        QByteArray errorData = reply->readAll();
+        if (!errorData.isEmpty()) {
+            qCWarning(chiakiGui) << "  Error response:" << errorData;
+        }
         // Используем оригинальный текст, если перевод не удался
         if (blockIndex >= 0 && blockIndex < recognizedBlocks_.size()) {
             recognizedBlocks_[blockIndex].translated = recognizedBlocks_[blockIndex].text;
