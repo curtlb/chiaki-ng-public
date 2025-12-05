@@ -2319,14 +2319,42 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     query.addQueryItem("Password", password);
     url.setQuery(query);
     
-    qCInfo(chiakiGui) << "AutoConfig request:" << url.toString();
+    qCInfo(chiakiGui) << "AutoConfig request URL:" << url.toString();
+    qCInfo(chiakiGui) << "AutoConfig request URL (encoded):" << url.toEncoded();
     
     QNetworkRequest request(url);
     // НЕ устанавливаем Content-Type для GET-запроса
     
+    qCInfo(chiakiGui) << "Request headers BEFORE sending:";
+    for (const auto &header : request.rawHeaderList()) {
+        qCInfo(chiakiGui) << "  " << header << ":" << request.rawHeader(header);
+    }
+    
     QNetworkReply *reply = network_manager->get(request);
     
+    qCInfo(chiakiGui) << "Request sent, waiting for reply...";
+    
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        qCInfo(chiakiGui) << "";
+        qCInfo(chiakiGui) << "=== RESPONSE RECEIVED ===";
+        qCInfo(chiakiGui) << "URL:" << reply->url().toString();
+        qCInfo(chiakiGui) << "HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        qCInfo(chiakiGui) << "HTTP Reason:" << reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString();
+        qCInfo(chiakiGui) << "Error code:" << reply->error();
+        qCInfo(chiakiGui) << "Error string:" << reply->errorString();
+        
+        qCInfo(chiakiGui) << "Response headers:";
+        for (const auto &header : reply->rawHeaderPairs()) {
+            qCInfo(chiakiGui) << "  " << header.first << ":" << header.second;
+        }
+        
+        QByteArray responseData = reply->readAll();
+        qCInfo(chiakiGui) << "Response body length:" << responseData.length();
+        if (responseData.length() > 0 && responseData.length() < 5000) {
+            qCInfo(chiakiGui) << "Response body:" << responseData;
+        }
+        qCInfo(chiakiGui) << "=========================";
+        qCInfo(chiakiGui) << "";
         reply->deleteLater();
         
         if (reply->error() != QNetworkReply::NoError) {
@@ -2335,8 +2363,6 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
             emit autoConfigError(errorMsg);
             return;
         }
-        
-        QByteArray data = reply->readAll();
         QJsonParseError parseError;
         QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
         
