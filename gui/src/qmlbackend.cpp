@@ -2363,8 +2363,9 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
             emit autoConfigError(errorMsg);
             return;
         }
+        
         QJsonParseError parseError;
-        QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+        QJsonDocument doc = QJsonDocument::fromJson(responseData, &parseError);
         
         if (parseError.error != QJsonParseError::NoError) {
             QString errorMsg = QString("Ошибка парсинга ответа: %1").arg(parseError.errorString());
