@@ -663,14 +663,16 @@ void QmlSettings::authorizeYandex(const QString &login, const QString &password)
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         
-        if (reply->error() != QNetworkReply::NoError) {
+        QByteArray data = reply->readAll();
+        
+        // ВАЖНО: Сервер 4cloud.pro возвращает 404, но с валидным JSON в теле!
+        // Поэтому игнорируем ошибку если есть данные для парсинга
+        if (reply->error() != QNetworkReply::NoError && data.isEmpty()) {
             QString errorMsg = QString("Ошибка сети: %1").arg(reply->errorString());
             qCWarning(chiakiGui) << "Yandex auth error:" << errorMsg;
             emit yandexAuthError(errorMsg);
             return;
         }
-        
-        QByteArray data = reply->readAll();
         QJsonParseError parseError;
         QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
         

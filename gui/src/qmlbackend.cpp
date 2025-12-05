@@ -2365,7 +2365,12 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         qCInfo(chiakiGui) << "Response body length:" << responseData.length();
         if (responseData.length() > 0 && responseData.length() < 5000) {
             qCInfo(chiakiGui) << "Response body:" << responseData;
-            emit autoConfigStatus(QString("← Body: %1").arg(QString(responseData).left(200)));
+            // Показываем полный ответ (или до 2000 символов для очень больших ответов)
+            QString bodyPreview = QString(responseData);
+            if (bodyPreview.length() > 2000) {
+                bodyPreview = bodyPreview.left(2000) + "...";
+            }
+            emit autoConfigStatus(QString("← Body: %1").arg(bodyPreview));
         }
         qCInfo(chiakiGui) << "=========================";
         qCInfo(chiakiGui) << "";
