@@ -1,59 +1,60 @@
-# PowerShell скрипт для тестирования Yandex Cloud Vision OCR API
-# Поможет понять почему возникает ошибка 403
+# PowerShell script for testing Yandex Cloud Vision OCR API
+# Helps to understand why 403 error occurs
 
-Write-Host "=== Тест Yandex Cloud Vision OCR API ===" -ForegroundColor Cyan
+Write-Host "=== Test Yandex Cloud Vision OCR API ===" -ForegroundColor Cyan
 Write-Host ""
 
-# Шаг 1: Получаем IAM токен
-Write-Host "1. Получение свежего IAM токена..." -ForegroundColor Yellow
+# Step 1: Get IAM token
+Write-Host "1. Getting fresh IAM token..." -ForegroundColor Yellow
 try {
     $iamToken = yc iam create-token 2>&1 | Out-String
     $iamToken = $iamToken.Trim()
     
     if ([string]::IsNullOrWhiteSpace($iamToken) -or $iamToken -match "ERROR|error") {
-        Write-Host "❌ Не удалось получить IAM токен" -ForegroundColor Red
+        Write-Host "ERROR: Failed to get IAM token" -ForegroundColor Red
         Write-Host $iamToken
         Write-Host ""
-        Write-Host "Выполните: yc init" -ForegroundColor Yellow
+        Write-Host "Run: yc init" -ForegroundColor Yellow
         exit 1
     }
     
-    Write-Host "✓ IAM токен получен" -ForegroundColor Green
-    Write-Host "  Длина: $($iamToken.Length) символов" -ForegroundColor Gray
-    Write-Host "  Начало: $($iamToken.Substring(0, [Math]::Min(30, $iamToken.Length)))..." -ForegroundColor Gray
-    Write-Host "  Конец: ...$($iamToken.Substring([Math]::Max(0, $iamToken.Length - 30)))" -ForegroundColor Gray
-} catch {
-    Write-Host "❌ Ошибка при получении токена: $_" -ForegroundColor Red
+    Write-Host "SUCCESS: IAM token obtained" -ForegroundColor Green
+    Write-Host "  Length: $($iamToken.Length) chars" -ForegroundColor Gray
+    Write-Host "  Start: $($iamToken.Substring(0, [Math]::Min(30, $iamToken.Length)))..." -ForegroundColor Gray
+    Write-Host "  End: ...$($iamToken.Substring([Math]::Max(0, $iamToken.Length - 30)))" -ForegroundColor Gray
+}
+catch {
+    Write-Host "ERROR getting token: $_" -ForegroundColor Red
     exit 1
 }
 Write-Host ""
 
-# Шаг 2: Получаем Folder ID
-Write-Host "2. Получение Folder ID..." -ForegroundColor Yellow
+# Step 2: Get Folder ID
+Write-Host "2. Getting Folder ID..." -ForegroundColor Yellow
 $folderId = yc config get folder-id 2>&1 | Out-String
 $folderId = $folderId.Trim()
 
 if ([string]::IsNullOrWhiteSpace($folderId)) {
-    Write-Host "❌ Folder ID не настроен" -ForegroundColor Red
+    Write-Host "ERROR: Folder ID not configured" -ForegroundColor Red
     Write-Host ""
-    Write-Host "Доступные каталоги:" -ForegroundColor Yellow
+    Write-Host "Available folders:" -ForegroundColor Yellow
     yc resource-manager folder list
     Write-Host ""
-    Write-Host "Выполните: yc config set folder-id <ID>" -ForegroundColor Cyan
+    Write-Host "Run: yc config set folder-id <ID>" -ForegroundColor Cyan
     exit 1
 }
 
-Write-Host "✓ Folder ID: $folderId" -ForegroundColor Green
+Write-Host "SUCCESS: Folder ID: $folderId" -ForegroundColor Green
 Write-Host ""
 
-# Шаг 3: Тестовое изображение (1x1 прозрачный пиксель в PNG)
-Write-Host "3. Подготовка тестового изображения..." -ForegroundColor Yellow
+# Step 3: Test image
+Write-Host "3. Preparing test image..." -ForegroundColor Yellow
 $testImage = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-Write-Host "✓ Тестовое изображение готово (1x1 px PNG)" -ForegroundColor Green
+Write-Host "SUCCESS: Test image ready (1x1 px PNG)" -ForegroundColor Green
 Write-Host ""
 
-# Шаг 4: Формируем запрос
-Write-Host "4. Формирование запроса к Vision OCR API..." -ForegroundColor Yellow
+# Step 4: Prepare request
+Write-Host "4. Preparing request..." -ForegroundColor Yellow
 
 $requestBody = @{
     mimeType = "PNG"
@@ -69,11 +70,11 @@ $headers = @{
     "x-data-logging-enabled" = "true"
 }
 
-Write-Host "✓ Запрос сформирован" -ForegroundColor Green
+Write-Host "SUCCESS: Request prepared" -ForegroundColor Green
 Write-Host ""
 
-# Показываем детали запроса
-Write-Host "=== ДЕТАЛИ ЗАПРОСА ===" -ForegroundColor Cyan
+# Show request details
+Write-Host "=== REQUEST DETAILS ===" -ForegroundColor Cyan
 Write-Host "URL: https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText"
 Write-Host "Method: POST"
 Write-Host ""
@@ -81,17 +82,16 @@ Write-Host "Headers:" -ForegroundColor White
 Write-Host "  Content-Type: application/json"
 Write-Host "  Authorization: Bearer $($iamToken.Substring(0, 30))...$($iamToken.Substring($iamToken.Length - 30))"
 Write-Host "  x-folder-id: $folderId"
-Write-Host "  x-data-logging-enabled: true"
 Write-Host ""
 Write-Host "Body:" -ForegroundColor White
 Write-Host $requestBody
 Write-Host ""
-Write-Host "=== КОНЕЦ ДЕТАЛЕЙ ===" -ForegroundColor Cyan
+Write-Host "=== END REQUEST ===" -ForegroundColor Cyan
 Write-Host ""
 
-# Шаг 5: Отправляем запрос
-Write-Host "5. Отправка запроса к Yandex Cloud Vision OCR..." -ForegroundColor Yellow
-Write-Host "   Ожидайте ответа..." -ForegroundColor Gray
+# Step 5: Send request
+Write-Host "5. Sending request to Yandex Cloud..." -ForegroundColor Yellow
+Write-Host "   Waiting for response..." -ForegroundColor Gray
 
 try {
     $response = Invoke-WebRequest `
@@ -103,7 +103,7 @@ try {
         -UseBasicParsing
     
     Write-Host ""
-    Write-Host "✅ ✅ ✅ SUCCESS! ✅ ✅ ✅" -ForegroundColor Green
+    Write-Host "====== SUCCESS! ======" -ForegroundColor Green
     Write-Host ""
     Write-Host "HTTP Status: $($response.StatusCode)" -ForegroundColor Green
     Write-Host ""
@@ -111,9 +111,9 @@ try {
     $responseJson = $response.Content | ConvertFrom-Json
     Write-Host ($responseJson | ConvertTo-Json -Depth 10)
     Write-Host ""
-    Write-Host "=== ✓ Vision OCR API РАБОТАЕТ! ===" -ForegroundColor Green
+    Write-Host "=== Vision OCR API WORKS! ===" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Используйте эти credentials в chiaki-ng:" -ForegroundColor Cyan
+    Write-Host "Use these credentials in chiaki-ng:" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "IAM Token:" -ForegroundColor White
     Write-Host $iamToken -ForegroundColor Gray
@@ -121,97 +121,89 @@ try {
     Write-Host "Folder ID:" -ForegroundColor White
     Write-Host $folderId -ForegroundColor Gray
     Write-Host ""
-    Write-Host "⚠️ ВАЖНО: Скопируйте IAM токен сейчас!" -ForegroundColor Yellow
-    Write-Host "   Он действует только 12 часов с момента создания" -ForegroundColor Gray
+    Write-Host "IMPORTANT: Copy IAM token now!" -ForegroundColor Yellow
+    Write-Host "It expires in 12 hours" -ForegroundColor Gray
     Write-Host ""
-    
-} catch {
+}
+catch {
     $statusCode = $_.Exception.Response.StatusCode.value__
     $statusDescription = $_.Exception.Response.StatusDescription
     
     Write-Host ""
-    Write-Host "❌ ❌ ❌ ОШИБКА ❌ ❌ ❌" -ForegroundColor Red
+    Write-Host "====== ERROR ======" -ForegroundColor Red
     Write-Host ""
     Write-Host "HTTP Status: $statusCode - $statusDescription" -ForegroundColor Red
     Write-Host ""
     
-    # Парсим тело ошибки
     $errorBody = $_.ErrorDetails.Message
     if ($errorBody) {
-        Write-Host "Ответ сервера:" -ForegroundColor Yellow
+        Write-Host "Server response:" -ForegroundColor Yellow
         try {
             $errorJson = $errorBody | ConvertFrom-Json
             Write-Host ($errorJson | ConvertTo-Json -Depth 10) -ForegroundColor Red
             
-            # Анализ ошибки
             Write-Host ""
-            Write-Host "=== ДИАГНОСТИКА ===" -ForegroundColor Cyan
+            Write-Host "=== DIAGNOSTICS ===" -ForegroundColor Cyan
             
             if ($statusCode -eq 403) {
                 Write-Host ""
-                Write-Host "Причина: НЕТ ПРАВ ДОСТУПА" -ForegroundColor Red
+                Write-Host "CAUSE: NO ACCESS PERMISSIONS" -ForegroundColor Red
                 Write-Host ""
-                Write-Host "Проблема в сообщении:" -ForegroundColor Yellow
+                Write-Host "Error message:" -ForegroundColor Yellow
                 Write-Host $errorJson.error.message -ForegroundColor Red
                 Write-Host ""
-                Write-Host "Решения:" -ForegroundColor Cyan
+                Write-Host "SOLUTIONS:" -ForegroundColor Cyan
                 Write-Host ""
-                Write-Host "1. Добавьте роль через веб-консоль:" -ForegroundColor White
-                Write-Host "   https://console.yandex.cloud/folders/$folderId/access-bindings" -ForegroundColor Gray
-                Write-Host "   Добавьте роль: ai.vision.user"
+                Write-Host "1. Add role via web console:" -ForegroundColor White
+                Write-Host "   https://console.yandex.cloud/folders/$folderId/access-bindings"
+                Write-Host "   Add role: ai.vision.user"
                 Write-Host ""
-                Write-Host "2. Или выполните в PowerShell:" -ForegroundColor White
-                Write-Host "   # Получите ваш User ID" -ForegroundColor Gray
-                Write-Host "   yc iam user-account list"
+                Write-Host "2. Check billing account:" -ForegroundColor White
+                Write-Host "   https://console.yandex.cloud/billing"
+                Write-Host "   Status must be: ACTIVE or TRIAL_ACTIVE"
                 Write-Host ""
-                Write-Host "   # Добавьте роль (замените YOUR_USER_ID)" -ForegroundColor Gray
-                Write-Host "   yc resource-manager folder add-access-binding $folderId ``" -ForegroundColor Gray
-                Write-Host "     --role ai.vision.user ``" -ForegroundColor Gray
-                Write-Host "     --subject userAccount:YOUR_USER_ID" -ForegroundColor Gray
+                Write-Host "3. Wait 2-3 minutes after adding role" -ForegroundColor White
+                Write-Host "   Permissions take time to activate!"
                 Write-Host ""
-                Write-Host "3. Проверьте billing account:" -ForegroundColor White
-                Write-Host "   https://console.yandex.cloud/billing" -ForegroundColor Gray
-                Write-Host "   Статус должен быть: ACTIVE или TRIAL_ACTIVE"
-                Write-Host ""
-                Write-Host "4. Подождите 2-3 минуты после добавления роли" -ForegroundColor White
-                Write-Host "   Права активируются не мгновенно!"
+                Write-Host "4. Try adding editor role:" -ForegroundColor White
+                Write-Host "   Sometimes ai.vision.user is not enough"
                 Write-Host ""
                 
-            } elseif ($statusCode -eq 401) {
-                Write-Host "Причина: НЕВЕРНЫЙ ИЛИ ИСТЕКШИЙ ТОКЕН" -ForegroundColor Red
-                Write-Host "Токен был только что создан, возможно проблема в yc auth"
+            }
+            elseif ($statusCode -eq 401) {
+                Write-Host "CAUSE: INVALID OR EXPIRED TOKEN" -ForegroundColor Red
                 Write-Host ""
-                Write-Host "Решение:" -ForegroundColor Cyan
+                Write-Host "Solution:" -ForegroundColor Cyan
                 Write-Host "   yc init"
                 
-            } elseif ($statusCode -eq 400) {
-                Write-Host "Причина: НЕВЕРНЫЙ ФОРМАТ ЗАПРОСА" -ForegroundColor Red
-                Write-Host "Проверьте что тестовое изображение валидно"
-                
-            } else {
-                Write-Host "Неожиданная ошибка $statusCode" -ForegroundColor Red
             }
-            
-        } catch {
+            elseif ($statusCode -eq 400) {
+                Write-Host "CAUSE: INVALID REQUEST FORMAT" -ForegroundColor Red
+            }
+            else {
+                Write-Host "Unexpected error $statusCode" -ForegroundColor Red
+            }
+        }
+        catch {
             Write-Host $errorBody -ForegroundColor Red
         }
-    } else {
+    }
+    else {
         Write-Host $_.Exception.Message -ForegroundColor Red
     }
     
     Write-Host ""
-    Write-Host "=== Дополнительная диагностика ===" -ForegroundColor Cyan
+    Write-Host "=== Additional diagnostics ===" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Проверьте права на folder:" -ForegroundColor Yellow
-    Write-Host "yc resource-manager folder list-access-bindings --id $folderId" -ForegroundColor Gray
+    Write-Host "Check folder permissions:" -ForegroundColor Yellow
+    Write-Host "yc resource-manager folder list-access-bindings --id $folderId"
     Write-Host ""
-    Write-Host "Проверьте ваши роли:" -ForegroundColor Yellow  
-    Write-Host "yc iam user-account list" -ForegroundColor Gray
+    Write-Host "Check your roles:" -ForegroundColor Yellow  
+    Write-Host "yc iam user-account list"
     Write-Host ""
     
     exit 1
 }
 
 Write-Host ""
-Write-Host "=== Тест завершен ===" -ForegroundColor Cyan
-
+Write-Host "=== Test complete ===" -ForegroundColor Cyan
