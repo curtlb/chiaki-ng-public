@@ -2325,6 +2325,9 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     // Добавляем заголовки как у браузера чтобы сервер не блокировал
     request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
     request.setRawHeader("Accept", "application/json, text/plain, */*");
+    request.setRawHeader("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
+    request.setRawHeader("Origin", "https://4cloud.pro");
+    request.setRawHeader("Referer", "https://4cloud.pro/");
     
     QNetworkReply *reply = network_manager->get(request);
     
@@ -2379,6 +2382,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         QUrl configUrlObj(configUrl);
         QNetworkRequest configRequest(configUrlObj);
         configRequest.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+        configRequest.setRawHeader("Accept", "*/*");
         
         QNetworkReply *configReply = network_manager->get(configRequest);
         
@@ -2429,6 +2433,10 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
             url2.setQuery(query2);
             
             QNetworkRequest request2(url2);
+            request2.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request2.setRawHeader("Accept", "application/json");
+            request2.setRawHeader("Origin", "https://4cloud.pro");
+            
             QNetworkReply *reply2 = network_manager->get(request2);
             
             connect(reply2, &QNetworkReply::finished, this, [this, reply2, jwt]() {
@@ -2473,6 +2481,10 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                 url3.setQuery(query3);
                 
                 QNetworkRequest request3(url3);
+                request3.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                request3.setRawHeader("Accept", "application/json");
+                request3.setRawHeader("Origin", "https://4cloud.pro");
+                
                 QNetworkReply *reply3 = network_manager->get(request3);
                 
                 connect(reply3, &QNetworkReply::finished, this, [this, reply3, jwt]() {
@@ -2514,6 +2526,10 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                     url4.setQuery(query4);
                     
                     QNetworkRequest request4(url4);
+                    request4.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                    request4.setRawHeader("Accept", "application/json");
+                    request4.setRawHeader("Origin", "https://4cloud.pro");
+                    
                     QNetworkReply *reply4 = network_manager->get(request4);
                     
                     connect(reply4, &QNetworkReply::finished, this, [this, reply4, jwt]() {
@@ -2560,6 +2576,10 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                         url5.setQuery(query5);
                         
                         QNetworkRequest request5(url5);
+                        request5.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                        request5.setRawHeader("Accept", "application/json");
+                        request5.setRawHeader("Origin", "https://4cloud.pro");
+                        
                         QNetworkReply *reply5 = network_manager->get(request5);
                         
                         connect(reply5, &QNetworkReply::finished, this, [this, reply5]() {
