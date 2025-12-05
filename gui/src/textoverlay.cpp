@@ -29,6 +29,26 @@ void TextOverlay::setTextBlocks(const QVector<RecognizedTextBlock> &blocks, cons
     originalImageSize_ = imageSize;
     visible_ = !blocks.isEmpty();
     
+    // Кэшируем QVariantList для QML чтобы избежать deadlock
+    cachedQmlBlocks_.clear();
+    for (const RecognizedTextBlock &block : textBlocks_) {
+        QVariantMap blockMap;
+        blockMap["original"] = block.text;
+        blockMap["translated"] = block.translated;
+        blockMap["language"] = block.languageCode;
+        
+        QVariantMap bboxMap;
+        bboxMap["x"] = block.boundingBox.x();
+        bboxMap["y"] = block.boundingBox.y();
+        bboxMap["width"] = block.boundingBox.width();
+        bboxMap["height"] = block.boundingBox.height();
+        blockMap["boundingBox"] = bboxMap;
+        
+        cachedQmlBlocks_.append(blockMap);
+    }
+    
+    locker.unlock();
+    
     qCInfo(chiakiGui) << "TextOverlay: Set" << blocks.size() << "text blocks, image size:" << imageSize;
     
     // Уведомляем QML об изменениях
@@ -41,7 +61,11 @@ void TextOverlay::clear()
 {
     QMutexLocker locker(&mutex_);
     textBlocks_.clear();
+    cachedQmlBlocks_.clear();
     visible_ = false;
+    
+    locker.unlock();
+    
     qCInfo(chiakiGui) << "TextOverlay: Cleared";
     
     // Уведомляем QML об изменениях
@@ -141,25 +165,8 @@ void TextOverlay::render(QPainter &painter, const QSize &targetSize)
 
 QVariantList TextOverlay::getTextBlocksQml() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&mutex_));
-    QVariantList result;
-    
-    for (const RecognizedTextBlock &block : textBlocks_) {
-        QVariantMap blockMap;
-        blockMap["original"] = block.text;  // Исправлено: text вместо original
-        blockMap["translated"] = block.translated;
-        blockMap["language"] = block.languageCode;  // Исправлено: languageCode вместо language
-        
-        QVariantMap bboxMap;
-        bboxMap["x"] = block.boundingBox.x();
-        bboxMap["y"] = block.boundingBox.y();
-        bboxMap["width"] = block.boundingBox.width();
-        bboxMap["height"] = block.boundingBox.height();
-        blockMap["boundingBox"] = bboxMap;
-        
-        result.append(blockMap);
-    }
-    
-    return result;
+    // Возвращаем закэшированную версию - БЕЗ mutex чтобы избежать deadlock!
+    // Кэш обновляется в setTextBlocks() и clear()
+    return cachedQmlBlocks_;
 }
 

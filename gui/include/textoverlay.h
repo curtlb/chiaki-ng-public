@@ -84,6 +84,7 @@ private:
     void drawTextBlock(QPainter &painter, const RecognizedTextBlock &block, const QRect &rect);
 
     QVector<RecognizedTextBlock> textBlocks_;
+    QVariantList cachedQmlBlocks_;  // Закэшированная версия для QML (без mutex!)
     QSize originalImageSize_;
     QMutex mutex_;
     bool visible_;
