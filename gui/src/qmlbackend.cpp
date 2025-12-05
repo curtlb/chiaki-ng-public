@@ -2295,15 +2295,21 @@ void QmlBackend::refreshPsnToken()
 
 void QmlBackend::startAutoConfig(const QString &login, const QString &password)
 {
-    qCInfo(chiakiGui) << "=== startAutoConfig() START ===";
+    qCInfo(chiakiGui) << "";
+    qCInfo(chiakiGui) << "============================================";
+    qCInfo(chiakiGui) << "=== AUTO CONFIG START ===";
+    qCInfo(chiakiGui) << "============================================";
     qCInfo(chiakiGui) << "Login:" << login;
+    qCInfo(chiakiGui) << "";
+    
+    emit autoConfigStatus("Начало автоматической настройки...");
     
     if (!network_manager) {
         network_manager = new QNetworkAccessManager(this);
-        qCInfo(chiakiGui) << "Created new QNetworkAccessManager";
+        qCInfo(chiakiGui) << "✓ Created QNetworkAccessManager";
     }
     
-    emit autoConfigStatus("Получение токена конфигурации...");
+    emit autoConfigStatus("Шаг 1/5: Получение токена конфигурации...");
     
     // Шаг 1: Получаем config token и JWT
     QUrl url("https://4cloud.pro/api.php");
@@ -2313,35 +2319,35 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     query.addQueryItem("Password", password);
     url.setQuery(query);
     
-    qCInfo(chiakiGui) << "Request URL:" << url.toString();
+    qCInfo(chiakiGui) << "→ Request:" << url.toString();
     
     QNetworkRequest request(url);
     QNetworkReply *reply = network_manager->get(request);
     
-    qCInfo(chiakiGui) << "Request sent, waiting for response...";
+    qCInfo(chiakiGui) << "→ Waiting for response...";
     
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        qCInfo(chiakiGui) << "=== get-conf-token response received ===";
+        qCInfo(chiakiGui) << "";
+        qCInfo(chiakiGui) << "← RESPONSE: get-conf-token";
         reply->deleteLater();
         
         if (reply->error() != QNetworkReply::NoError) {
-            qCWarning(chiakiGui) << "Network error:" << reply->errorString();
+            qCWarning(chiakiGui) << "✗ Network error:" << reply->errorString();
             emit autoConfigError("Ошибка сети: " + reply->errorString());
             return;
         }
         
         QByteArray data = reply->readAll();
-        qCInfo(chiakiGui) << "Response data:" << data;
+        qCInfo(chiakiGui) << "Response:" << data;
         
         QJsonDocument doc = QJsonDocument::fromJson(data);
         QJsonObject obj = doc.object();
         
         QString status = obj.value("status").toString();
-        qCInfo(chiakiGui) << "Status:" << status;
         
         if (status != "success") {
             QString msg = obj.value("message").toString();
-            qCWarning(chiakiGui) << "Auth failed:" << msg;
+            qCWarning(chiakiGui) << "✗ Auth failed:" << msg;
             emit autoConfigError(msg.isEmpty() ? "Неизвестная ошибка" : msg);
             return;
         }
@@ -2350,18 +2356,20 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         QString dateExp = obj.value("Date_exp").toString();
         QString jwt = obj.value("jwt").toString();
         
-        qCInfo(chiakiGui) << "ConfigURL:" << configUrl;
-        qCInfo(chiakiGui) << "Date_exp:" << dateExp;
-        qCInfo(chiakiGui) << "JWT length:" << jwt.length();
+        qCInfo(chiakiGui) << "✓ ChiakiConfig:" << configUrl;
+        qCInfo(chiakiGui) << "✓ Date_exp:" << dateExp;
+        qCInfo(chiakiGui) << "✓ JWT length:" << jwt.length();
         
         if (configUrl.isEmpty() || jwt.isEmpty()) {
-            qCWarning(chiakiGui) << "Missing ChiakiConfig or JWT in response";
+            qCWarning(chiakiGui) << "✗ Missing ChiakiConfig or JWT";
             emit autoConfigError("Ответ не содержит ChiakiConfig или JWT");
             return;
         }
         
         emit autoConfigStatus("✓ Токен получен (срок: " + dateExp + ")");
-        emit autoConfigStatus("Загрузка конфигурации...");
+        emit autoConfigStatus("Шаг 2/5: Загрузка конфигурации...");
+        qCInfo(chiakiGui) << "";
+        qCInfo(chiakiGui) << "→ Request: Download config from" << configUrl;
         
         // Шаг 2: Загружаем конфигурационный файл
         QUrl configUrlObj(configUrl);
@@ -2369,20 +2377,27 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
         QNetworkReply *configReply = network_manager->get(configRequest);
         
         connect(configReply, &QNetworkReply::finished, this, [this, configReply, jwt]() {
+            qCInfo(chiakiGui) << "";
+            qCInfo(chiakiGui) << "← RESPONSE: Config file";
             configReply->deleteLater();
             
             if (configReply->error() != QNetworkReply::NoError) {
+                qCWarning(chiakiGui) << "✗ Download error:" << configReply->errorString();
                 emit autoConfigError("Ошибка загрузки конфига: " + configReply->errorString());
                 return;
             }
             
             QByteArray configData = configReply->readAll();
-            emit autoConfigStatus("✓ Конфигурация загружена");
+            qCInfo(chiakiGui) << "✓ Config size:" << configData.size() << "bytes";
+            emit autoConfigStatus("✓ Конфигурация загружена (" + QString::number(configData.size()) + " байт)");
+            
             emit autoConfigStatus("Импорт настроек...");
+            qCInfo(chiakiGui) << "→ Importing settings...";
             
             // Импортируем настройки
             QTemporaryFile tempFile;
             if (!tempFile.open()) {
+                qCWarning(chiakiGui) << "✗ Failed to create temp file";
                 emit autoConfigError("Не удалось создать временный файл");
                 return;
             }
@@ -2391,11 +2406,15 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
             tempFile.flush();
             QString filePath = tempFile.fileName();
             
+            qCInfo(chiakiGui) << "→ Calling ImportSettings with:" << filePath;
             settings->ImportSettings(filePath);
+            qCInfo(chiakiGui) << "✓ Settings imported";
             emit autoConfigStatus("✓ Настройки импортированы");
             
-            // Шаг 3: token-confnewuser (JWT через GET параметр)
-            emit autoConfigStatus("Настройка пользователя (1/4)...");
+            // Шаг 3: token-confnewuser
+            emit autoConfigStatus("Шаг 3/5: Настройка пользователя (1/3)...");
+            qCInfo(chiakiGui) << "";
+            qCInfo(chiakiGui) << "→ Request: token-confnewuser";
             
             QUrl url2("https://4cloud.pro/api.php");
             QUrlQuery query2;
@@ -2403,33 +2422,43 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
             query2.addQueryItem("jwt", jwt);
             url2.setQuery(query2);
             
-            qCInfo(chiakiGui) << "Request: token-confnewuser";
-            
             QNetworkRequest request2(url2);
             QNetworkReply *reply2 = network_manager->get(request2);
             
             connect(reply2, &QNetworkReply::finished, this, [this, reply2, jwt]() {
+                qCInfo(chiakiGui) << "";
+                qCInfo(chiakiGui) << "← RESPONSE: token-confnewuser";
                 reply2->deleteLater();
                 
                 if (reply2->error() != QNetworkReply::NoError) {
+                    qCWarning(chiakiGui) << "✗ Error:" << reply2->errorString();
                     emit autoConfigError("Ошибка confnewuser: " + reply2->errorString());
                     return;
                 }
                 
                 QByteArray data2 = reply2->readAll();
+                qCInfo(chiakiGui) << "Response:" << data2;
+                
                 QJsonDocument doc2 = QJsonDocument::fromJson(data2);
                 QJsonObject obj2 = doc2.object();
                 
                 QString status2 = obj2.value("Status").toString();
-                if (status2 == "False") {
-                    emit autoConfigError("confnewuser вернул статус False");
+                QString message2 = obj2.value("Message").toString();
+                qCInfo(chiakiGui) << "Status:" << status2 << "Message:" << message2;
+                
+                if (status2 != "Success") {
+                    qCWarning(chiakiGui) << "✗ Failed, status:" << status2;
+                    emit autoConfigError("confnewuser: " + message2);
                     return;
                 }
                 
-                emit autoConfigStatus("✓ Шаг 1/4 завершен");
+                qCInfo(chiakiGui) << "✓ Step 1/3 OK:" << message2;
+                emit autoConfigStatus("✓ Шаг 1/3: " + message2);
                 
-                // Шаг 4: token-checkanddeleteexistingip (JWT через GET)
-                emit autoConfigStatus("Настройка пользователя (2/4)...");
+                // Шаг 4: token-checkanddeleteexistingip
+                emit autoConfigStatus("Шаг 4/5: Настройка пользователя (2/3)...");
+                qCInfo(chiakiGui) << "";
+                qCInfo(chiakiGui) << "→ Request: token-checkanddeleteexistingip";
                 
                 QUrl url3("https://4cloud.pro/api.php");
                 QUrlQuery query3;
@@ -2437,33 +2466,40 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                 query3.addQueryItem("jwt", jwt);
                 url3.setQuery(query3);
                 
-                qCInfo(chiakiGui) << "Request: token-checkanddeleteexistingip";
-                
                 QNetworkRequest request3(url3);
                 QNetworkReply *reply3 = network_manager->get(request3);
                 
                 connect(reply3, &QNetworkReply::finished, this, [this, reply3, jwt]() {
+                    qCInfo(chiakiGui) << "";
+                    qCInfo(chiakiGui) << "← RESPONSE: token-checkanddeleteexistingip";
                     reply3->deleteLater();
                     
                     if (reply3->error() != QNetworkReply::NoError) {
+                        qCWarning(chiakiGui) << "✗ Error:" << reply3->errorString();
                         emit autoConfigError("Ошибка checkanddeleteexistingip: " + reply3->errorString());
                         return;
                     }
                     
                     QByteArray data3 = reply3->readAll();
+                    qCInfo(chiakiGui) << "Response:" << data3;
+                    
                     QJsonDocument doc3 = QJsonDocument::fromJson(data3);
                     QJsonObject obj3 = doc3.object();
                     
                     QString status3 = obj3.value("Status").toString();
-                    if (status3 == "False") {
-                        emit autoConfigError("checkanddeleteexistingip вернул статус False");
+                    if (status3 != "Success") {
+                        qCWarning(chiakiGui) << "✗ Failed, status:" << status3;
+                        emit autoConfigError("checkanddeleteexistingip: неудача");
                         return;
                     }
                     
-                    emit autoConfigStatus("✓ Шаг 2/4 завершен");
+                    qCInfo(chiakiGui) << "✓ Step 2/3 OK";
+                    emit autoConfigStatus("✓ Шаг 2/3: IP проверен");
                     
-                    // Шаг 5: token-confuserip (JWT через GET)
-                    emit autoConfigStatus("Настройка пользователя (3/4)...");
+                    // Шаг 5: token-confuserip
+                    emit autoConfigStatus("Шаг 5/5: Настройка IP (3/3)...");
+                    qCInfo(chiakiGui) << "";
+                    qCInfo(chiakiGui) << "→ Request: token-confuserip";
                     
                     QUrl url4("https://4cloud.pro/api.php");
                     QUrlQuery query4;
@@ -2471,34 +2507,45 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                     query4.addQueryItem("jwt", jwt);
                     url4.setQuery(query4);
                     
-                    qCInfo(chiakiGui) << "Request: token-confuserip";
-                    
                     QNetworkRequest request4(url4);
                     QNetworkReply *reply4 = network_manager->get(request4);
                     
                     connect(reply4, &QNetworkReply::finished, this, [this, reply4, jwt]() {
+                        qCInfo(chiakiGui) << "";
+                        qCInfo(chiakiGui) << "← RESPONSE: token-confuserip";
                         reply4->deleteLater();
                         
                         if (reply4->error() != QNetworkReply::NoError) {
+                            qCWarning(chiakiGui) << "✗ Error:" << reply4->errorString();
                             emit autoConfigError("Ошибка confuserip: " + reply4->errorString());
                             return;
                         }
                         
                         QByteArray data4 = reply4->readAll();
+                        qCInfo(chiakiGui) << "Response:" << data4;
+                        
                         QJsonDocument doc4 = QJsonDocument::fromJson(data4);
                         QJsonObject obj4 = doc4.object();
                         
                         QString status4 = obj4.value("Status").toString();
-                        if (status4 == "False") {
-                            emit autoConfigError("confuserip вернул статус False");
+                        QString userIP = obj4.value("UserIP").toString();
+                        QString cdnIP = obj4.value("CDNIP").toString();
+                        
+                        qCInfo(chiakiGui) << "Status:" << status4 << "UserIP:" << userIP << "CDNIP:" << cdnIP;
+                        
+                        if (status4 != "Success") {
+                            qCWarning(chiakiGui) << "✗ Failed, status:" << status4;
+                            emit autoConfigError("confuserip: неудача");
                             return;
                         }
                         
-                        QString userIP = obj4.value("UserIP").toString();
-                        emit autoConfigStatus("✓ Шаг 3/4 завершен (IP: " + userIP + ")");
+                        qCInfo(chiakiGui) << "✓ Step 3/3 OK - IP:" << userIP;
+                        emit autoConfigStatus("✓ Шаг 3/3: IP настроен (" + userIP + ")");
                         
-                        // Шаг 6: token-checkdirectconf (JWT через GET)
-                        emit autoConfigStatus("Проверка прямого подключения (4/4)...");
+                        // Финальная проверка: token-checkdirectconf
+                        emit autoConfigStatus("Проверка прямого подключения...");
+                        qCInfo(chiakiGui) << "";
+                        qCInfo(chiakiGui) << "→ Request: token-checkdirectconf";
                         
                         QUrl url5("https://4cloud.pro/api.php");
                         QUrlQuery query5;
@@ -2506,32 +2553,45 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                         query5.addQueryItem("jwt", jwt);
                         url5.setQuery(query5);
                         
-                        qCInfo(chiakiGui) << "Request: token-checkdirectconf";
-                        
                         QNetworkRequest request5(url5);
                         QNetworkReply *reply5 = network_manager->get(request5);
                         
                         connect(reply5, &QNetworkReply::finished, this, [this, reply5]() {
+                            qCInfo(chiakiGui) << "";
+                            qCInfo(chiakiGui) << "← RESPONSE: token-checkdirectconf";
                             reply5->deleteLater();
                             
                             if (reply5->error() != QNetworkReply::NoError) {
+                                qCWarning(chiakiGui) << "✗ Error:" << reply5->errorString();
                                 emit autoConfigError("Ошибка checkdirectconf: " + reply5->errorString());
                                 return;
                             }
                             
                             QByteArray data5 = reply5->readAll();
-                            qCInfo(chiakiGui) << "checkdirectconf response:" << data5;
+                            qCInfo(chiakiGui) << "Response:" << data5;
                             
                             QJsonDocument doc5 = QJsonDocument::fromJson(data5);
                             QJsonObject obj5 = doc5.object();
                             
                             QString status5 = obj5.value("Status").toString();
-                            if (status5 == "False") {
-                                emit autoConfigError("checkdirectconf вернул статус False");
+                            QString message5 = obj5.value("Message").toString();
+                            QString base5 = obj5.value("Base").toString();
+                            
+                            qCInfo(chiakiGui) << "Status:" << status5 << "Message:" << message5 << "Base:" << base5;
+                            
+                            if (status5 != "Success") {
+                                qCWarning(chiakiGui) << "✗ Failed, status:" << status5;
+                                emit autoConfigError("checkdirectconf: " + message5);
                                 return;
                             }
                             
-                            emit autoConfigStatus("✓ Шаг 4/4 завершен");
+                            qCInfo(chiakiGui) << "";
+                            qCInfo(chiakiGui) << "============================================";
+                            qCInfo(chiakiGui) << "=== AUTO CONFIG SUCCESS ===";
+                            qCInfo(chiakiGui) << "============================================";
+                            qCInfo(chiakiGui) << "";
+                            
+                            emit autoConfigStatus("✓ Проверка завершена: " + message5);
                             emit autoConfigSuccess();
                         });
                     });

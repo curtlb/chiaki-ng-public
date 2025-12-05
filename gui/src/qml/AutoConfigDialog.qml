@@ -140,13 +140,13 @@ Dialog {
                     enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
                     highlighted: true
                     onClicked: {
-                        console.log("Start button clicked!")
-                        autoConfigDialog.errorMessage = ""
-                        autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
-                        autoConfigDialog.isConfiguring = true
-                        console.log("Calling startAutoConfig...")
-                        Chiaki.backend.startAutoConfig(loginField.text, passwordField.text)
-                        console.log("startAutoConfig called")
+                    console.log("Start button clicked!")
+                    autoConfigDialog.errorMessage = ""
+                    autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
+                    autoConfigDialog.isConfiguring = true
+                    console.log("Calling Chiaki.startAutoConfig...")
+                    Chiaki.startAutoConfig(loginField.text, passwordField.text)
+                    console.log("Chiaki.startAutoConfig called")
                     }
                 }
             }
@@ -154,13 +154,15 @@ Dialog {
     }
     
     Connections {
-        target: Chiaki.backend
+        target: Chiaki
         
         function onAutoConfigStatus(message) {
+            console.log("AutoConfig status:", message)
             autoConfigDialog.statusMessage += message + "\n"
         }
         
         function onAutoConfigSuccess() {
+            console.log("AutoConfig SUCCESS!")
             autoConfigDialog.isConfiguring = false
             autoConfigDialog.statusMessage += "\n✓ Автоматическая настройка успешно завершена!\n"
             autoConfigDialog.statusMessage += "Разбудите консоль перед подключением (если кнопка доступна)\n"
@@ -168,6 +170,7 @@ Dialog {
         }
         
         function onAutoConfigError(errorMessage) {
+            console.log("AutoConfig ERROR:", errorMessage)
             autoConfigDialog.isConfiguring = false
             autoConfigDialog.errorMessage = errorMessage
             autoConfigDialog.statusMessage += "\n✗ Ошибка: " + errorMessage + "\n"
