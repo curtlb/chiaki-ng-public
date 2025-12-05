@@ -146,9 +146,9 @@ QVariantList TextOverlay::getTextBlocksQml() const
     
     for (const RecognizedTextBlock &block : textBlocks_) {
         QVariantMap blockMap;
-        blockMap["original"] = block.original;
+        blockMap["original"] = block.text;  // Исправлено: text вместо original
         blockMap["translated"] = block.translated;
-        blockMap["language"] = block.language;
+        blockMap["language"] = block.languageCode;  // Исправлено: languageCode вместо language
         
         QVariantMap bboxMap;
         bboxMap["x"] = block.boundingBox.x();
