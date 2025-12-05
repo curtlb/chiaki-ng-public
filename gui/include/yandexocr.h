@@ -77,7 +77,7 @@ private slots:
 private:
     QString encodeImageToBase64(const QImage &image);
     void parseRecognitionResponse(const QJsonDocument &doc);
-    void translateBlock(RecognizedTextBlock &block);
+    void translateBlock(int blockIndex);
     QRect parseVertices(const QJsonArray &vertices);
 
     QString iamToken_;

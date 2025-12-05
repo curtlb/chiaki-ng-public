@@ -165,12 +165,18 @@ void YandexOCR::parseRecognitionResponse(const QJsonDocument &doc)
 
     translationsTotal_ = recognizedBlocks_.size();
     for (int i = 0; i < recognizedBlocks_.size(); ++i) {
-        translateBlock(recognizedBlocks_[i]);
+        translateBlock(i);
     }
 }
 
-void YandexOCR::translateBlock(RecognizedTextBlock &block)
+void YandexOCR::translateBlock(int blockIndex)
 {
+    if (blockIndex < 0 || blockIndex >= recognizedBlocks_.size()) {
+        return;
+    }
+    
+    RecognizedTextBlock &block = recognizedBlocks_[blockIndex];
+    
     // Только английский язык переводим на русский
     if (block.languageCode != "en") {
         block.translated = block.text;
@@ -195,8 +201,8 @@ void YandexOCR::translateBlock(RecognizedTextBlock &block)
 
     QNetworkReply *reply = networkManager_->post(request, jsonData);
     
-    // Сохраняем указатель на блок в reply
-    reply->setProperty("blockIndex", recognizedBlocks_.indexOf(block));
+    // Сохраняем индекс блока в reply
+    reply->setProperty("blockIndex", blockIndex);
     
     connect(reply, &QNetworkReply::finished, this, &YandexOCR::onTranslationReplyFinished);
     pendingTranslations_.append(reply);
