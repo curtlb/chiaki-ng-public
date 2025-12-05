@@ -9,18 +9,20 @@ Dialog {
     id: autoConfigDialog
     title: qsTr("Автоматическая настройка")
     modal: true
+    standardButtons: Dialog.NoButton
+    closePolicy: Popup.NoAutoClose
     
     property bool isConfiguring: false
     property string statusMessage: ""
     property string errorMessage: ""
     
-    width: 600
-    height: 500
+    width: 550
+    height: 550
     
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 20
-        spacing: 15
+        anchors.margins: 15
+        spacing: 10
         
         Item {
             Layout.fillWidth: true
@@ -75,18 +77,30 @@ Dialog {
         Label {
             text: qsTr("Статус:")
             Layout.topMargin: 10
+            font.bold: true
         }
         
-        ScrollView {
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumHeight: 150
+            Layout.minimumHeight: 200
+            border.color: "#555"
+            border.width: 1
+            color: "#2a2a2a"
+            radius: 4
             
-            TextArea {
-                id: statusArea
-                readOnly: true
-                text: autoConfigDialog.statusMessage
-                wrapMode: Text.Wrap
+            ScrollView {
+                anchors.fill: parent
+                anchors.margins: 5
+                clip: true
+                
+                TextArea {
+                    id: statusArea
+                    readOnly: true
+                    text: autoConfigDialog.statusMessage
+                    wrapMode: Text.Wrap
+                    background: null
+                }
             }
         }
         

@@ -32,6 +32,8 @@
 #include <QtConcurrent>
 #include <QTemporaryFile>
 
+Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
+
 #define PSN_DEVICES_TRIES 2
 #define MAX_PSN_RECONNECT_TRIES 6
 #define PSN_INTERNET_WAIT_SECONDS 5
