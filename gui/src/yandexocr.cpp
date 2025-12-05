@@ -43,10 +43,24 @@ bool YandexOCR::isConfigured() const
 QString YandexOCR::encodeImageToBase64(const QImage &image)
 {
     qCInfo(chiakiGui) << "  encodeImageToBase64: input image size:" << image.size() << "isNull:" << image.isNull();
+    qCInfo(chiakiGui) << "  Image format:" << image.format();
+    qCInfo(chiakiGui) << "  Image depth:" << image.depth();
+    qCInfo(chiakiGui) << "  Image bytesPerLine:" << image.bytesPerLine();
     
-    if (image.isNull()) {
-        qCWarning(chiakiGui) << "⚠️ Cannot encode null image";
+    if (image.isNull() || image.size().isEmpty()) {
+        qCWarning(chiakiGui) << "⚠️ Cannot encode null or empty image";
         return QString();
+    }
+    
+    // Конвертируем в RGB888 формат если нужно (для надежности)
+    QImage rgbImage = image;
+    if (image.format() != QImage::Format_RGB888 && image.format() != QImage::Format_RGB32) {
+        qCInfo(chiakiGui) << "  Converting image format from" << image.format() << "to RGB888";
+        rgbImage = image.convertToFormat(QImage::Format_RGB888);
+        if (rgbImage.isNull()) {
+            qCWarning(chiakiGui) << "⚠️ Failed to convert image format";
+            return QString();
+        }
     }
     
     QByteArray byteArray;
@@ -57,20 +71,36 @@ QString YandexOCR::encodeImageToBase64(const QImage &image)
         return QString();
     }
     
-    // Конвертируем в JPEG для уменьшения размера
-    bool saveResult = image.save(&buffer, "JPEG", 85);
+    // Пробуем сначала JPEG
+    bool saveResult = rgbImage.save(&buffer, "JPEG", 85);
     buffer.close();
     
     qCInfo(chiakiGui) << "  JPEG save result:" << saveResult;
     qCInfo(chiakiGui) << "  JPEG size:" << byteArray.size() << "bytes";
     
+    // Если JPEG не сработал, пробуем PNG
     if (!saveResult || byteArray.isEmpty()) {
-        qCWarning(chiakiGui) << "⚠️ Failed to save image to JPEG";
-        return QString();
+        qCWarning(chiakiGui) << "  JPEG failed, trying PNG...";
+        byteArray.clear();
+        buffer.setBuffer(&byteArray);
+        if (!buffer.open(QIODevice::WriteOnly)) {
+            qCWarning(chiakiGui) << "⚠️ Failed to reopen buffer";
+            return QString();
+        }
+        saveResult = rgbImage.save(&buffer, "PNG");
+        buffer.close();
+        
+        qCInfo(chiakiGui) << "  PNG save result:" << saveResult;
+        qCInfo(chiakiGui) << "  PNG size:" << byteArray.size() << "bytes";
+        
+        if (!saveResult || byteArray.isEmpty()) {
+            qCWarning(chiakiGui) << "⚠️ Failed to save image in any format";
+            return QString();
+        }
     }
     
     QString base64 = QString::fromLatin1(byteArray.toBase64());
-    qCInfo(chiakiGui) << "  Base64 encoded, length:" << base64.length();
+    qCInfo(chiakiGui) << "  ✓ Base64 encoded, length:" << base64.length();
     
     return base64;
 }
@@ -98,10 +128,14 @@ void YandexOCR::recognizeText(const QImage &image)
     qCInfo(chiakiGui) << "  Base64 image length:" << base64Image.length();
 
     QJsonObject requestBody;
-    requestBody["mimeType"] = "JPEG";
+    // Определяем mimeType по размеру - если большой (PNG), указываем PNG
+    QString mimeType = (base64Image.length() > 500000) ? "PNG" : "JPEG";
+    requestBody["mimeType"] = mimeType;
     requestBody["languageCodes"] = QJsonArray{"en"};
     requestBody["model"] = "page";
     requestBody["content"] = base64Image;
+    
+    qCInfo(chiakiGui) << "  Using MIME type:" << mimeType;
 
     QJsonDocument doc(requestBody);
     QByteArray jsonData = doc.toJson();

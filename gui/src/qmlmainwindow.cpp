@@ -1428,17 +1428,26 @@ QImage QmlMainWindow::captureCurrentFrame()
         return QImage();
     }
 
-    sws_scale(sws_ctx, sw_frame->data, sw_frame->linesize, 0, height,
-              rgb_frame->data, rgb_frame->linesize);
+    int scaleResult = sws_scale(sws_ctx, sw_frame->data, sw_frame->linesize, 0, height,
+                                rgb_frame->data, rgb_frame->linesize);
 
-    qCInfo(chiakiGui) << "  ✓ Conversion successful, creating QImage...";
+    qCInfo(chiakiGui) << "  ✓ Conversion successful, lines processed:" << scaleResult;
+    qCInfo(chiakiGui) << "  Creating QImage...";
+    qCInfo(chiakiGui) << "    RGB frame data[0]:" << (rgb_frame->data[0] != nullptr);
+    qCInfo(chiakiGui) << "    RGB frame linesize[0]:" << rgb_frame->linesize[0];
 
     // Создаем QImage из RGB данных
     QImage image(rgb_frame->data[0], width, height, rgb_frame->linesize[0], 
                  QImage::Format_RGB888);
     
+    qCInfo(chiakiGui) << "    Temp QImage created - size:" << image.size() << "isNull:" << image.isNull();
+    qCInfo(chiakiGui) << "    Temp QImage format:" << image.format();
+    
     // Делаем глубокую копию, так как данные из AVFrame не будут постоянными
     QImage result = image.copy();
+    
+    qCInfo(chiakiGui) << "    Deep copy created - size:" << result.size() << "isNull:" << result.isNull();
+    qCInfo(chiakiGui) << "    Deep copy format:" << result.format();
 
     // Освобождаем ресурсы
     sws_freeContext(sws_ctx);
