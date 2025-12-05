@@ -27,67 +27,52 @@ Dialog {
             anchors.fill: parent
             spacing: 8
         
-        Item {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 10
-        }
-        
-        Label {
-            text: qsTr("Введите логин и пароль для автоматической настройки")
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
-        
-        Item {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 10
-        }
-        
-        Label {
-            text: qsTr("Логин:")
-        }
-        
-        TextField {
-            id: loginField
-            Layout.fillWidth: true
-            Layout.preferredHeight: 40
-            placeholderText: qsTr("Введите логин")
-            enabled: !autoConfigDialog.isConfiguring
-            Keys.onReturnPressed: passwordField.forceActiveFocus()
-            Keys.onEnterPressed: passwordField.forceActiveFocus()
-        }
-        
-        Item {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 5
-        }
-        
-        Label {
-            text: qsTr("Пароль:")
-        }
-        
-        TextField {
-            id: passwordField
-            Layout.fillWidth: true
-            Layout.preferredHeight: 40
-            placeholderText: qsTr("Введите пароль")
-            echoMode: TextInput.Password
-            enabled: !autoConfigDialog.isConfiguring
-            Keys.onReturnPressed: startButton.clicked()
-            Keys.onEnterPressed: startButton.clicked()
-        }
-        
+            Label {
+                text: qsTr("Введите логин и пароль для автоматической настройки")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            
+            Label {
+                text: qsTr("Логин:")
+                Layout.topMargin: 5
+            }
+            
+            TextField {
+                id: loginField
+                Layout.fillWidth: true
+                placeholderText: qsTr("Введите логин")
+                enabled: !autoConfigDialog.isConfiguring
+                Keys.onReturnPressed: passwordField.forceActiveFocus()
+                Keys.onEnterPressed: passwordField.forceActiveFocus()
+            }
+            
+            Label {
+                text: qsTr("Пароль:")
+                Layout.topMargin: 3
+            }
+            
+            TextField {
+                id: passwordField
+                Layout.fillWidth: true
+                placeholderText: qsTr("Введите пароль")
+                echoMode: TextInput.Password
+                enabled: !autoConfigDialog.isConfiguring
+                Keys.onReturnPressed: startButton.clicked()
+                Keys.onEnterPressed: startButton.clicked()
+            }
+            
             Label {
                 text: qsTr("Статус:")
-                Layout.topMargin: 10
+                Layout.topMargin: 8
                 font.bold: true
             }
             
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumHeight: 180
-                Layout.maximumHeight: 200
+                Layout.minimumHeight: 160
+                Layout.maximumHeight: 180
                 border.color: "#555"
                 border.width: 1
                 color: "#2a2a2a"
@@ -115,12 +100,12 @@ Dialog {
                 visible: autoConfigDialog.errorMessage !== ""
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
-                Layout.maximumHeight: 40
+                Layout.maximumHeight: 30
             }
             
             RowLayout {
                 Layout.fillWidth: true
-                Layout.topMargin: 10
+                Layout.topMargin: 8
                 spacing: 10
                 
                 Item {
@@ -139,13 +124,13 @@ Dialog {
                     enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
                     highlighted: true
                     onClicked: {
-                    console.log("Start button clicked!")
-                    autoConfigDialog.errorMessage = ""
-                    autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
-                    autoConfigDialog.isConfiguring = true
-                    console.log("Calling Chiaki.startAutoConfig...")
-                    Chiaki.startAutoConfig(loginField.text, passwordField.text)
-                    console.log("Chiaki.startAutoConfig called")
+                        console.log("Start button clicked!")
+                        autoConfigDialog.errorMessage = ""
+                        autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
+                        autoConfigDialog.isConfiguring = true
+                        console.log("Calling Chiaki.startAutoConfig...")
+                        Chiaki.startAutoConfig(loginField.text, passwordField.text)
+                        console.log("Chiaki.startAutoConfig called")
                     }
                 }
             }
