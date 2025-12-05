@@ -2319,39 +2319,53 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     query.addQueryItem("Password", password);
     url.setQuery(query);
     
-    qCInfo(chiakiGui) << "AutoConfig request URL:" << url.toString();
+    QString urlString = url.toString();
+    emit autoConfigStatus(QString("→ URL: %1").arg(urlString));
+    qCInfo(chiakiGui) << "AutoConfig request URL:" << urlString;
     qCInfo(chiakiGui) << "AutoConfig request URL (encoded):" << url.toEncoded();
     
     QNetworkRequest request(url);
     // НЕ устанавливаем Content-Type для GET-запроса
     
+    emit autoConfigStatus(QString("→ Headers: %1").arg(request.rawHeaderList().count()));
     qCInfo(chiakiGui) << "Request headers BEFORE sending:";
     for (const auto &header : request.rawHeaderList()) {
         qCInfo(chiakiGui) << "  " << header << ":" << request.rawHeader(header);
+        emit autoConfigStatus(QString("  %1: %2").arg(QString(header)).arg(QString(request.rawHeader(header))));
     }
     
     QNetworkReply *reply = network_manager->get(request);
+    emit autoConfigStatus("→ Запрос отправлен, ожидание ответа...");
     
     qCInfo(chiakiGui) << "Request sent, waiting for reply...";
     
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        QString errorString = reply->errorString();
+        
+        emit autoConfigStatus(QString("← HTTP Status: %1").arg(httpStatus));
+        emit autoConfigStatus(QString("← Error: %1 (%2)").arg(reply->error()).arg(errorString));
+        
         qCInfo(chiakiGui) << "";
         qCInfo(chiakiGui) << "=== RESPONSE RECEIVED ===";
         qCInfo(chiakiGui) << "URL:" << reply->url().toString();
-        qCInfo(chiakiGui) << "HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        qCInfo(chiakiGui) << "HTTP Status:" << httpStatus;
         qCInfo(chiakiGui) << "HTTP Reason:" << reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString();
         qCInfo(chiakiGui) << "Error code:" << reply->error();
-        qCInfo(chiakiGui) << "Error string:" << reply->errorString();
+        qCInfo(chiakiGui) << "Error string:" << errorString;
+        
+        QByteArray responseData = reply->readAll();
+        emit autoConfigStatus(QString("← Body length: %1").arg(responseData.length()));
         
         qCInfo(chiakiGui) << "Response headers:";
         for (const auto &header : reply->rawHeaderPairs()) {
             qCInfo(chiakiGui) << "  " << header.first << ":" << header.second;
         }
         
-        QByteArray responseData = reply->readAll();
         qCInfo(chiakiGui) << "Response body length:" << responseData.length();
         if (responseData.length() > 0 && responseData.length() < 5000) {
             qCInfo(chiakiGui) << "Response body:" << responseData;
+            emit autoConfigStatus(QString("← Body: %1").arg(QString(responseData).left(200)));
         }
         qCInfo(chiakiGui) << "=========================";
         qCInfo(chiakiGui) << "";
