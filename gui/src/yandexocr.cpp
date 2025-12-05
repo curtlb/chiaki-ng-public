@@ -146,15 +146,36 @@ void YandexOCR::recognizeText(const QImage &image)
     request.setRawHeader("x-folder-id", folderId_.toUtf8());
     request.setRawHeader("x-data-logging-enabled", "true");
 
-    qCInfo(chiakiGui) << "Sending OCR request to Yandex Cloud...";
-    qCInfo(chiakiGui) << "  URL:" << request.url();
-    qCInfo(chiakiGui) << "  Folder ID:" << folderId_;
-    qCInfo(chiakiGui) << "  Request size:" << jsonData.size() << "bytes";
+    qCInfo(chiakiGui) << "";
+    qCInfo(chiakiGui) << "=== OCR REQUEST DETAILS ===";
+    qCInfo(chiakiGui) << "URL:" << request.url().toString();
+    qCInfo(chiakiGui) << "Method: POST";
+    qCInfo(chiakiGui) << "";
+    qCInfo(chiakiGui) << "HEADERS:";
+    qCInfo(chiakiGui) << "  Content-Type:" << request.header(QNetworkRequest::ContentTypeHeader).toString();
+    qCInfo(chiakiGui) << "  Authorization: Bearer" << iamToken_.left(30) << "..." << iamToken_.right(30);
+    qCInfo(chiakiGui) << "    (IAM Token length:" << iamToken_.length() << "chars)";
+    qCInfo(chiakiGui) << "  x-folder-id:" << folderId_;
+    qCInfo(chiakiGui) << "  x-data-logging-enabled: true";
+    qCInfo(chiakiGui) << "";
+    qCInfo(chiakiGui) << "REQUEST BODY:";
+    qCInfo(chiakiGui) << "  Total size:" << jsonData.size() << "bytes";
+    qCInfo(chiakiGui) << "  JSON structure:";
+    qCInfo(chiakiGui) << "  {";
+    qCInfo(chiakiGui) << "    \"mimeType\": \"" << mimeType << "\"";
+    qCInfo(chiakiGui) << "    \"languageCodes\": [\"en\"]";
+    qCInfo(chiakiGui) << "    \"model\": \"page\"";
+    qCInfo(chiakiGui) << "    \"content\": \"<base64 image data, length:" << base64Image.length() << ">\"";
+    qCInfo(chiakiGui) << "      First 100 chars:" << base64Image.left(100);
+    qCInfo(chiakiGui) << "      Last 100 chars: ..." << base64Image.right(100);
+    qCInfo(chiakiGui) << "  }";
+    qCInfo(chiakiGui) << "=== END OCR REQUEST ===";
+    qCInfo(chiakiGui) << "";
 
     QNetworkReply *reply = networkManager_->post(request, jsonData);
     connect(reply, &QNetworkReply::finished, this, &YandexOCR::onRecognitionReplyFinished);
     
-    qCInfo(chiakiGui) << "OCR request sent, waiting for response...";
+    qCInfo(chiakiGui) << "Request sent, waiting for response...";
     qCInfo(chiakiGui) << "=== YandexOCR::recognizeText() END ===";
 }
 
@@ -272,6 +293,10 @@ void YandexOCR::translateBlock(int blockIndex)
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", QString("Bearer %1").arg(iamToken_).toUtf8());
 
+    qCInfo(chiakiGui) << "=== TRANSLATION REQUEST for block" << blockIndex << "===";
+    qCInfo(chiakiGui) << "URL:" << request.url().toString();
+    qCInfo(chiakiGui) << "BODY:" << doc.toJson(QJsonDocument::Compact);
+
     QNetworkReply *reply = networkManager_->post(request, jsonData);
     
     // Сохраняем индекс блока в reply
@@ -291,17 +316,36 @@ void YandexOCR::onRecognitionReplyFinished()
         return;
     }
 
-    qCInfo(chiakiGui) << "  HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    qCInfo(chiakiGui) << "  Error code:" << reply->error();
+    qCInfo(chiakiGui) << "";
+    qCInfo(chiakiGui) << "=== RESPONSE DETAILS ===";
+    qCInfo(chiakiGui) << "HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    qCInfo(chiakiGui) << "Error code:" << reply->error();
+    qCInfo(chiakiGui) << "";
+    qCInfo(chiakiGui) << "RESPONSE HEADERS:";
+    for (const auto &header : reply->rawHeaderPairs()) {
+        qCInfo(chiakiGui) << "  " << header.first << ":" << header.second;
+    }
 
     if (reply->error() != QNetworkReply::NoError) {
         QString errorMsg = QString("Recognition error: %1").arg(reply->errorString());
-        qCWarning(chiakiGui) << "⚠️ YandexOCR:" << errorMsg;
+        qCWarning(chiakiGui) << "";
+        qCWarning(chiakiGui) << "⚠️ ERROR OCCURRED:";
+        qCWarning(chiakiGui) << "  Message:" << errorMsg;
         
         QByteArray errorData = reply->readAll();
         if (!errorData.isEmpty()) {
-            qCWarning(chiakiGui) << "  Error response:" << errorData;
+            qCWarning(chiakiGui) << "";
+            qCWarning(chiakiGui) << "ERROR RESPONSE BODY:";
+            
+            // Пытаемся распарсить как JSON для красивого вывода
+            QJsonDocument errorDoc = QJsonDocument::fromJson(errorData);
+            if (!errorDoc.isNull()) {
+                qCWarning(chiakiGui) << errorDoc.toJson(QJsonDocument::Indented);
+            } else {
+                qCWarning(chiakiGui) << errorData;
+            }
         }
+        qCWarning(chiakiGui) << "=== END RESPONSE DETAILS ===";
         
         emit errorOccurred(errorMsg);
         emit recognitionFinished(false);
