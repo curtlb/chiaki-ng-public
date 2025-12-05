@@ -14,12 +14,12 @@ Dialog {
     property string statusMessage: ""
     property string errorMessage: ""
     
-    width: 500
-    height: 400
+    width: 600
+    height: 500
     
-    contentItem: ColumnLayout {
-        width: autoConfigDialog.availableWidth
-        height: autoConfigDialog.availableHeight
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 20
         spacing: 15
         
         Item {
@@ -72,10 +72,15 @@ Dialog {
             Keys.onEnterPressed: startButton.clicked()
         }
         
+        Label {
+            text: qsTr("Статус:")
+            Layout.topMargin: 10
+        }
+        
         ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.preferredHeight: 150
+            Layout.minimumHeight: 150
             
             TextArea {
                 id: statusArea
@@ -94,13 +99,9 @@ Dialog {
             Layout.fillWidth: true
         }
         
-        Item {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 10
-        }
-        
         RowLayout {
             Layout.fillWidth: true
+            Layout.topMargin: 10
             spacing: 10
             
             Item {
@@ -111,8 +112,6 @@ Dialog {
                 text: qsTr("Закрыть")
                 enabled: !autoConfigDialog.isConfiguring
                 onClicked: autoConfigDialog.reject()
-                Layout.preferredHeight: 40
-                Layout.preferredWidth: 100
             }
             
             Button {
@@ -120,8 +119,6 @@ Dialog {
                 text: autoConfigDialog.isConfiguring ? qsTr("Настройка...") : qsTr("Начать")
                 enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
                 highlighted: true
-                Layout.preferredHeight: 40
-                Layout.preferredWidth: 120
                 onClicked: {
                     autoConfigDialog.errorMessage = ""
                     autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
