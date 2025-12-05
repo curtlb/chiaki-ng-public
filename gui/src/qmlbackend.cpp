@@ -2311,7 +2311,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     
     emit autoConfigStatus("Шаг 1/5: Получение токена конфигурации...");
     
-    // Шаг 1: Получаем config token и JWT
+    // Формируем URL ТОЧНО ТАК ЖЕ как в QmlSettings::authorizeYandex
     QUrl url("https://4cloud.pro/api.php");
     QUrlQuery query;
     query.addQueryItem("method", "get-conf-token");
@@ -2319,82 +2319,61 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     query.addQueryItem("Password", password);
     url.setQuery(query);
     
-    qCInfo(chiakiGui) << "→ Full URL:" << url.toString();
-    qCInfo(chiakiGui) << "→ URL encoded:" << url.toEncoded();
+    qCInfo(chiakiGui) << "AutoConfig request:" << url.toString(QUrl::RemoveQuery);
     
     QNetworkRequest request(url);
-    // Добавляем заголовки как у браузера
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-    request.setRawHeader("Accept", "application/json, text/plain, */*");
-    request.setRawHeader("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
-    request.setRawHeader("Origin", "https://4cloud.pro");
-    request.setRawHeader("Referer", "https://4cloud.pro/");
-    
-    qCInfo(chiakiGui) << "→ Headers:";
-    qCInfo(chiakiGui) << "   User-Agent:" << request.rawHeader("User-Agent");
-    qCInfo(chiakiGui) << "   Accept:" << request.rawHeader("Accept");
-    qCInfo(chiakiGui) << "   Origin:" << request.rawHeader("Origin");
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     
     QNetworkReply *reply = network_manager->get(request);
     
-    qCInfo(chiakiGui) << "→ Request sent, waiting for response...";
-    
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        qCInfo(chiakiGui) << "";
-        qCInfo(chiakiGui) << "← RESPONSE: get-conf-token";
-        qCInfo(chiakiGui) << "← HTTP Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        qCInfo(chiakiGui) << "← HTTP Reason:" << reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString();
-        qCInfo(chiakiGui) << "← Error code:" << reply->error();
-        qCInfo(chiakiGui) << "← URL:" << reply->url().toString();
-        
         reply->deleteLater();
         
         if (reply->error() != QNetworkReply::NoError) {
-            qCWarning(chiakiGui) << "✗ Network error:" << reply->errorString();
-            qCWarning(chiakiGui) << "✗ Full error details:";
-            qCWarning(chiakiGui) << "   Error code:" << reply->error();
-            qCWarning(chiakiGui) << "   Error string:" << reply->errorString();
-            qCWarning(chiakiGui) << "   HTTP status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            
-            // Читаем тело ответа даже при ошибке
-            QByteArray errorBody = reply->readAll();
-            if (!errorBody.isEmpty()) {
-                qCWarning(chiakiGui) << "   Response body:" << errorBody;
-            }
-            
-            emit autoConfigError("Ошибка сети: " + reply->errorString());
+            QString errorMsg = QString("Ошибка сети: %1").arg(reply->errorString());
+            qCWarning(chiakiGui) << "AutoConfig error:" << errorMsg;
+            emit autoConfigError(errorMsg);
             return;
         }
         
         QByteArray data = reply->readAll();
-        qCInfo(chiakiGui) << "Response:" << data;
+        QJsonParseError parseError;
+        QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
         
-        QJsonDocument doc = QJsonDocument::fromJson(data);
-        QJsonObject obj = doc.object();
-        
-        QString status = obj.value("status").toString();
-        
-        if (status != "success") {
-            QString msg = obj.value("message").toString();
-            qCWarning(chiakiGui) << "✗ Auth failed:" << msg;
-            emit autoConfigError(msg.isEmpty() ? "Неизвестная ошибка" : msg);
+        if (parseError.error != QJsonParseError::NoError) {
+            QString errorMsg = QString("Ошибка парсинга ответа: %1").arg(parseError.errorString());
+            qCWarning(chiakiGui) << "AutoConfig parse error:" << errorMsg;
+            emit autoConfigError(errorMsg);
             return;
         }
         
+        QJsonObject obj = doc.object();
+        
+        // Проверяем статус ответа
+        QString status = obj.value("status").toString();
+        if (status != "success") {
+            QString errorMsg = obj.value("message").toString();
+            if (errorMsg.isEmpty()) {
+                errorMsg = "Неверный логин или пароль";
+            }
+            qCWarning(chiakiGui) << "AutoConfig auth failed:" << errorMsg;
+            emit autoConfigError(errorMsg);
+            return;
+        }
+        
+        // Извлекаем данные
         QString configUrl = obj.value("ChiakiConfig").toString();
         QString dateExp = obj.value("Date_exp").toString();
         QString jwt = obj.value("jwt").toString();
         
-        qCInfo(chiakiGui) << "✓ ChiakiConfig:" << configUrl;
-        qCInfo(chiakiGui) << "✓ Date_exp:" << dateExp;
-        qCInfo(chiakiGui) << "✓ JWT length:" << jwt.length();
-        
         if (configUrl.isEmpty() || jwt.isEmpty()) {
-            qCWarning(chiakiGui) << "✗ Missing ChiakiConfig or JWT";
-            emit autoConfigError("Ответ не содержит ChiakiConfig или JWT");
+            QString errorMsg = "Ответ не содержит необходимых данных";
+            qCWarning(chiakiGui) << "AutoConfig error:" << errorMsg;
+            emit autoConfigError(errorMsg);
             return;
         }
         
+        qCInfo(chiakiGui) << "AutoConfig: Token received, expiry:" << dateExp;
         emit autoConfigStatus("✓ Токен получен (срок: " + dateExp + ")");
         emit autoConfigStatus("Шаг 2/5: Загрузка конфигурации...");
         qCInfo(chiakiGui) << "";
