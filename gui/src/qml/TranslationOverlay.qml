@@ -1,29 +1,18 @@
 import QtQuick
 import QtQuick.Controls
 
+import org.streetpea.chiaking
+
 // Компонент для отображения переведенного текста поверх видео
 Item {
     id: root
     anchors.fill: parent
-    visible: false
-
-    property var textBlocks: []
-    property size originalImageSize: Qt.size(1920, 1080)
-
-    function setBlocks(blocks, imageSize) {
-        textBlocks = blocks
-        originalImageSize = imageSize
-        visible = blocks.length > 0
-    }
-
-    function clear() {
-        textBlocks = []
-        visible = false
-    }
-
-    function toggleVisibility() {
-        visible = !visible
-    }
+    
+    // Привязываемся к C++ объекту TextOverlay через Chiaki.window.textOverlay
+    visible: Chiaki.window.textOverlay ? Chiaki.window.textOverlay.active : false
+    
+    property var textBlocks: Chiaki.window.textOverlay ? Chiaki.window.textOverlay.textBlocks : []
+    property size originalImageSize: Chiaki.window.textOverlay ? Qt.size(Chiaki.window.textOverlay.imageWidth, Chiaki.window.textOverlay.imageHeight) : Qt.size(1920, 1080)
 
     // Repeater для отображения всех текстовых блоков
     Repeater {

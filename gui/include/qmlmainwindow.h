@@ -48,6 +48,7 @@ class QmlMainWindow : public QWindow
     Q_PROPERTY(float ZoomFactor READ zoomFactor WRITE setZoomFactor NOTIFY zoomFactorChanged)
     Q_PROPERTY(VideoPreset videoPreset READ videoPreset WRITE setVideoPreset NOTIFY videoPresetChanged)
     Q_PROPERTY(bool directStream READ directStream NOTIFY directStreamChanged)
+    Q_PROPERTY(TextOverlay* textOverlay READ getTextOverlay CONSTANT)
 
 public:
     enum class VideoMode {
@@ -98,6 +99,8 @@ public:
 
     VideoPreset videoPreset() const;
     void setVideoPreset(VideoPreset mode);
+
+    TextOverlay* getTextOverlay() const { return text_overlay; }
 
     Q_INVOKABLE void grabInput();
     Q_INVOKABLE void releaseInput();

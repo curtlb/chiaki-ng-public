@@ -14,6 +14,10 @@
 class TextOverlay : public QObject
 {
     Q_OBJECT
+    Q_PROPERTY(bool active READ isActive NOTIFY activeChanged)
+    Q_PROPERTY(QVariantList textBlocks READ getTextBlocksQml NOTIFY textBlocksChanged)
+    Q_PROPERTY(int imageWidth READ getImageWidth NOTIFY imageSizeChanged)
+    Q_PROPERTY(int imageHeight READ getImageHeight NOTIFY imageSizeChanged)
 
 public:
     explicit TextOverlay(QObject *parent = nullptr);
@@ -52,6 +56,26 @@ public:
      * Получить видимость оверлея
      */
     bool isVisible() const;
+
+    /**
+     * Получить список блоков для QML
+     */
+    QVariantList getTextBlocksQml() const;
+    
+    /**
+     * Получить ширину изображения
+     */
+    int getImageWidth() const { return originalImageSize_.width(); }
+    
+    /**
+     * Получить высоту изображения
+     */
+    int getImageHeight() const { return originalImageSize_.height(); }
+
+signals:
+    void activeChanged();
+    void textBlocksChanged();
+    void imageSizeChanged();
 
 private:
     QRect scaleRect(const QRect &rect, const QSize &fromSize, const QSize &toSize);

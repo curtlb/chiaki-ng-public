@@ -30,6 +30,11 @@ void TextOverlay::setTextBlocks(const QVector<RecognizedTextBlock> &blocks, cons
     visible_ = !blocks.isEmpty();
     
     qCInfo(chiakiGui) << "TextOverlay: Set" << blocks.size() << "text blocks, image size:" << imageSize;
+    
+    // Уведомляем QML об изменениях
+    emit textBlocksChanged();
+    emit imageSizeChanged();
+    emit activeChanged();
 }
 
 void TextOverlay::clear()
@@ -38,6 +43,10 @@ void TextOverlay::clear()
     textBlocks_.clear();
     visible_ = false;
     qCInfo(chiakiGui) << "TextOverlay: Cleared";
+    
+    // Уведомляем QML об изменениях
+    emit textBlocksChanged();
+    emit activeChanged();
 }
 
 bool TextOverlay::isActive() const
@@ -128,5 +137,29 @@ void TextOverlay::render(QPainter &painter, const QSize &targetSize)
     painter.restore();
 
     qCDebug(chiakiGui) << "TextOverlay: Rendered" << textBlocks_.size() << "blocks to size:" << targetSize;
+}
+
+QVariantList TextOverlay::getTextBlocksQml() const
+{
+    QMutexLocker locker(const_cast<QMutex*>(&mutex_));
+    QVariantList result;
+    
+    for (const RecognizedTextBlock &block : textBlocks_) {
+        QVariantMap blockMap;
+        blockMap["original"] = block.original;
+        blockMap["translated"] = block.translated;
+        blockMap["language"] = block.language;
+        
+        QVariantMap bboxMap;
+        bboxMap["x"] = block.boundingBox.x();
+        bboxMap["y"] = block.boundingBox.y();
+        bboxMap["width"] = block.boundingBox.width();
+        bboxMap["height"] = block.boundingBox.height();
+        blockMap["boundingBox"] = bboxMap;
+        
+        result.append(blockMap);
+    }
+    
+    return result;
 }
 
