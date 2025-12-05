@@ -207,6 +207,7 @@ private:
     YandexOCR *yandex_ocr = {};
     TextOverlay *text_overlay = {};
     bool translation_in_progress = false;
+    qint64 last_translation_time = 0;  // Время последнего перевода (в миллисекундах)
 
     struct {
         PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;

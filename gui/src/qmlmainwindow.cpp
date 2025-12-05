@@ -25,6 +25,7 @@ extern "C" {
 #include <QQuickRenderTarget>
 #include <QQuickRenderControl>
 #include <QQuickGraphicsDevice>
+#include <QDateTime>
 #if defined(Q_OS_MACOS)
 #include <objc/message.h>
 #endif
@@ -1285,6 +1286,19 @@ QObject *QmlMainWindow::focusObject() const
 void QmlMainWindow::triggerTranslation()
 {
     qCInfo(chiakiGui) << "=== triggerTranslation() START ===";
+    
+    // Проверяем ограничение по времени (5 секунд между переводами)
+    qint64 current_time = QDateTime::currentMSecsSinceEpoch();
+    qint64 time_since_last = current_time - last_translation_time;
+    const qint64 MIN_INTERVAL_MS = 5000;  // 5 секунд
+    
+    if (last_translation_time > 0 && time_since_last < MIN_INTERVAL_MS) {
+        qint64 wait_seconds = (MIN_INTERVAL_MS - time_since_last + 999) / 1000;  // Округляем вверх
+        qCWarning(chiakiGui) << "⏱️ Translation cooldown:" << wait_seconds << "seconds remaining";
+        qCWarning(chiakiGui) << "   Please wait before triggering new translation";
+        return;
+    }
+    
     qCInfo(chiakiGui) << "  translation_in_progress:" << translation_in_progress;
     
     if (translation_in_progress) {
@@ -1297,6 +1311,10 @@ void QmlMainWindow::triggerTranslation()
         qCWarning(chiakiGui) << "No video available for translation";
         return;
     }
+    
+    // Обновляем время последнего перевода
+    last_translation_time = current_time;
+    qCInfo(chiakiGui) << "  Translation cooldown reset, next allowed at:" << (current_time + MIN_INTERVAL_MS);
 
     // Обновляем учетные данные из настроек перед каждым запросом
     QString iamToken = settings->GetYandexIamToken();

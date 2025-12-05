@@ -25,17 +25,11 @@ Item {
             property real scaleX: root.width / root.originalImageSize.width
             property real scaleY: root.height / root.originalImageSize.height
             
-            // Базовые координаты и размеры
-            property real baseX: modelData.boundingBox.x * scaleX
-            property real baseY: modelData.boundingBox.y * scaleY
-            property real baseWidth: modelData.boundingBox.width * scaleX
-            property real baseHeight: modelData.boundingBox.height * scaleY
-            
-            // Увеличиваем размер умеренно, но ограничиваем границами экрана
-            x: baseX
-            y: baseY
-            width: Math.min(baseWidth * 1.15, root.width - baseX - 10)  // +15%, не выходим за экран
-            height: baseHeight * 1.3  // +30% высоты
+            // Используем ТОЧНЫЕ размеры OCR - без увеличения!
+            x: modelData.boundingBox.x * scaleX
+            y: modelData.boundingBox.y * scaleY
+            width: modelData.boundingBox.width * scaleX
+            height: modelData.boundingBox.height * scaleY
             
             // Мягкий полупрозрачный темный фон
             color: Qt.rgba(0, 0, 0, 0.75)
@@ -43,29 +37,25 @@ Item {
             // Тонкая мягкая рамка (синяя вместо красной)
             border.color: Qt.rgba(0.3, 0.6, 1.0, 0.6)
             border.width: 1
-            radius: 6
+            radius: 4
             
-            // Обрезаем текст по границам блока чтобы не было наложений
+            // Обрезаем текст по границам блока
             clip: true
 
             Text {
                 anchors.fill: parent
-                anchors.margins: 4
+                anchors.margins: 3
                 text: modelData.translated
                 color: "white"
                 
-                // Динамический размер шрифта - уменьшаем если текст длинный
-                property int baseSize: Math.max(9, Math.min(parent.height / 2, 24))
-                property real textRatio: contentHeight / (parent.height - 8)
-                font.pixelSize: textRatio > 1 ? Math.max(8, baseSize / textRatio) : baseSize
-                
+                // Qt автоматически подбирает оптимальный размер шрифта
+                font.pixelSize: Math.max(8, Math.min(parent.height / 1.5, 22))
                 font.bold: false
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.WordWrap
-                minimumPixelSize: 8
-                fontSizeMode: Text.Fit
-                // НЕ используем elide - текст полностью виден
+                minimumPixelSize: 7
+                fontSizeMode: Text.Fit  // Qt автоматически уменьшает шрифт чтобы текст влез
             }
         }
     }
