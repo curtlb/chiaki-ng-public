@@ -1480,19 +1480,26 @@ void QmlMainWindow::onRecognitionFinished(bool success)
     }
 
     // Устанавливаем блоки в оверлей
-    // Размер изображения берем из текущего фрейма
+    // Размер берем из screenshot_frame (который использовался для захвата)
     QMutexLocker locker(&frame_mutex);
-    if (av_frame) {
-        QSize imageSize(av_frame->width, av_frame->height);
-        locker.unlock();
-        
-        text_overlay->setTextBlocks(blocks, imageSize);
-        scheduleUpdate(); // Перерисовываем экран с оверлеем
-        
-        qCInfo(chiakiGui) << "Translation overlay activated with" << blocks.size() << "blocks";
+    QSize imageSize(1920, 1080); // Размер по умолчанию
+    
+    if (screenshot_frame) {
+        imageSize = QSize(screenshot_frame->width, screenshot_frame->height);
+        qCInfo(chiakiGui) << "Image size from screenshot_frame:" << imageSize;
+    } else if (current_frame.num_planes > 0) {
+        imageSize = QSize(current_frame.repr.w, current_frame.repr.h);
+        qCInfo(chiakiGui) << "Image size from current_frame:" << imageSize;
     } else {
-        qCWarning(chiakiGui) << "No frame available to determine image size";
+        qCInfo(chiakiGui) << "Using default image size:" << imageSize;
     }
+    
+    locker.unlock();
+    
+    text_overlay->setTextBlocks(blocks, imageSize);
+    scheduleUpdate(); // Перерисовываем экран с оверлеем
+    
+    qCInfo(chiakiGui) << "✓ Translation overlay activated with" << blocks.size() << "blocks";
 }
 
 void QmlMainWindow::onRecognitionError(const QString &errorMessage)
