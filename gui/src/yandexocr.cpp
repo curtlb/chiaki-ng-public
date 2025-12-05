@@ -42,14 +42,37 @@ bool YandexOCR::isConfigured() const
 
 QString YandexOCR::encodeImageToBase64(const QImage &image)
 {
+    qCInfo(chiakiGui) << "  encodeImageToBase64: input image size:" << image.size() << "isNull:" << image.isNull();
+    
+    if (image.isNull()) {
+        qCWarning(chiakiGui) << "⚠️ Cannot encode null image";
+        return QString();
+    }
+    
     QByteArray byteArray;
     QBuffer buffer(&byteArray);
-    buffer.open(QIODevice::WriteOnly);
+    
+    if (!buffer.open(QIODevice::WriteOnly)) {
+        qCWarning(chiakiGui) << "⚠️ Failed to open buffer for writing";
+        return QString();
+    }
     
     // Конвертируем в JPEG для уменьшения размера
-    image.save(&buffer, "JPEG", 85);
+    bool saveResult = image.save(&buffer, "JPEG", 85);
+    buffer.close();
     
-    return byteArray.toBase64();
+    qCInfo(chiakiGui) << "  JPEG save result:" << saveResult;
+    qCInfo(chiakiGui) << "  JPEG size:" << byteArray.size() << "bytes";
+    
+    if (!saveResult || byteArray.isEmpty()) {
+        qCWarning(chiakiGui) << "⚠️ Failed to save image to JPEG";
+        return QString();
+    }
+    
+    QString base64 = QString::fromLatin1(byteArray.toBase64());
+    qCInfo(chiakiGui) << "  Base64 encoded, length:" << base64.length();
+    
+    return base64;
 }
 
 void YandexOCR::recognizeText(const QImage &image)
