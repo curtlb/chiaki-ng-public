@@ -11,17 +11,17 @@ Dialog {
     modal: true
     
     property bool isConfiguring: false
-    property string statusMessage: ""
+    property string currentTaskMessage: ""
     property string errorMessage: ""
     
     implicitWidth: 530
-    implicitHeight: 500
+    implicitHeight: 340
     
     padding: 20
     
     contentItem: Item {
         implicitWidth: 490
-        implicitHeight: 460
+        implicitHeight: 300
         
         ColumnLayout {
             anchors.fill: parent
@@ -63,34 +63,14 @@ Dialog {
             }
             
             Label {
-                text: qsTr("Статус:")
-                Layout.topMargin: 8
-                font.bold: true
-            }
-            
-            Rectangle {
+                id: currentTaskLabel
+                text: autoConfigDialog.currentTaskMessage
+                wrapMode: Text.Wrap
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumHeight: 160
-                Layout.maximumHeight: 180
-                border.color: "#555"
-                border.width: 1
-                color: "#2a2a2a"
-                radius: 4
-                
-                ScrollView {
-                    anchors.fill: parent
-                    anchors.margins: 5
-                    clip: true
-                    
-                    TextArea {
-                        id: statusArea
-                        readOnly: true
-                        text: autoConfigDialog.statusMessage
-                        wrapMode: Text.Wrap
-                        background: null
-                    }
-                }
+                Layout.topMargin: 15
+                Layout.minimumHeight: 60
+                font.pixelSize: 13
+                color: autoConfigDialog.currentTaskMessage.startsWith("✓") ? Material.color(Material.Green) : Material.foreground
             }
             
             Label {
@@ -100,7 +80,12 @@ Dialog {
                 visible: autoConfigDialog.errorMessage !== ""
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
-                Layout.maximumHeight: 30
+                Layout.maximumHeight: 60
+            }
+            
+            Item {
+                Layout.fillHeight: true
+                Layout.minimumHeight: 10
             }
             
             RowLayout {
@@ -124,13 +109,10 @@ Dialog {
                     enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
                     highlighted: true
                     onClicked: {
-                        console.log("Start button clicked!")
                         autoConfigDialog.errorMessage = ""
-                        autoConfigDialog.statusMessage = "Начало автоматической настройки...\n"
+                        autoConfigDialog.currentTaskMessage = "Начало автоматической настройки..."
                         autoConfigDialog.isConfiguring = true
-                        console.log("Calling Chiaki.startAutoConfig...")
                         Chiaki.startAutoConfig(loginField.text, passwordField.text)
-                        console.log("Chiaki.startAutoConfig called")
                     }
                 }
             }
@@ -141,30 +123,25 @@ Dialog {
         target: Chiaki
         
         function onAutoConfigStatus(message) {
-            console.log("AutoConfig status:", message)
-            autoConfigDialog.statusMessage += message + "\n"
+            // Обновляем только текущую задачу (не добавляем к истории)
+            autoConfigDialog.currentTaskMessage = message
         }
         
         function onAutoConfigSuccess() {
-            console.log("AutoConfig SUCCESS!")
             autoConfigDialog.isConfiguring = false
-            autoConfigDialog.statusMessage += "\n✓ Автоматическая настройка успешно завершена!\n"
-            autoConfigDialog.statusMessage += "Разбудите консоль перед подключением (если кнопка доступна)\n"
-            autoConfigDialog.statusMessage += "и подключайтесь нажатием на иконку с консолью."
+            autoConfigDialog.currentTaskMessage = "✓ Автоматическая настройка успешно завершена!\nРазбудите консоль перед подключением (если кнопка доступна) и подключайтесь нажатием на иконку с консолью."
         }
         
         function onAutoConfigError(errorMessage) {
-            console.log("AutoConfig ERROR:", errorMessage)
             autoConfigDialog.isConfiguring = false
             autoConfigDialog.errorMessage = errorMessage
-            autoConfigDialog.statusMessage += "\n✗ Ошибка: " + errorMessage + "\n"
         }
     }
     
     onRejected: {
         loginField.text = ""
         passwordField.text = ""
-        autoConfigDialog.statusMessage = ""
+        autoConfigDialog.currentTaskMessage = ""
         autoConfigDialog.errorMessage = ""
     }
 }
