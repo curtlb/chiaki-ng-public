@@ -2535,7 +2535,6 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                             emit autoConfigSuccess();
                         });
                     });
-                    });
                 });
             });
         });
