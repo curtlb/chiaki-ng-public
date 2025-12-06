@@ -1,3 +1,10 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Controls.Material
+import QtQuick.Layouts
+
+import org.streetpea.chiaking
+
 Dialog {
     id: autoConfigDialog
     title: qsTr("Автоматическая настройка")
@@ -99,8 +106,7 @@ Dialog {
                 Button {
                     id: startButton
                     text: autoConfigDialog.isConfiguring ? qsTr("Настройка...") : qsTr("Начать")
-                    // Изменено условие - проверяем, что нет процесса настройки И нет успешного сообщения
-                    enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.currentTaskMessage.startsWith("✓") && loginField.text.length > 0 && passwordField.text.length > 0
+                    enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
                     highlighted: true
                     onClicked: {
                         autoConfigDialog.errorMessage = ""
@@ -139,3 +145,4 @@ Dialog {
         autoConfigDialog.errorMessage = ""
     }
 }
+
