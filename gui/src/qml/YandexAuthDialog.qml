@@ -7,7 +7,7 @@ import org.streetpea.chiaking
 
 Dialog {
     id: authDialog
-    title: qsTr("Авторизация Yandex Cloud")
+    title: qsTr("Авторизация")
     modal: true
     
     property bool isAuthorizing: false
@@ -27,7 +27,7 @@ Dialog {
             spacing: 8
         
             Label {
-                text: qsTr("Введите логин и пароль для получения IAM токена")
+                text: qsTr("Введите логин и пароль от аккаунта 4cloud.pro")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }

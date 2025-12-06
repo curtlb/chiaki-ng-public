@@ -1,16 +1,10 @@
-import QtQuick
-import QtQuick.Controls
-import QtQuick.Controls.Material
-import QtQuick.Layouts
-
-import org.streetpea.chiaking
-
 Dialog {
     id: autoConfigDialog
     title: qsTr("Автоматическая настройка")
     modal: true
     
     property bool isConfiguring: false
+    property bool isConfigured: false // Новое свойство для отслеживания успешной настройки
     property string currentTaskMessage: ""
     property string errorMessage: ""
     
@@ -28,7 +22,7 @@ Dialog {
             spacing: 8
         
             Label {
-                text: qsTr("Введите логин и пароль для автоматической настройки")
+                text: qsTr("Введите логин и пароль от аккаунта 4cloud.pro")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
@@ -42,7 +36,7 @@ Dialog {
                 id: loginField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Введите логин")
-                enabled: !autoConfigDialog.isConfiguring
+                enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.isConfigured // Обновлено
                 Keys.onReturnPressed: passwordField.forceActiveFocus()
                 Keys.onEnterPressed: passwordField.forceActiveFocus()
             }
@@ -57,7 +51,7 @@ Dialog {
                 Layout.fillWidth: true
                 placeholderText: qsTr("Введите пароль")
                 echoMode: TextInput.Password
-                enabled: !autoConfigDialog.isConfiguring
+                enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.isConfigured // Обновлено
                 Keys.onReturnPressed: startButton.clicked()
                 Keys.onEnterPressed: startButton.clicked()
             }
@@ -105,9 +99,13 @@ Dialog {
                 
                 Button {
                     id: startButton
-                    text: autoConfigDialog.isConfiguring ? qsTr("Настройка...") : qsTr("Начать")
-                    enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
-                    highlighted: true
+                    text: {
+                        if (autoConfigDialog.isConfigured) return qsTr("Настроено")
+                        else if (autoConfigDialog.isConfiguring) return qsTr("Настройка...")
+                        else return qsTr("Начать")
+                    }
+                    enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.isConfigured && loginField.text.length > 0 && passwordField.text.length > 0 // Обновлено
+                    highlighted: true && !autoConfigDialog.isConfigured // Обновлено
                     onClicked: {
                         autoConfigDialog.errorMessage = ""
                         autoConfigDialog.currentTaskMessage = "Начало автоматической настройки..."
@@ -123,12 +121,12 @@ Dialog {
         target: Chiaki
         
         function onAutoConfigStatus(message) {
-            // Обновляем только текущую задачу (не добавляем к истории)
             autoConfigDialog.currentTaskMessage = message
         }
         
         function onAutoConfigSuccess() {
             autoConfigDialog.isConfiguring = false
+            autoConfigDialog.isConfigured = true // Устанавливаем флаг успешной настройки
             autoConfigDialog.currentTaskMessage = "✓ Автоматическая настройка успешно завершена!\nРазбудите консоль перед подключением (если кнопка доступна) и подключайтесь нажатием на иконку с консолью."
         }
         
@@ -143,6 +141,6 @@ Dialog {
         passwordField.text = ""
         autoConfigDialog.currentTaskMessage = ""
         autoConfigDialog.errorMessage = ""
+        autoConfigDialog.isConfigured = false // Сбрасываем флаг при закрытии
     }
 }
-
