@@ -4,7 +4,6 @@ Dialog {
     modal: true
     
     property bool isConfiguring: false
-    property bool isConfigured: false // Новое свойство для отслеживания успешной настройки
     property string currentTaskMessage: ""
     property string errorMessage: ""
     
@@ -36,7 +35,7 @@ Dialog {
                 id: loginField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Введите логин")
-                enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.isConfigured // Обновлено
+                enabled: !autoConfigDialog.isConfiguring
                 Keys.onReturnPressed: passwordField.forceActiveFocus()
                 Keys.onEnterPressed: passwordField.forceActiveFocus()
             }
@@ -51,7 +50,7 @@ Dialog {
                 Layout.fillWidth: true
                 placeholderText: qsTr("Введите пароль")
                 echoMode: TextInput.Password
-                enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.isConfigured // Обновлено
+                enabled: !autoConfigDialog.isConfiguring
                 Keys.onReturnPressed: startButton.clicked()
                 Keys.onEnterPressed: startButton.clicked()
             }
@@ -99,13 +98,10 @@ Dialog {
                 
                 Button {
                     id: startButton
-                    text: {
-                        if (autoConfigDialog.isConfigured) return qsTr("Настроено")
-                        else if (autoConfigDialog.isConfiguring) return qsTr("Настройка...")
-                        else return qsTr("Начать")
-                    }
-                    enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.isConfigured && loginField.text.length > 0 && passwordField.text.length > 0 // Обновлено
-                    highlighted: true && !autoConfigDialog.isConfigured // Обновлено
+                    text: autoConfigDialog.isConfiguring ? qsTr("Настройка...") : qsTr("Начать")
+                    // Изменено условие - проверяем, что нет процесса настройки И нет успешного сообщения
+                    enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.currentTaskMessage.startsWith("✓") && loginField.text.length > 0 && passwordField.text.length > 0
+                    highlighted: true
                     onClicked: {
                         autoConfigDialog.errorMessage = ""
                         autoConfigDialog.currentTaskMessage = "Начало автоматической настройки..."
@@ -121,12 +117,12 @@ Dialog {
         target: Chiaki
         
         function onAutoConfigStatus(message) {
+            // Обновляем только текущую задачу (не добавляем к истории)
             autoConfigDialog.currentTaskMessage = message
         }
         
         function onAutoConfigSuccess() {
             autoConfigDialog.isConfiguring = false
-            autoConfigDialog.isConfigured = true // Устанавливаем флаг успешной настройки
             autoConfigDialog.currentTaskMessage = "✓ Автоматическая настройка успешно завершена!\nРазбудите консоль перед подключением (если кнопка доступна) и подключайтесь нажатием на иконку с консолью."
         }
         
@@ -141,6 +137,5 @@ Dialog {
         passwordField.text = ""
         autoConfigDialog.currentTaskMessage = ""
         autoConfigDialog.errorMessage = ""
-        autoConfigDialog.isConfigured = false // Сбрасываем флаг при закрытии
     }
 }
