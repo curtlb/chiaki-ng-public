@@ -46,7 +46,6 @@ CrashReporter *CrashReporter::instance = nullptr;
 
 CrashReporter::CrashReporter(QObject *parent)
 	: QObject(parent)
-	, udpSocket(nullptr)
 	, serverHost("5.188.29.131")
 	, serverPort(12420)
 {
