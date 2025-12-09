@@ -9,6 +9,7 @@ int main(int argc, char *argv[]) { return real_main(argc, argv); }
 #include <controllermanager.h>
 #include <discoverymanager.h>
 #include <qmlmainwindow.h>
+#include <crashreporter.h>
 #include <QApplication>
 #include <QtTypes>
 
@@ -111,6 +112,9 @@ int real_main(int argc, char *argv[])
 	QtWebEngineQuick::initialize();
 #endif
 	QApplication app(argc, argv);
+
+	// Инициализируем систему отчетов об ошибках
+	CrashReporter::Initialize();
 
 #ifdef Q_OS_MACOS
 	QGuiApplication::setWindowIcon(QIcon(":/icons/chiaking_macos.svg"));

@@ -91,6 +91,8 @@ set(SOURCE_FILES
 	src/yandexocr.cpp
 	include/textoverlay.h
 	src/textoverlay.cpp
+	include/crashreporter.h
+	src/crashreporter.cpp
 	)
 set(RESOURCE_FILES "")
 

@@ -6,6 +6,7 @@
 #include "psnaccountid.h"
 #include "psntoken.h"
 #include "systemdinhibit.h"
+#include "crashreporter.h"
 #include "chiaki/remote/holepunch.h"
 #ifdef Q_OS_MACOS
 #include "macWakeSleep.h"
@@ -67,6 +68,14 @@ static void msg_handler(QtMsgType type, const QMessageLogContext &context, const
         break;
     case QtFatalMsg:
         chiaki_level = CHIAKI_LOG_ERROR;
+        // Отправляем отчет о fatal ошибке
+        {
+            QString stackTrace = QString("File: %1, Line: %2, Function: %3")
+                .arg(context.file ? context.file : "unknown")
+                .arg(context.line)
+                .arg(context.function ? context.function : "unknown");
+            CrashReporter::SendReport("qt_fatal", msg, stackTrace);
+        }
         break;
     }
     chiaki_log(chiaki_log_ctx, chiaki_level, "%s", qPrintable(msg));
@@ -654,6 +663,7 @@ void QmlBackend::psnSessionStart()
     try {
         session->Start();
     } catch (const Exception &e) {
+        CrashReporter::SendExceptionReport("Exception", e.what());
         chiaki_log_mutex.lock();
         chiaki_log_ctx = nullptr;
         chiaki_log_mutex.unlock();
@@ -752,6 +762,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
     try {
         session = new StreamSession(session_info, this);
     } catch (const Exception &e) {
+        CrashReporter::SendExceptionReport("Exception", e.what());
         emit error(tr("Stream failed"), tr("Failed to initialize Stream Session: %1").arg(e.what()));
         return;
     }
@@ -876,6 +887,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
             try {
                 session->Start();
             } catch (const Exception &e) {
+                CrashReporter::SendExceptionReport("Exception", e.what());
                 emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
                 chiaki_log_mutex.lock();
                 chiaki_log_ctx = nullptr;
@@ -1480,6 +1492,7 @@ bool QmlBackend::sendWakeup(const QString &host, const QByteArray &regist_key, b
         discovery_manager.SendWakeup(host, regist_key, ps5);
         return true;
     } catch (const Exception &e) {
+        CrashReporter::SendExceptionReport("Exception", e.what());
         emit error(tr("Wakeup failed"), tr("Failed to send Wakeup packet:\n%1").arg(e.what()));
         return false;
     }
@@ -1982,6 +1995,7 @@ void QmlBackend::updateDiscoveryHosts()
                 try {
                     session->Start();
                 } catch (const Exception &e) {
+                    CrashReporter::SendExceptionReport("Exception", e.what());
                     emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
                     session_start_succeeded = false;
                     chiaki_log_mutex.lock();
