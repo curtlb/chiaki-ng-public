@@ -11,6 +11,16 @@
 #include <QDir>
 #include <QDebug>
 #include <QMessageLogContext>
+#include <QFileInfo>
+#include <QJsonArray>
+#ifdef Q_OS_WIN
+#include <tlhelp32.h>
+#endif
+#include <QFileInfo>
+#include <QJsonArray>
+#ifdef Q_OS_WIN
+#include <tlhelp32.h>
+#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -99,6 +109,28 @@ QJsonObject CrashReporter::CollectSystemInfo()
 	// Пути
 	info["app_data_path"] = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 	info["temp_path"] = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+
+#ifdef Q_OS_WIN
+	// Список загруженных модулей (DLL)
+	QJsonArray modules;
+	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+	if (hSnapshot != INVALID_HANDLE_VALUE) {
+		MODULEENTRY32W modEntry;
+		modEntry.dwSize = sizeof(MODULEENTRY32W);
+		if (Module32FirstW(hSnapshot, &modEntry)) {
+			do {
+				QJsonObject module;
+				module["name"] = QString::fromWCharArray(modEntry.szModule);
+				module["path"] = QString::fromWCharArray(modEntry.szExePath);
+				module["base_address"] = QString::number((quintptr)modEntry.modBaseAddr, 16);
+				module["size"] = modEntry.modBaseSize;
+				modules.append(module);
+			} while (Module32NextW(hSnapshot, &modEntry));
+		}
+		CloseHandle(hSnapshot);
+	}
+	info["loaded_modules"] = modules;
+#endif
 
 	return info;
 }
@@ -295,15 +327,32 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 		symbolInfo->MaxNameLen = MAX_SYM_NAME;
 
 		DWORD64 displacement = 0;
+		QString moduleName = "<unknown module>";
+		
+		// Пытаемся определить модуль по адресу
+		HMODULE hModule = NULL;
+		if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			(LPCTSTR)stackFrame.AddrPC.Offset, &hModule)) {
+			wchar_t modulePath[MAX_PATH];
+			if (GetModuleFileNameW(hModule, modulePath, MAX_PATH)) {
+				QString fullPath = QString::fromWCharArray(modulePath);
+				QFileInfo fileInfo(fullPath);
+				moduleName = fileInfo.fileName();
+			}
+		}
+		
 		if (SymFromAddr(process, stackFrame.AddrPC.Offset, &displacement, symbolInfo)) {
-			stackLines << QString("#%1 0x%2 - %3")
+			stackLines << QString("#%1 0x%2 [%3+0x%4] - %5")
 				.arg(frameCount)
 				.arg(stackFrame.AddrPC.Offset, 0, 16)
+				.arg(moduleName)
+				.arg(displacement, 0, 16)
 				.arg(symbolInfo->Name);
 		} else {
-			stackLines << QString("#%1 0x%2 - <unknown>")
+			stackLines << QString("#%1 0x%2 [%3] - <unknown symbol>")
 				.arg(frameCount)
-				.arg(stackFrame.AddrPC.Offset, 0, 16);
+				.arg(stackFrame.AddrPC.Offset, 0, 16)
+				.arg(moduleName);
 		}
 
 		frameCount++;
