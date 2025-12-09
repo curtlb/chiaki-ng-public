@@ -7,6 +7,10 @@
 #include <QString>
 #include <QJsonObject>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 class QUdpSocket;
 
 class CrashReporter : public QObject
