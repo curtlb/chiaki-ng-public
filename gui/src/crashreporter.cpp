@@ -215,31 +215,73 @@ void CrashReporter::sendData(const QByteArray &data)
 	
 	// Преобразуем IP адрес
 	QString hostStr = serverHost;
+	QByteArray hostBytes = hostStr.toLocal8Bit();
+	const char* hostCStr = hostBytes.constData();
+	
+	qInfo() << "Resolving host:" << serverHost << "(" << hostCStr << ")";
+	
 	if (hostStr == "localhost" || hostStr == "127.0.0.1") {
 		serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+		qInfo() << "Using localhost address: 127.0.0.1";
 	} else {
-		serverAddr.sin_addr.s_addr = inet_addr(hostStr.toLocal8Bit().constData());
-		if (serverAddr.sin_addr.s_addr == INADDR_NONE) {
-		// Попытка резолва через DNS (может не работать при краше)
-		hostent* host = gethostbyname(hostStr.toLocal8Bit().constData());
-		if (host) {
-			serverAddr.sin_addr = *(in_addr*)host->h_addr_list[0];
-		} else {
-				qWarning() << "Failed to resolve host:" << serverHost;
-				closesocket(sock);
-				WSACleanup();
-				return;
+		// Используем inet_pton для более надежного преобразования IP адреса
+		int result = InetPtonA(AF_INET, hostCStr, &serverAddr.sin_addr);
+		if (result != 1) {
+			// Fallback на inet_addr
+			serverAddr.sin_addr.s_addr = inet_addr(hostCStr);
+			if (serverAddr.sin_addr.s_addr == INADDR_NONE) {
+				// Попытка резолва через DNS (может не работать при краше)
+				qInfo() << "Attempting DNS resolution for:" << hostCStr;
+				hostent* host = gethostbyname(hostCStr);
+				if (host && host->h_addr_list[0]) {
+					serverAddr.sin_addr = *(in_addr*)host->h_addr_list[0];
+					qInfo() << "DNS resolution successful";
+				} else {
+					qWarning() << "Failed to resolve host:" << serverHost << "Error:" << WSAGetLastError();
+					closesocket(sock);
+					WSACleanup();
+					return;
+				}
+			} else {
+				qInfo() << "inet_addr conversion successful";
 			}
+		} else {
+			qInfo() << "InetPtonA conversion successful";
 		}
 	}
 	
+	// Логируем финальный адрес
+	char addrStr[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &serverAddr.sin_addr, addrStr, INET_ADDRSTRLEN);
+	qInfo() << "Target address:" << addrStr << "Port:" << ntohs(serverAddr.sin_port);
+	
 	// Отправляем данные
+	qInfo() << "Sending" << data.size() << "bytes to" << addrStr << ":" << serverPort;
 	int sent = sendto(sock, data.constData(), data.size(), 0, (sockaddr*)&serverAddr, sizeof(serverAddr));
 	
 	if (sent == SOCKET_ERROR) {
-		qWarning() << "Failed to send crash report:" << WSAGetLastError();
+		int error = WSAGetLastError();
+		qWarning() << "Failed to send crash report. Error code:" << error;
+		qWarning() << "Socket error details:";
+		switch (error) {
+			case WSAENOTSOCK: qWarning() << "  Socket descriptor is not valid"; break;
+			case WSAEADDRNOTAVAIL: qWarning() << "  Address not available"; break;
+			case WSAENETUNREACH: qWarning() << "  Network unreachable"; break;
+			case WSAEHOSTUNREACH: qWarning() << "  Host unreachable"; break;
+			case WSAECONNREFUSED: qWarning() << "  Connection refused"; break;
+			case WSAEWOULDBLOCK: qWarning() << "  Operation would block"; break;
+			default: qWarning() << "  Unknown error:" << error; break;
+		}
 	} else {
-		qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
+		qInfo() << "Crash report sent successfully:" << sent << "bytes sent to" << addrStr << ":" << serverPort;
+		// Дополнительная проверка - получаем локальный адрес сокета
+		sockaddr_in localAddr;
+		int addrLen = sizeof(localAddr);
+		if (getsockname(sock, (sockaddr*)&localAddr, &addrLen) == 0) {
+			char localAddrStr[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, &localAddr.sin_addr, localAddrStr, INET_ADDRSTRLEN);
+			qInfo() << "Sent from local address:" << localAddrStr << ":" << ntohs(localAddr.sin_port);
+		}
 	}
 	
 	closesocket(sock);
