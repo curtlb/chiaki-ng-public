@@ -146,7 +146,7 @@ endif()
 target_link_libraries(chiaki Qt::Core Qt::Gui ${QT_GUI_PRIVATE_TARGET} Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets Qt::Network)
 # Windows-specific libraries for crash reporting
 if(WIN32)
-	target_link_libraries(chiaki dbghelp psapi ws2_32)
+	target_link_libraries(chiaki dbghelp psapi)
 endif()
 # For systems without GuiPrivate target, include private headers directly
 if(NOT TARGET Qt6::GuiPrivate)

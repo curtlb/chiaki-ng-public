@@ -21,8 +21,6 @@
 #include <windows.h>
 #include <dbghelp.h>
 #include <psapi.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
 // Note: Libraries are linked via CMakeLists.txt for MinGW compatibility
 // #pragma comment(lib, ...) only works with MSVC
 #else
@@ -188,117 +186,43 @@ void CrashReporter::SendExceptionReport(const QString &exceptionType, const QStr
 
 void CrashReporter::sendData(const QByteArray &data)
 {
-#ifdef Q_OS_WIN
-	// Используем WinSock API напрямую для гарантированной отправки без зависимости от Qt event loop
-	WSADATA wsaData;
-	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-		qWarning() << "WSAStartup failed";
-		return;
-	}
+	// Используем QUdpSocket, но создаем его в правильном потоке
+	// Если мы в главном потоке Qt, используем напрямую
+	// Если в другом потоке, используем QMetaObject::invokeMethod
 	
-	SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (sock == INVALID_SOCKET) {
-		qWarning() << "Failed to create socket:" << WSAGetLastError();
-		WSACleanup();
-		return;
-	}
-	
-	// Разрешаем broadcast
-	BOOL broadcast = TRUE;
-	setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (char*)&broadcast, sizeof(broadcast));
-	
-	// Настраиваем адрес получателя
-	sockaddr_in serverAddr;
-	memset(&serverAddr, 0, sizeof(serverAddr));
-	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_port = htons(serverPort);
-	
-	// Преобразуем IP адрес
-	QString hostStr = serverHost;
-	QByteArray hostBytes = hostStr.toLocal8Bit();
-	const char* hostCStr = hostBytes.constData();
-	
-	qInfo() << "Resolving host:" << serverHost << "(" << hostCStr << ")";
-	
-	if (hostStr == "localhost" || hostStr == "127.0.0.1") {
-		serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-		qInfo() << "Using localhost address: 127.0.0.1";
-	} else {
-		// Используем inet_pton для более надежного преобразования IP адреса
-		int result = InetPtonA(AF_INET, hostCStr, &serverAddr.sin_addr);
-		if (result != 1) {
-			// Fallback на inet_addr
-			serverAddr.sin_addr.s_addr = inet_addr(hostCStr);
-			if (serverAddr.sin_addr.s_addr == INADDR_NONE) {
-				// Попытка резолва через DNS (может не работать при краше)
-				qInfo() << "Attempting DNS resolution for:" << hostCStr;
-				hostent* host = gethostbyname(hostCStr);
-				if (host && host->h_addr_list[0]) {
-					serverAddr.sin_addr = *(in_addr*)host->h_addr_list[0];
-					qInfo() << "DNS resolution successful";
-				} else {
-					qWarning() << "Failed to resolve host:" << serverHost << "Error:" << WSAGetLastError();
-					closesocket(sock);
-					WSACleanup();
-					return;
-				}
-			} else {
-				qInfo() << "inet_addr conversion successful";
-			}
+	if (QThread::currentThread() == QCoreApplication::instance()->thread()) {
+		// Мы в главном потоке - можно использовать QUdpSocket напрямую
+		QUdpSocket socket;
+		QHostAddress host(serverHost);
+		
+		qint64 sent = socket.writeDatagram(data, host, serverPort);
+		
+		if (sent < 0) {
+			qWarning() << "Failed to send crash report:" << socket.errorString();
 		} else {
-			qInfo() << "InetPtonA conversion successful";
-		}
-	}
-	
-	// Логируем финальный адрес
-	char addrStr[INET_ADDRSTRLEN];
-	inet_ntop(AF_INET, &serverAddr.sin_addr, addrStr, INET_ADDRSTRLEN);
-	qInfo() << "Target address:" << addrStr << "Port:" << ntohs(serverAddr.sin_port);
-	
-	// Отправляем данные
-	qInfo() << "Sending" << data.size() << "bytes to" << addrStr << ":" << serverPort;
-	int sent = sendto(sock, data.constData(), data.size(), 0, (sockaddr*)&serverAddr, sizeof(serverAddr));
-	
-	if (sent == SOCKET_ERROR) {
-		int error = WSAGetLastError();
-		qWarning() << "Failed to send crash report. Error code:" << error;
-		qWarning() << "Socket error details:";
-		switch (error) {
-			case WSAENOTSOCK: qWarning() << "  Socket descriptor is not valid"; break;
-			case WSAEADDRNOTAVAIL: qWarning() << "  Address not available"; break;
-			case WSAENETUNREACH: qWarning() << "  Network unreachable"; break;
-			case WSAEHOSTUNREACH: qWarning() << "  Host unreachable"; break;
-			case WSAECONNREFUSED: qWarning() << "  Connection refused"; break;
-			case WSAEWOULDBLOCK: qWarning() << "  Operation would block"; break;
-			default: qWarning() << "  Unknown error:" << error; break;
+			qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
 		}
 	} else {
-		qInfo() << "Crash report sent successfully:" << sent << "bytes sent to" << addrStr << ":" << serverPort;
-		// Дополнительная проверка - получаем локальный адрес сокета
-		sockaddr_in localAddr;
-		int addrLen = sizeof(localAddr);
-		if (getsockname(sock, (sockaddr*)&localAddr, &addrLen) == 0) {
-			char localAddrStr[INET_ADDRSTRLEN];
-			inet_ntop(AF_INET, &localAddr.sin_addr, localAddrStr, INET_ADDRSTRLEN);
-			qInfo() << "Sent from local address:" << localAddrStr << ":" << ntohs(localAddr.sin_port);
+		// Мы в другом потоке - используем Qt::QueuedConnection для вызова в главном потоке
+		// Но это может не сработать при краше, поэтому используем прямой вызов
+		// QUdpSocket можно безопасно использовать из любого потока, если создать его локально
+		QUdpSocket socket;
+		QHostAddress host(serverHost);
+		
+		// Для UDP writeDatagram должен работать синхронно
+		qint64 sent = socket.writeDatagram(data, host, serverPort);
+		
+		// Даем немного времени на обработку (если event loop доступен)
+		if (QCoreApplication::instance()) {
+			QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
+		}
+		
+		if (sent < 0) {
+			qWarning() << "Failed to send crash report:" << socket.errorString();
+		} else {
+			qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
 		}
 	}
-	
-	closesocket(sock);
-	WSACleanup();
-#else
-	// Для Linux/Mac используем QUdpSocket
-	QUdpSocket socket;
-	QHostAddress host(serverHost);
-	
-	qint64 sent = socket.writeDatagram(data, host, serverPort);
-	
-	if (sent < 0) {
-		qWarning() << "Failed to send crash report:" << socket.errorString();
-	} else {
-		qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
-	}
-#endif
 }
 
 #ifdef Q_OS_WIN
