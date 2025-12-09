@@ -13,8 +13,6 @@
 #include <QMessageLogContext>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QThread>
-#include <QCoreApplication>
 #ifdef Q_OS_WIN
 #include <tlhelp32.h>
 #endif
