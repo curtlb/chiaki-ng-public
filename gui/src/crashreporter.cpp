@@ -187,12 +187,20 @@ QByteArray CrashReporter::CreateReport(const QString &errorType, const QString &
 void CrashReporter::SendReport(const QString &errorType, const QString &message, const QString &stackTrace)
 {
 	if (!instance) {
-		qWarning() << "CrashReporter not initialized";
+		// В обработчике исключений qWarning может не работать
 		return;
 	}
 
-	QByteArray data = CreateReport(errorType, message, stackTrace);
-	instance->sendData(data);
+	// Обернуто в try-catch на случай проблем с Qt при краше
+	try {
+		QByteArray data = CreateReport(errorType, message, stackTrace);
+		if (!data.isEmpty()) {
+			instance->sendData(data);
+		}
+	} catch (...) {
+		// Если создание отчета или отправка не удались, просто игнорируем
+		// В обработчике исключений мы не можем безопасно логировать
+	}
 }
 
 void CrashReporter::SendExceptionReport(const QString &exceptionType, const QString &what)
@@ -203,46 +211,53 @@ void CrashReporter::SendExceptionReport(const QString &exceptionType, const QStr
 void CrashReporter::sendData(const QByteArray &data)
 {
 	if (!udpSocket) {
-		qWarning() << "UDP socket not initialized";
 		return;
 	}
 
-	// Проверяем размер данных (UDP пакет не должен превышать ~64KB, но на практике лучше ограничиться меньшим размером)
-	const int maxUdpSize = 60000; // Оставляем запас
-	QByteArray dataToSend = data;
-	if (dataToSend.size() > maxUdpSize) {
-		qWarning() << "Crash report too large (" << dataToSend.size() << "bytes), truncating stack trace";
-		// Пытаемся обрезать stack trace
-		QJsonDocument doc = QJsonDocument::fromJson(dataToSend);
-		if (!doc.isNull() && doc.isObject()) {
-			QJsonObject obj = doc.object();
-			QString stackTrace = obj["stack_trace"].toString();
-			if (stackTrace.length() > 10000) {
-				stackTrace = stackTrace.left(10000) + "\n... (truncated)";
-				obj["stack_trace"] = stackTrace;
-				doc.setObject(obj);
-				dataToSend = doc.toJson(QJsonDocument::Compact);
+	// Обернуто в try-catch на случай проблем с Qt при краше
+	try {
+		// Проверяем размер данных (UDP пакет не должен превышать ~64KB, но на практике лучше ограничиться меньшим размером)
+		const int maxUdpSize = 60000; // Оставляем запас
+		QByteArray dataToSend = data;
+		if (dataToSend.size() > maxUdpSize) {
+			// Пытаемся обрезать stack trace
+			QJsonDocument doc = QJsonDocument::fromJson(dataToSend);
+			if (!doc.isNull() && doc.isObject()) {
+				QJsonObject obj = doc.object();
+				QString stackTrace = obj["stack_trace"].toString();
+				if (stackTrace.length() > 10000) {
+					stackTrace = stackTrace.left(10000) + "\n... (truncated)";
+					obj["stack_trace"] = stackTrace;
+					doc.setObject(obj);
+					dataToSend = doc.toJson(QJsonDocument::Compact);
+				}
+			}
+			// Если все еще слишком большой, просто обрезаем
+			if (dataToSend.size() > maxUdpSize) {
+				dataToSend = dataToSend.left(maxUdpSize);
 			}
 		}
-		// Если все еще слишком большой, просто обрезаем
-		if (dataToSend.size() > maxUdpSize) {
-			dataToSend = dataToSend.left(maxUdpSize);
-		}
-	}
 
-	// Отправляем данные
-	QHostAddress host(serverHost);
-	qint64 sent = udpSocket->writeDatagram(dataToSend, host, serverPort);
-	
-	// Обрабатываем события для гарантированной отправки
-	if (QCoreApplication::instance()) {
-		QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
-	}
-	
-	if (sent < 0) {
-		qWarning() << "Failed to send crash report:" << udpSocket->errorString();
-	} else {
-		qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
+		// Отправляем данные
+		QHostAddress host(serverHost);
+		qint64 sent = udpSocket->writeDatagram(dataToSend, host, serverPort);
+		
+		// Обрабатываем события для гарантированной отправки
+		if (QCoreApplication::instance()) {
+			// Обрабатываем события несколько раз для гарантированной отправки
+			for (int i = 0; i < 5; i++) {
+				QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
+				QThread::msleep(10); // Небольшая задержка для отправки UDP пакета
+			}
+		} else {
+			// Если нет event loop, просто ждем
+			QThread::msleep(100);
+		}
+		
+		// Не логируем в обработчике исключений, так как это может не работать
+	} catch (...) {
+		// Если отправка не удалась, просто игнорируем
+		// В обработчике исключений мы не можем безопасно логировать
 	}
 }
 
@@ -335,10 +350,11 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 	}
 
 	// Пытаемся получить stack trace (обернуто в try-catch для безопасности)
+	// Используем минимальные Qt операции, так как куча может быть повреждена
 	try {
 		HANDLE process = GetCurrentProcess();
 		if (!SymInitialize(process, NULL, TRUE)) {
-			stackTrace = "Failed to initialize symbol handler";
+			stackTrace = QString("Failed to initialize symbol handler");
 		} else {
 			SymSetOptions(SYMOPT_LOAD_LINES);
 
@@ -438,11 +454,16 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 		}
 	} catch (...) {
 		// Если что-то пошло не так, используем простой stack trace
-		stackTrace = "Failed to generate detailed stack trace";
+		stackTrace = QString("Failed to generate detailed stack trace");
 	}
 
-	// Отправляем отчет
-	SendReport(errorType, message, stackTrace);
+	// Отправляем отчет (обернуто в try-catch на случай проблем с Qt)
+	try {
+		SendReport(errorType, message, stackTrace);
+	} catch (...) {
+		// Если даже отправка не удалась, хотя бы логируем
+		// (но в обработчике исключений логирование может не работать)
+	}
 
 	// Возвращаем EXCEPTION_EXECUTE_HANDLER чтобы показать стандартный диалог
 	return EXCEPTION_EXECUTE_HANDLER;
