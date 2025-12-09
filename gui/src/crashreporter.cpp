@@ -11,18 +11,14 @@
 #include <QDir>
 #include <QDebug>
 #include <QMessageLogContext>
-#include <QFileInfo>
-#include <QJsonArray>
-#ifdef Q_OS_WIN
-#include <tlhelp32.h>
-#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <dbghelp.h>
 #include <psapi.h>
-// Note: Libraries are linked via CMakeLists.txt for MinGW compatibility
-// #pragma comment(lib, ...) only works with MSVC
+#include <winnt.h>
+#pragma comment(lib, "dbghelp.lib")
+#pragma comment(lib, "psapi.lib")
 #else
 #include <signal.h>
 #include <execinfo.h>
@@ -41,11 +37,11 @@ CrashReporter *CrashReporter::instance = nullptr;
 
 CrashReporter::CrashReporter(QObject *parent)
 	: QObject(parent)
+	, udpSocket(nullptr)
 	, serverHost("5.188.29.131")
 	, serverPort(12420)
 {
-	// Не создаем QUdpSocket здесь, так как он может использоваться из других потоков
-	// Создаем его при необходимости в sendData()
+	udpSocket = new QUdpSocket(this);
 }
 
 CrashReporter::~CrashReporter()
@@ -104,28 +100,6 @@ QJsonObject CrashReporter::CollectSystemInfo()
 	// Пути
 	info["app_data_path"] = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 	info["temp_path"] = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-
-#ifdef Q_OS_WIN
-	// Список загруженных модулей (DLL)
-	QJsonArray modules;
-	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
-	if (hSnapshot != INVALID_HANDLE_VALUE) {
-		MODULEENTRY32W modEntry;
-		modEntry.dwSize = sizeof(MODULEENTRY32W);
-		if (Module32FirstW(hSnapshot, &modEntry)) {
-			do {
-				QJsonObject module;
-				module["name"] = QString::fromWCharArray(modEntry.szModule);
-				module["path"] = QString::fromWCharArray(modEntry.szExePath);
-				module["base_address"] = QString::number((quintptr)modEntry.modBaseAddr, 16);
-				module["size"] = static_cast<qint64>(modEntry.modBaseSize);
-				modules.append(module);
-			} while (Module32NextW(hSnapshot, &modEntry));
-		}
-		CloseHandle(hSnapshot);
-	}
-	info["loaded_modules"] = modules;
-#endif
 
 	return info;
 }
@@ -186,42 +160,19 @@ void CrashReporter::SendExceptionReport(const QString &exceptionType, const QStr
 
 void CrashReporter::sendData(const QByteArray &data)
 {
-	// Используем QUdpSocket, но создаем его в правильном потоке
-	// Если мы в главном потоке Qt, используем напрямую
-	// Если в другом потоке, используем QMetaObject::invokeMethod
+	if (!udpSocket) {
+		qWarning() << "UDP socket not initialized";
+		return;
+	}
+
+	// Отправляем асинхронно (не блокируем)
+	QHostAddress host(serverHost);
+	qint64 sent = udpSocket->writeDatagram(data, host, serverPort);
 	
-	if (QThread::currentThread() == QCoreApplication::instance()->thread()) {
-		// Мы в главном потоке - можно использовать QUdpSocket напрямую
-		QUdpSocket socket;
-		QHostAddress host(serverHost);
-		
-		qint64 sent = socket.writeDatagram(data, host, serverPort);
-		
-		if (sent < 0) {
-			qWarning() << "Failed to send crash report:" << socket.errorString();
-		} else {
-			qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
-		}
+	if (sent < 0) {
+		qWarning() << "Failed to send crash report:" << udpSocket->errorString();
 	} else {
-		// Мы в другом потоке - используем Qt::QueuedConnection для вызова в главном потоке
-		// Но это может не сработать при краше, поэтому используем прямой вызов
-		// QUdpSocket можно безопасно использовать из любого потока, если создать его локально
-		QUdpSocket socket;
-		QHostAddress host(serverHost);
-		
-		// Для UDP writeDatagram должен работать синхронно
-		qint64 sent = socket.writeDatagram(data, host, serverPort);
-		
-		// Даем немного времени на обработку (если event loop доступен)
-		if (QCoreApplication::instance()) {
-			QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
-		}
-		
-		if (sent < 0) {
-			qWarning() << "Failed to send crash report:" << socket.errorString();
-		} else {
-			qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
-		}
+		qInfo() << "Crash report sent to" << serverHost << ":" << serverPort;
 	}
 }
 
@@ -345,32 +296,15 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 		symbolInfo->MaxNameLen = MAX_SYM_NAME;
 
 		DWORD64 displacement = 0;
-		QString moduleName = "<unknown module>";
-		
-		// Пытаемся определить модуль по адресу
-		HMODULE hModule = NULL;
-		if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			(LPCTSTR)stackFrame.AddrPC.Offset, &hModule)) {
-			wchar_t modulePath[MAX_PATH];
-			if (GetModuleFileNameW(hModule, modulePath, MAX_PATH)) {
-				QString fullPath = QString::fromWCharArray(modulePath);
-				QFileInfo fileInfo(fullPath);
-				moduleName = fileInfo.fileName();
-			}
-		}
-		
 		if (SymFromAddr(process, stackFrame.AddrPC.Offset, &displacement, symbolInfo)) {
-			stackLines << QString("#%1 0x%2 [%3+0x%4] - %5")
+			stackLines << QString("#%1 0x%2 - %3")
 				.arg(frameCount)
 				.arg(stackFrame.AddrPC.Offset, 0, 16)
-				.arg(moduleName)
-				.arg(displacement, 0, 16)
 				.arg(symbolInfo->Name);
 		} else {
-			stackLines << QString("#%1 0x%2 [%3] - <unknown symbol>")
+			stackLines << QString("#%1 0x%2 - <unknown>")
 				.arg(frameCount)
-				.arg(stackFrame.AddrPC.Offset, 0, 16)
-				.arg(moduleName);
+				.arg(stackFrame.AddrPC.Offset, 0, 16);
 		}
 
 		frameCount++;

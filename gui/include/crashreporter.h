@@ -7,10 +7,6 @@
 #include <QString>
 #include <QJsonObject>
 
-#ifdef Q_OS_WIN
-#include <windows.h>
-#endif
-
 class QUdpSocket;
 
 class CrashReporter : public QObject
@@ -32,6 +28,7 @@ public:
 
 private:
 	static CrashReporter *instance;
+	QUdpSocket *udpSocket;
 	QString serverHost;
 	quint16 serverPort;
 
