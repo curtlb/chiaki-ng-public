@@ -16,9 +16,8 @@
 #include <windows.h>
 #include <dbghelp.h>
 #include <psapi.h>
-#include <winnt.h>
-#pragma comment(lib, "dbghelp.lib")
-#pragma comment(lib, "psapi.lib")
+// Note: Libraries are linked via CMakeLists.txt for MinGW compatibility
+// #pragma comment(lib, ...) only works with MSVC
 #else
 #include <signal.h>
 #include <execinfo.h>
