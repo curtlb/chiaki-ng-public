@@ -11,14 +11,17 @@
 #include <QDir>
 #include <QDebug>
 #include <QMessageLogContext>
-
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QThread>
+#include <QCoreApplication>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <dbghelp.h>
 #include <psapi.h>
-#include <winnt.h>
-#pragma comment(lib, "dbghelp.lib")
-#pragma comment(lib, "psapi.lib")
+#include <tlhelp32.h>
+// Note: Libraries are linked via CMakeLists.txt for MinGW compatibility
+// #pragma comment(lib, ...) only works with MSVC
 #else
 #include <signal.h>
 #include <execinfo.h>
@@ -101,6 +104,28 @@ QJsonObject CrashReporter::CollectSystemInfo()
 	info["app_data_path"] = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 	info["temp_path"] = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
 
+#ifdef Q_OS_WIN
+	// Список загруженных модулей (DLL) с их адресами
+	QJsonArray modules;
+	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+	if (hSnapshot != INVALID_HANDLE_VALUE) {
+		MODULEENTRY32W modEntry;
+		modEntry.dwSize = sizeof(MODULEENTRY32W);
+		if (Module32FirstW(hSnapshot, &modEntry)) {
+			do {
+				QJsonObject module;
+				module["name"] = QString::fromWCharArray(modEntry.szModule);
+				module["path"] = QString::fromWCharArray(modEntry.szExePath);
+				module["base_address"] = QString::number((quintptr)modEntry.modBaseAddr, 16);
+				module["size"] = static_cast<qint64>(modEntry.modBaseSize);
+				modules.append(module);
+			} while (Module32NextW(hSnapshot, &modEntry));
+		}
+		CloseHandle(hSnapshot);
+	}
+	info["loaded_modules"] = modules;
+#endif
+
 	return info;
 }
 
@@ -136,6 +161,31 @@ QByteArray CrashReporter::CreateReport(const QString &errorType, const QString &
 	if (!stackTrace.isEmpty()) {
 		report["stack_trace"] = stackTrace;
 	}
+
+	// Дополнительная отладочная информация
+	QJsonObject debugInfo;
+	
+	// Информация о потоке, в котором произошел краш
+	debugInfo["thread_id"] = static_cast<qint64>(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+	if (QCoreApplication::instance()) {
+		debugInfo["is_main_thread"] = (QThread::currentThread() == QCoreApplication::instance()->thread());
+	} else {
+		debugInfo["is_main_thread"] = false;
+	}
+	
+	// Информация о памяти (если доступна)
+#ifdef Q_OS_WIN
+	PROCESS_MEMORY_COUNTERS_EX pmc;
+	if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+		QJsonObject memoryInfo;
+		memoryInfo["working_set_size"] = static_cast<qint64>(pmc.WorkingSetSize);
+		memoryInfo["peak_working_set_size"] = static_cast<qint64>(pmc.PeakWorkingSetSize);
+		memoryInfo["page_fault_count"] = static_cast<qint64>(pmc.PageFaultCount);
+		debugInfo["memory"] = memoryInfo;
+	}
+#endif
+	
+	report["debug_info"] = debugInfo;
 
 	// Конвертируем в JSON
 	QJsonDocument doc(report);
@@ -183,10 +233,19 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 	QString message;
 	QString stackTrace;
 
-	// Определяем тип исключения
+	// Определяем тип исключения и добавляем детали для Access Violation
+	QString exceptionDetails;
 	switch (exceptionInfo->ExceptionRecord->ExceptionCode) {
 		case EXCEPTION_ACCESS_VIOLATION:
 			message = "Access Violation";
+			// Добавляем информацию о типе доступа и адресе
+			if (exceptionInfo->ExceptionRecord->NumberParameters >= 2) {
+				bool isWrite = exceptionInfo->ExceptionRecord->ExceptionInformation[0] != 0;
+				ULONG_PTR address = exceptionInfo->ExceptionRecord->ExceptionInformation[1];
+				exceptionDetails = QString(" (%1 at address 0x%2)")
+					.arg(isWrite ? "Write" : "Read")
+					.arg(address, 0, 16);
+			}
 			break;
 		case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
 			message = "Array Bounds Exceeded";
@@ -249,6 +308,11 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 			message = QString("Unknown Exception (0x%1)").arg(exceptionInfo->ExceptionRecord->ExceptionCode, 8, 16, QChar('0'));
 			break;
 	}
+	
+	// Добавляем детали к сообщению
+	if (!exceptionDetails.isEmpty()) {
+		message += exceptionDetails;
+	}
 
 	// Пытаемся получить stack trace
 	HANDLE process = GetCurrentProcess();
@@ -290,23 +354,46 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 		SymGetModuleBase64,
 		NULL) && frameCount < maxFrames) {
 
+		// Определяем модуль по адресу
+		HMODULE hModule = NULL;
+		QString moduleName = "<unknown>";
+		DWORD64 moduleBase = 0;
+		
+		if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			(LPCTSTR)stackFrame.AddrPC.Offset, &hModule)) {
+			wchar_t modulePath[MAX_PATH];
+			if (GetModuleFileNameW(hModule, modulePath, MAX_PATH)) {
+				QString fullPath = QString::fromWCharArray(modulePath);
+				QFileInfo fileInfo(fullPath);
+				moduleName = fileInfo.fileName();
+				moduleBase = SymGetModuleBase64(process, stackFrame.AddrPC.Offset);
+			}
+		}
+		
+		// Получаем информацию о символе
 		char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(char)];
 		PSYMBOL_INFO symbolInfo = (PSYMBOL_INFO)symbolBuffer;
 		symbolInfo->SizeOfStruct = sizeof(SYMBOL_INFO);
 		symbolInfo->MaxNameLen = MAX_SYM_NAME;
 
 		DWORD64 displacement = 0;
+		QString symbolName = "<unknown symbol>";
 		if (SymFromAddr(process, stackFrame.AddrPC.Offset, &displacement, symbolInfo)) {
-			stackLines << QString("#%1 0x%2 - %3")
-				.arg(frameCount)
-				.arg(stackFrame.AddrPC.Offset, 0, 16)
-				.arg(symbolInfo->Name);
-		} else {
-			stackLines << QString("#%1 0x%2 - <unknown>")
-				.arg(frameCount)
-				.arg(stackFrame.AddrPC.Offset, 0, 16);
+			symbolName = QString::fromLocal8Bit(symbolInfo->Name);
 		}
-
+		
+		// Вычисляем смещение внутри модуля
+		DWORD64 offsetInModule = stackFrame.AddrPC.Offset - moduleBase;
+		
+		// Формируем строку stack trace с полной информацией
+		QString frameInfo = QString("#%1 0x%2 [%3+0x%4] %5")
+			.arg(frameCount)
+			.arg(stackFrame.AddrPC.Offset, 0, 16)
+			.arg(moduleName)
+			.arg(offsetInModule, 0, 16)
+			.arg(symbolName);
+		
+		stackLines << frameInfo;
 		frameCount++;
 	}
 
