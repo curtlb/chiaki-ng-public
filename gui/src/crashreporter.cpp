@@ -382,31 +382,27 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 				char moduleName[MAX_PATH] = "<unknown>";
 				DWORD64 moduleBase = 0;
 				
-				__try {
-					if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-						(LPCTSTR)stackFrame.AddrPC.Offset, &hModule)) {
-						wchar_t modulePath[MAX_PATH];
-						if (GetModuleFileNameW(hModule, modulePath, MAX_PATH)) {
-							// Извлекаем только имя файла без Qt классов
-							const wchar_t* fileName = wcsrchr(modulePath, L'\\');
-							if (fileName) {
-								fileName++; // Пропускаем обратный слэш
-							} else {
-								fileName = modulePath;
-							}
-							// Конвертируем в char (упрощенно, только ASCII)
-							int i = 0;
-							while (fileName[i] && i < MAX_PATH - 1) {
-								moduleName[i] = (char)fileName[i];
-								i++;
-							}
-							moduleName[i] = '\0';
-							moduleBase = SymGetModuleBase64(process, stackFrame.AddrPC.Offset);
+				// Используем проверки возвращаемых значений вместо __try/__except (для MinGW совместимости)
+				if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+					(LPCTSTR)stackFrame.AddrPC.Offset, &hModule)) {
+					wchar_t modulePath[MAX_PATH];
+					if (GetModuleFileNameW(hModule, modulePath, MAX_PATH)) {
+						// Извлекаем только имя файла без Qt классов
+						const wchar_t* fileName = wcsrchr(modulePath, L'\\');
+						if (fileName) {
+							fileName++; // Пропускаем обратный слэш
+						} else {
+							fileName = modulePath;
 						}
+						// Конвертируем в char (упрощенно, только ASCII)
+						int i = 0;
+						while (fileName[i] && i < MAX_PATH - 1) {
+							moduleName[i] = (char)fileName[i];
+							i++;
+						}
+						moduleName[i] = '\0';
+						moduleBase = SymGetModuleBase64(process, stackFrame.AddrPC.Offset);
 					}
-				} __except(EXCEPTION_EXECUTE_HANDLER) {
-					// Игнорируем исключения при получении информации о модуле
-					strcpy_s(moduleName, "<unknown>");
 				}
 				
 				// Получаем информацию о символе (безопасно)
@@ -417,12 +413,9 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 
 				DWORD64 displacement = 0;
 				QString symbolName = "<unknown symbol>";
-				__try {
-					if (SymFromAddr(process, stackFrame.AddrPC.Offset, &displacement, symbolInfo)) {
-						symbolName = QString::fromLocal8Bit(symbolInfo->Name);
-					}
-				} __except(EXCEPTION_EXECUTE_HANDLER) {
-					// Игнорируем исключения при получении символов
+				// Используем проверку возвращаемого значения вместо __try/__except
+				if (SymFromAddr(process, stackFrame.AddrPC.Offset, &displacement, symbolInfo)) {
+					symbolName = QString::fromLocal8Bit(symbolInfo->Name);
 				}
 				
 				// Вычисляем смещение внутри модуля
