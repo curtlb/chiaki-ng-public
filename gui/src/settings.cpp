@@ -197,7 +197,10 @@ void Settings::ExportSettings(QString filepath)
 	if(info.suffix().isEmpty())
 		filepath += ".ini";
 	QFile file(filepath);
-	file.open(QIODevice::ReadWrite);
+	if (!file.open(QIODevice::ReadWrite)) {
+		qWarning() << "Failed to open file for export:" << filepath;
+		return;
+	}
 	file.close();
 	QSettings settings_backup(filepath, QSettings::IniFormat);
 	SaveRegisteredHosts(&settings_backup);
@@ -223,7 +226,10 @@ void Settings::ExportPlaceboSettings(QString filepath)
 		filepath += ".ini";
 	// create file if it doesn't exist
 	QFile file(filepath);
-	file.open(QIODevice::ReadWrite);
+	if (!file.open(QIODevice::ReadWrite)) {
+		qWarning() << "Failed to open file for export:" << filepath;
+		return;
+	}
 	file.close();
 	QSettings settings_backup(filepath, QSettings::IniFormat);
     QStringList keys = placebo_settings.allKeys();
