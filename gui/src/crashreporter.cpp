@@ -220,11 +220,11 @@ void CrashReporter::sendData(const QByteArray &data)
 	} else {
 		serverAddr.sin_addr.s_addr = inet_addr(hostStr.toLocal8Bit().constData());
 		if (serverAddr.sin_addr.s_addr == INADDR_NONE) {
-			// Попытка резолва через DNS (может не работать при краше)
-			hostent* host = gethostbyname(hostStr.toLocal8Bit().constData());
-			if (host) {
-				serverAddr.sin_addr.s_addr = *(in_addr_t*)host->h_addr_list[0];
-			} else {
+		// Попытка резолва через DNS (может не работать при краше)
+		hostent* host = gethostbyname(hostStr.toLocal8Bit().constData());
+		if (host) {
+			serverAddr.sin_addr = *(in_addr*)host->h_addr_list[0];
+		} else {
 				qWarning() << "Failed to resolve host:" << serverHost;
 				closesocket(sock);
 				WSACleanup();
