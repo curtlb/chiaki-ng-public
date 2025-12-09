@@ -793,6 +793,16 @@ void QmlMainWindow::resizeSwapchain()
         return;
 
     swapchain_size = window_size;
+    
+    // Проверяем, что размер окна не нулевой (окно может быть свернуто)
+    if (swapchain_size.width() <= 0 || swapchain_size.height() <= 0) {
+        // Если окно свернуто, не создаем текстуру
+        if (quick_tex) {
+            pl_tex_destroy(placebo_vulkan->gpu, &quick_tex);
+        }
+        return;
+    }
+    
     pl_swapchain_resize(placebo_swapchain, &swapchain_size.rwidth(), &swapchain_size.rheight());
 
     struct pl_tex_params tex_params = {
