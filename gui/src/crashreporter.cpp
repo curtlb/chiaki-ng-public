@@ -123,7 +123,7 @@ QJsonObject CrashReporter::CollectSystemInfo()
 				module["name"] = QString::fromWCharArray(modEntry.szModule);
 				module["path"] = QString::fromWCharArray(modEntry.szExePath);
 				module["base_address"] = QString::number((quintptr)modEntry.modBaseAddr, 16);
-				module["size"] = modEntry.modBaseSize;
+				module["size"] = static_cast<qint64>(modEntry.modBaseSize);
 				modules.append(module);
 			} while (Module32NextW(hSnapshot, &modEntry));
 		}
