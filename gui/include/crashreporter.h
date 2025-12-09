@@ -32,7 +32,6 @@ public:
 
 private:
 	static CrashReporter *instance;
-	QUdpSocket *udpSocket;
 	QString serverHost;
 	quint16 serverPort;
 

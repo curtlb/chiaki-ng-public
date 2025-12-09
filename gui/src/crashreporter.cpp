@@ -50,7 +50,8 @@ CrashReporter::CrashReporter(QObject *parent)
 	, serverHost("5.188.29.131")
 	, serverPort(12420)
 {
-	udpSocket = new QUdpSocket(this);
+	// Не создаем QUdpSocket здесь, так как он может использоваться из других потоков
+	// Создаем его при необходимости в sendData()
 }
 
 CrashReporter::~CrashReporter()
@@ -191,17 +192,19 @@ void CrashReporter::SendExceptionReport(const QString &exceptionType, const QStr
 
 void CrashReporter::sendData(const QByteArray &data)
 {
-	if (!udpSocket) {
-		qWarning() << "UDP socket not initialized";
-		return;
-	}
-
-	// Отправляем асинхронно (не блокируем)
+	// Создаем новый QUdpSocket каждый раз, чтобы избежать проблем с потоками
+	// QUdpSocket можно безопасно использовать из любого потока при создании на стеке
+	QUdpSocket socket;
 	QHostAddress host(serverHost);
-	qint64 sent = udpSocket->writeDatagram(data, host, serverPort);
+	
+	// Отправляем синхронно (writeDatagram блокирует только на время отправки)
+	qint64 sent = socket.writeDatagram(data, host, serverPort);
+	
+	// Ждем завершения отправки (необязательно, но гарантирует отправку)
+	socket.waitForBytesWritten(1000);
 	
 	if (sent < 0) {
-		qWarning() << "Failed to send crash report:" << udpSocket->errorString();
+		qWarning() << "Failed to send crash report:" << socket.errorString();
 	} else {
 		qInfo() << "Crash report sent to" << serverHost << ":" << serverPort;
 	}
