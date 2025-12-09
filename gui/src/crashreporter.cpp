@@ -162,28 +162,20 @@ QByteArray CrashReporter::CreateReport(const QString &errorType, const QString &
 		report["stack_trace"] = stackTrace;
 	}
 
-	// Дополнительная отладочная информация
+	// Дополнительная отладочная информация (упрощенно, чтобы не увеличивать размер пакета)
 	QJsonObject debugInfo;
 	
 	// Информация о потоке, в котором произошел краш
-	debugInfo["thread_id"] = static_cast<qint64>(reinterpret_cast<quintptr>(QThread::currentThreadId()));
-	if (QCoreApplication::instance()) {
-		debugInfo["is_main_thread"] = (QThread::currentThread() == QCoreApplication::instance()->thread());
-	} else {
-		debugInfo["is_main_thread"] = false;
+	try {
+		debugInfo["thread_id"] = static_cast<qint64>(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+		if (QCoreApplication::instance()) {
+			debugInfo["is_main_thread"] = (QThread::currentThread() == QCoreApplication::instance()->thread());
+		} else {
+			debugInfo["is_main_thread"] = false;
+		}
+	} catch (...) {
+		// Игнорируем ошибки при получении информации о потоке
 	}
-	
-	// Информация о памяти (если доступна)
-#ifdef Q_OS_WIN
-	PROCESS_MEMORY_COUNTERS_EX pmc;
-	if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
-		QJsonObject memoryInfo;
-		memoryInfo["working_set_size"] = static_cast<qint64>(pmc.WorkingSetSize);
-		memoryInfo["peak_working_set_size"] = static_cast<qint64>(pmc.PeakWorkingSetSize);
-		memoryInfo["page_fault_count"] = static_cast<qint64>(pmc.PageFaultCount);
-		debugInfo["memory"] = memoryInfo;
-	}
-#endif
 	
 	report["debug_info"] = debugInfo;
 
@@ -215,14 +207,42 @@ void CrashReporter::sendData(const QByteArray &data)
 		return;
 	}
 
-	// Отправляем асинхронно (не блокируем)
+	// Проверяем размер данных (UDP пакет не должен превышать ~64KB, но на практике лучше ограничиться меньшим размером)
+	const int maxUdpSize = 60000; // Оставляем запас
+	QByteArray dataToSend = data;
+	if (dataToSend.size() > maxUdpSize) {
+		qWarning() << "Crash report too large (" << dataToSend.size() << "bytes), truncating stack trace";
+		// Пытаемся обрезать stack trace
+		QJsonDocument doc = QJsonDocument::fromJson(dataToSend);
+		if (!doc.isNull() && doc.isObject()) {
+			QJsonObject obj = doc.object();
+			QString stackTrace = obj["stack_trace"].toString();
+			if (stackTrace.length() > 10000) {
+				stackTrace = stackTrace.left(10000) + "\n... (truncated)";
+				obj["stack_trace"] = stackTrace;
+				doc.setObject(obj);
+				dataToSend = doc.toJson(QJsonDocument::Compact);
+			}
+		}
+		// Если все еще слишком большой, просто обрезаем
+		if (dataToSend.size() > maxUdpSize) {
+			dataToSend = dataToSend.left(maxUdpSize);
+		}
+	}
+
+	// Отправляем данные
 	QHostAddress host(serverHost);
-	qint64 sent = udpSocket->writeDatagram(data, host, serverPort);
+	qint64 sent = udpSocket->writeDatagram(dataToSend, host, serverPort);
+	
+	// Обрабатываем события для гарантированной отправки
+	if (QCoreApplication::instance()) {
+		QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
+	}
 	
 	if (sent < 0) {
 		qWarning() << "Failed to send crash report:" << udpSocket->errorString();
 	} else {
-		qInfo() << "Crash report sent to" << serverHost << ":" << serverPort;
+		qInfo() << "Crash report sent to" << serverHost << ":" << serverPort << "(" << sent << "bytes)";
 	}
 }
 
@@ -314,91 +334,119 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 		message += exceptionDetails;
 	}
 
-	// Пытаемся получить stack trace
-	HANDLE process = GetCurrentProcess();
-	SymInitialize(process, NULL, TRUE);
-	SymSetOptions(SYMOPT_LOAD_LINES);
+	// Пытаемся получить stack trace (обернуто в try-catch для безопасности)
+	try {
+		HANDLE process = GetCurrentProcess();
+		if (!SymInitialize(process, NULL, TRUE)) {
+			stackTrace = "Failed to initialize symbol handler";
+		} else {
+			SymSetOptions(SYMOPT_LOAD_LINES);
 
-	CONTEXT *context = exceptionInfo->ContextRecord;
-	STACKFRAME64 stackFrame = {};
-	stackFrame.AddrPC.Mode = AddrModeFlat;
-	stackFrame.AddrFrame.Mode = AddrModeFlat;
-	stackFrame.AddrStack.Mode = AddrModeFlat;
+			CONTEXT *context = exceptionInfo->ContextRecord;
+			STACKFRAME64 stackFrame = {};
+			stackFrame.AddrPC.Mode = AddrModeFlat;
+			stackFrame.AddrFrame.Mode = AddrModeFlat;
+			stackFrame.AddrStack.Mode = AddrModeFlat;
 
 #ifdef _WIN64
-	stackFrame.AddrPC.Offset = context->Rip;
-	stackFrame.AddrFrame.Offset = context->Rbp;
-	stackFrame.AddrStack.Offset = context->Rsp;
+			stackFrame.AddrPC.Offset = context->Rip;
+			stackFrame.AddrFrame.Offset = context->Rbp;
+			stackFrame.AddrStack.Offset = context->Rsp;
 #else
-	stackFrame.AddrPC.Offset = context->Eip;
-	stackFrame.AddrFrame.Offset = context->Ebp;
-	stackFrame.AddrStack.Offset = context->Esp;
+			stackFrame.AddrPC.Offset = context->Eip;
+			stackFrame.AddrFrame.Offset = context->Ebp;
+			stackFrame.AddrStack.Offset = context->Esp;
 #endif
 
-	QStringList stackLines;
-	int frameCount = 0;
-	const int maxFrames = 50;
+			QStringList stackLines;
+			int frameCount = 0;
+			const int maxFrames = 50;
 
-	while (StackWalk64(
+			while (StackWalk64(
 #ifdef _WIN64
-		IMAGE_FILE_MACHINE_AMD64,
+				IMAGE_FILE_MACHINE_AMD64,
 #else
-		IMAGE_FILE_MACHINE_I386,
+				IMAGE_FILE_MACHINE_I386,
 #endif
-		process,
-		GetCurrentThread(),
-		&stackFrame,
-		context,
-		NULL,
-		SymFunctionTableAccess64,
-		SymGetModuleBase64,
-		NULL) && frameCount < maxFrames) {
+				process,
+				GetCurrentThread(),
+				&stackFrame,
+				context,
+				NULL,
+				SymFunctionTableAccess64,
+				SymGetModuleBase64,
+				NULL) && frameCount < maxFrames) {
 
-		// Определяем модуль по адресу
-		HMODULE hModule = NULL;
-		QString moduleName = "<unknown>";
-		DWORD64 moduleBase = 0;
-		
-		if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			(LPCTSTR)stackFrame.AddrPC.Offset, &hModule)) {
-			wchar_t modulePath[MAX_PATH];
-			if (GetModuleFileNameW(hModule, modulePath, MAX_PATH)) {
-				QString fullPath = QString::fromWCharArray(modulePath);
-				QFileInfo fileInfo(fullPath);
-				moduleName = fileInfo.fileName();
-				moduleBase = SymGetModuleBase64(process, stackFrame.AddrPC.Offset);
+				// Определяем модуль по адресу (безопасно, без Qt классов)
+				HMODULE hModule = NULL;
+				char moduleName[MAX_PATH] = "<unknown>";
+				DWORD64 moduleBase = 0;
+				
+				__try {
+					if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+						(LPCTSTR)stackFrame.AddrPC.Offset, &hModule)) {
+						wchar_t modulePath[MAX_PATH];
+						if (GetModuleFileNameW(hModule, modulePath, MAX_PATH)) {
+							// Извлекаем только имя файла без Qt классов
+							const wchar_t* fileName = wcsrchr(modulePath, L'\\');
+							if (fileName) {
+								fileName++; // Пропускаем обратный слэш
+							} else {
+								fileName = modulePath;
+							}
+							// Конвертируем в char (упрощенно, только ASCII)
+							int i = 0;
+							while (fileName[i] && i < MAX_PATH - 1) {
+								moduleName[i] = (char)fileName[i];
+								i++;
+							}
+							moduleName[i] = '\0';
+							moduleBase = SymGetModuleBase64(process, stackFrame.AddrPC.Offset);
+						}
+					}
+				} __except(EXCEPTION_EXECUTE_HANDLER) {
+					// Игнорируем исключения при получении информации о модуле
+					strcpy_s(moduleName, "<unknown>");
+				}
+				
+				// Получаем информацию о символе (безопасно)
+				char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(char)];
+				PSYMBOL_INFO symbolInfo = (PSYMBOL_INFO)symbolBuffer;
+				symbolInfo->SizeOfStruct = sizeof(SYMBOL_INFO);
+				symbolInfo->MaxNameLen = MAX_SYM_NAME;
+
+				DWORD64 displacement = 0;
+				QString symbolName = "<unknown symbol>";
+				__try {
+					if (SymFromAddr(process, stackFrame.AddrPC.Offset, &displacement, symbolInfo)) {
+						symbolName = QString::fromLocal8Bit(symbolInfo->Name);
+					}
+				} __except(EXCEPTION_EXECUTE_HANDLER) {
+					// Игнорируем исключения при получении символов
+				}
+				
+				// Вычисляем смещение внутри модуля
+				DWORD64 offsetInModule = stackFrame.AddrPC.Offset - moduleBase;
+				
+				// Формируем строку stack trace с полной информацией
+				QString frameInfo = QString("#%1 0x%2 [%3+0x%4] %5")
+					.arg(frameCount)
+					.arg(stackFrame.AddrPC.Offset, 0, 16)
+					.arg(QString::fromLocal8Bit(moduleName))
+					.arg(offsetInModule, 0, 16)
+					.arg(symbolName);
+				
+				stackLines << frameInfo;
+				frameCount++;
 			}
-		}
-		
-		// Получаем информацию о символе
-		char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(char)];
-		PSYMBOL_INFO symbolInfo = (PSYMBOL_INFO)symbolBuffer;
-		symbolInfo->SizeOfStruct = sizeof(SYMBOL_INFO);
-		symbolInfo->MaxNameLen = MAX_SYM_NAME;
 
-		DWORD64 displacement = 0;
-		QString symbolName = "<unknown symbol>";
-		if (SymFromAddr(process, stackFrame.AddrPC.Offset, &displacement, symbolInfo)) {
-			symbolName = QString::fromLocal8Bit(symbolInfo->Name);
+			SymCleanup(process);
+			stackTrace = stackLines.join("\n");
 		}
-		
-		// Вычисляем смещение внутри модуля
-		DWORD64 offsetInModule = stackFrame.AddrPC.Offset - moduleBase;
-		
-		// Формируем строку stack trace с полной информацией
-		QString frameInfo = QString("#%1 0x%2 [%3+0x%4] %5")
-			.arg(frameCount)
-			.arg(stackFrame.AddrPC.Offset, 0, 16)
-			.arg(moduleName)
-			.arg(offsetInModule, 0, 16)
-			.arg(symbolName);
-		
-		stackLines << frameInfo;
-		frameCount++;
+	} catch (...) {
+		// Если что-то пошло не так, используем простой stack trace
+		stackTrace = "Failed to generate detailed stack trace";
 	}
-
-	SymCleanup(process);
-	stackTrace = stackLines.join("\n");
 
 	// Отправляем отчет
 	SendReport(errorType, message, stackTrace);
