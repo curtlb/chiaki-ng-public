@@ -11,6 +11,7 @@ Dialog {
     modal: true
     
     property bool isConfiguring: false
+    property bool autoConfigCompleted: false
     property string currentTaskMessage: ""
     property string errorMessage: ""
     
@@ -106,7 +107,7 @@ Dialog {
                 Button {
                     id: startButton
                     text: autoConfigDialog.isConfiguring ? qsTr("Настройка...") : qsTr("Начать")
-                    enabled: !autoConfigDialog.isConfiguring && loginField.text.length > 0 && passwordField.text.length > 0
+                    enabled: !autoConfigDialog.isConfiguring && !autoConfigDialog.autoConfigCompleted && loginField.text.length > 0 && passwordField.text.length > 0
                     highlighted: true
                     onClicked: {
                         autoConfigDialog.errorMessage = ""
@@ -129,6 +130,7 @@ Dialog {
         
         function onAutoConfigSuccess() {
             autoConfigDialog.isConfiguring = false
+            autoConfigDialog.autoConfigCompleted = true
             autoConfigDialog.currentTaskMessage = "✓ Автоматическая настройка успешно завершена!\nРазбудите консоль перед подключением (если кнопка доступна) и подключайтесь нажатием на иконку с консолью."
         }
         
@@ -138,11 +140,17 @@ Dialog {
         }
     }
     
+    onOpened: {
+        // Сбрасываем состояние при открытии диалога
+        autoConfigDialog.autoConfigCompleted = false
+    }
+    
     onRejected: {
         loginField.text = ""
         passwordField.text = ""
         autoConfigDialog.currentTaskMessage = ""
         autoConfigDialog.errorMessage = ""
+        autoConfigDialog.autoConfigCompleted = false
     }
 }
 
