@@ -140,9 +140,14 @@ Dialog {
         }
     }
     
-    onOpened: {
+    onVisibleChanged: {
         // Сбрасываем состояние при открытии диалога
-        autoConfigDialog.autoConfigCompleted = false
+        if (visible) {
+            autoConfigDialog.autoConfigCompleted = false
+            autoConfigDialog.isConfiguring = false
+            autoConfigDialog.currentTaskMessage = ""
+            autoConfigDialog.errorMessage = ""
+        }
     }
     
     onRejected: {
