@@ -1906,6 +1906,8 @@ void QmlSettings::importSettings()
     if(fileName.isEmpty())
         return;
     settings->ImportSettings(std::move(fileName));
+    // Автоматически устанавливаем декодер на d3d11va после импорта
+    settings->SetHardwareDecoder("d3d11va");
     refreshAllKeys();
 }
 
