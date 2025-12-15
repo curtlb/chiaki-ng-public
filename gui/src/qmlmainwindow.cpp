@@ -32,44 +32,6 @@ extern "C" {
 
 Q_LOGGING_CATEGORY(chiakiGui, "chiaki.gui", QtInfoMsg);
 
-<<<<<<< Updated upstream
-=======
-#if defined(Q_OS_WIN)
-// Глобальный обработчик необработанных исключений для graceful shutdown
-LONG WINAPI UnhandledExceptionFilter(EXCEPTION_POINTERS *ExceptionInfo)
-{
-    if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
-        // Логируем информацию о краше
-        DWORD64 address = (DWORD64)ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
-        qCCritical(chiakiGui) << "Access Violation caught at address" << QString::number(address, 16) 
-                              << ": attempting graceful shutdown";
-        
-        // Пытаемся выполнить graceful shutdown
-        // Но это может быть небезопасно, так как состояние приложения может быть повреждено
-        // Лучше просто логировать и позволить системе обработать краш
-        // return EXCEPTION_EXECUTE_HANDLER; // Это может быть опасно
-        
-        // Возвращаем EXCEPTION_CONTINUE_SEARCH чтобы система обработала краш
-        // Но мы хотя бы логируем информацию
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-
-// Обработчик сигнала SIGSEGV для MinGW
-void sigsegv_handler(int sig)
-{
-    qCCritical(chiakiGui) << "SIGSEGV caught: attempting graceful shutdown";
-    // Устанавливаем обработчик обратно на default
-    signal(SIGSEGV, SIG_DFL);
-    // Пытаемся выполнить graceful shutdown
-    // Но это может быть небезопасно, так как состояние приложения может быть повреждено
-    // Лучше просто логировать и позволить системе обработать краш
-    // QCoreApplication::quit(); // Это может быть опасно
-}
-#endif
-
->>>>>>> Stashed changes
 static void placebo_log_cb(void *user, pl_log_level level, const char *msg)
 {
     ChiakiLogLevel chiaki_level;
@@ -172,58 +134,7 @@ QmlMainWindow::~QmlMainWindow()
         av_frame_free(&screenshot_frame);
     }
 
-<<<<<<< Updated upstream
     av_buffer_unref(&vulkan_hw_dev_ctx);
-=======
-    // Блокируем frame_mutex перед освобождением hardware context
-    // чтобы убедиться, что render() не обращается к нему
-    frame_mutex.lock();
-    
-    // Освобождаем текущий кадр, если он использует hardware context
-    if (av_frame) {
-        av_frame_free(&av_frame);
-        av_frame = nullptr;
-    }
-    
-    // Обнуляем callback функции и user_opaque перед освобождением контекста
-    // чтобы FFmpeg не вызывал callback функции после уничтожения объекта
-    if (vulkan_hw_dev_ctx) {
-        AVHWDeviceContext *hwctx = reinterpret_cast<AVHWDeviceContext*>(vulkan_hw_dev_ctx->data);
-        if (hwctx) {
-            AVVulkanDeviceContext *vkctx = reinterpret_cast<AVVulkanDeviceContext*>(hwctx->hwctx);
-            if (vkctx) {
-                // Обнуляем callback функции перед обнулением user_opaque
-                vkctx->lock_queue = nullptr;
-                vkctx->unlock_queue = nullptr;
-            }
-            hwctx->user_opaque = nullptr;
-        }
-    }
-    
-    frame_mutex.unlock();
-    
-    // Безопасно освобождаем hardware context с обработкой ошибок
-    // Если FFmpeg все еще использует контекст, это может вызвать краш
-    // Но мы уже обнулили callback функции, так что это должно быть безопасно
-    if (vulkan_hw_dev_ctx) {
-        // Дополнительная задержка перед освобождением - даем время FFmpeg полностью завершить работу
-        // FFmpeg может продолжать использовать hardware context даже после уничтожения декодера
-        // Используем очень длительную задержку, чтобы гарантировать завершение всех операций
-        for (int i = 0; i < 30; i++) {
-            QThread::msleep(200);
-            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-        }
-        
-        // Финальная задержка перед освобождением
-        QThread::msleep(1000);
-        
-        // Теперь безопасно освобождаем контекст
-        // Если FFmpeg все еще использует его, это вызовет краш, но мы уже сделали все возможное
-        // В этом случае сработает SEH обработчик для graceful shutdown
-        av_buffer_unref(&vulkan_hw_dev_ctx);
-        vulkan_hw_dev_ctx = nullptr;
-    }
->>>>>>> Stashed changes
 
     pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
     pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);

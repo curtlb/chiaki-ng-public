@@ -274,36 +274,6 @@ DialogView {
             }
 
             TabButton {
-                text: "Второй геймпад"
-                id: secondController
-                focusPolicy: Qt.NoFocus
-                Image {
-                    anchors {
-                        right: secondController.left
-                        verticalCenter: parent.verticalCenter
-                        rightMargin: -15
-                    }
-                    width: 28
-                    height: 28
-                    sourceSize: Qt.size(width, height)
-                    source: "qrc:/icons/r1.svg"
-                    visible: bar.currentIndex == 6
-                }
-                Image {
-                    anchors {
-                        left: secondController.right
-                        verticalCenter: parent.verticalCenter
-                        leftMargin: -15
-                    }
-                    width: 28
-                    height: 28
-                    sourceSize: Qt.size(width, height)
-                    source: "qrc:/icons/l1.svg"
-                    visible: bar.currentIndex == 8
-                }
-            }
-
-            TabButton {
                 text: "Конфигурация"
                 id: config
                 focusPolicy: Qt.NoFocus
@@ -317,7 +287,7 @@ DialogView {
                     height: 28
                     sourceSize: Qt.size(width, height)
                     source: "qrc:/icons/r1.svg"
-                    visible: bar.currentIndex == 7
+                    visible: bar.currentIndex == 6
                 }
             }
         }
@@ -2514,164 +2484,6 @@ DialogView {
                                 text: qsTr("(console setting)")
                             }
                         }
-                    }
-                }
-            }
-
-            Item {
-                // Second Gamepad
-                property string secondPadEmail: ""
-                property string secondPadPassword: ""
-                property string secondPadJwt: ""
-                property string secondPadIp: ""
-                property int secondPadPort: 0
-                property string secondPadMessage: ""
-                property bool secondPadBusy: false
-
-                function doRequest(url, onDone) {
-                    let xhr = new XMLHttpRequest();
-                    secondPadBusy = true;
-                    xhr.onreadystatechange = function() {
-                        if (xhr.readyState === XMLHttpRequest.DONE) {
-                            secondPadBusy = false;
-                            if (xhr.status !== 200) {
-                                onDone(false, "HTTP " + xhr.status + ": " + xhr.responseText);
-                                return;
-                            }
-                            try {
-                                const json = JSON.parse(xhr.responseText);
-                                onDone(true, json);
-                            } catch (e) {
-                                onDone(false, "Parse error: " + e);
-                            }
-                        }
-                    };
-                    xhr.open("GET", url);
-                    xhr.send();
-                }
-
-                function handleSignIn() {
-                    secondPadMessage = "";
-                    secondPadJwt = "";
-                    secondPadIp = "";
-                    secondPadPort = 0;
-
-                    const email = emailField.text.trim();
-                    const pass = passwordField.text;
-                    if (!email || !pass) {
-                        secondPadMessage = "Введите логин и пароль";
-                        return;
-                    }
-                    const url = "https://4cloud.pro/.new/api.php?method=sign-in&Email=" + encodeURIComponent(email) + "&Password=" + encodeURIComponent(pass);
-                    doRequest(url, function(ok, res) {
-                        if (!ok) {
-                            secondPadMessage = res;
-                            return;
-                        }
-                        if (res.status !== "success" || !res.jwt) {
-                            secondPadMessage = res.message ? res.message : "Ошибка авторизации";
-                            return;
-                        }
-                        secondPadJwt = res.jwt;
-                        handleGetSrp(res.jwt);
-                    });
-                }
-
-                function handleGetSrp(jwt) {
-                    const url = "https://4cloud.pro/api.php?method=get-srp-id&jwt=" + encodeURIComponent(jwt);
-                    doRequest(url, function(ok, res) {
-                        if (!ok) {
-                            secondPadMessage = res;
-                            return;
-                        }
-                        if (!Array.isArray(res) || res.length === 0) {
-                            secondPadMessage = "Пустой ответ get-srp-id";
-                            return;
-                        }
-                        const first = res[0];
-                        if (first.Port === "Not found") {
-                            secondPadMessage = "У вас нет активной подписки на второй геймпад";
-                            return;
-                        }
-                        if (!first.Port || !first.IP) {
-                            secondPadMessage = "Некорректный ответ get-srp-id";
-                            return;
-                        }
-                        secondPadIp = first.IP;
-                        secondPadPort = first.Port;
-                        secondPadMessage = "Второй геймпад готов: " + first.IP + ":" + first.Port;
-                    });
-                }
-
-                ColumnLayout {
-                    anchors {
-                        top: parent.top
-                        horizontalCenter: parent.horizontalCenter
-                        topMargin: 20
-                    }
-                    spacing: 12
-
-                    Label {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: "Авторизация для второго геймпада"
-                        font.bold: true
-                    }
-
-                    GridLayout {
-                        columns: 2
-                        columnSpacing: 10
-                        rowSpacing: 8
-
-                        Label { text: "Логин (Email)" }
-                        TextField {
-                            id: emailField
-                            Layout.preferredWidth: 300
-                            placeholderText: "example@mail.com"
-                        }
-
-                        Label { text: "Пароль" }
-                        TextField {
-                            id: passwordField
-                            Layout.preferredWidth: 300
-                            echoMode: TextInput.Password
-                        }
-                    }
-
-                    RowLayout {
-                        spacing: 10
-                        Layout.alignment: Qt.AlignHCenter
-                        C.Button {
-                            id: authButton
-                            text: secondPadBusy ? "Выполняется..." : "Войти"
-                            enabled: !secondPadBusy
-                            onClicked: handleSignIn()
-                        }
-                        C.Button {
-                            text: "Сброс"
-                            enabled: !secondPadBusy
-                            onClicked: {
-                                emailField.text = "";
-                                passwordField.text = "";
-                                secondPadJwt = "";
-                                secondPadIp = "";
-                                secondPadPort = 0;
-                                secondPadMessage = "";
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: secondPadMessage
-                        color: "orange"
-                    }
-
-                    Label {
-                        visible: secondPadIp !== "" && secondPadPort !== 0
-                        text: "WSS хост: " + secondPadIp + ":" + secondPadPort
-                        font.bold: true
-                        color: "lightgreen"
                     }
                 }
             }
