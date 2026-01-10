@@ -266,6 +266,7 @@ endif()
 
 if(CHIAKI_ENABLE_GUI)
 	add_subdirectory(gui)
+	add_subdirectory(tools)
 endif()
 
 if(CHIAKI_ENABLE_TESTS)

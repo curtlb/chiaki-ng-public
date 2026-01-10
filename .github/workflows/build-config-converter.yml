@@ -1,0 +1,134 @@
+name: Build Config Converter Tool
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/**'
+      - 'gui/src/settings.cpp'
+      - 'gui/src/host.cpp'
+      - 'gui/include/**'
+      - 'CMakeLists.txt'
+      - 'gui/CMakeLists.txt'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/**'
+      - 'gui/src/settings.cpp'
+      - 'gui/src/host.cpp'
+      - 'gui/include/**'
+      - 'CMakeLists.txt'
+      - 'gui/CMakeLists.txt'
+
+jobs:
+  build-config-converter:
+    name: Build config converter tool
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Disable autocrlf
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: mingw64
+          update: true
+          install: git make unzip zip
+          pacboy: >-
+            ca-certificates:p
+            cc:p
+            cmake:p
+            curl:p
+            diffutils:p
+            gcc:p
+            ninja:p
+            openssl:p
+            pkgconf:p
+            python:p
+            python-pip:p
+            qt6-base:p
+            
+      - name: Install Python dependencies
+        run: |
+          pip install protobuf
+          
+      - name: Configure chiaki-ng
+        run: |
+          cmake -S . -B build -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCHIAKI_ENABLE_GUI=ON \
+            -DCHIAKI_ENABLE_CLI=OFF \
+            -DCHIAKI_ENABLE_TESTS=OFF \
+            -DCMAKE_PREFIX_PATH="/mingw64"
+            
+      - name: Build config converter only
+        run: |
+          cmake --build build --config Release --target chiaki-config-converter
+          
+      - name: Prepare artifact
+        run: |
+          mkdir -p chiaki-config-converter
+          cp build/tools/chiaki-config-converter.exe chiaki-config-converter/
+          echo "Config converter tool built successfully!"
+          ls -lh chiaki-config-converter/
+          
+      - name: Collect Qt6 dependencies
+        run: |
+          export PATH="/mingw64/share/qt6/bin/:${PATH}"
+          export QT_PLUGIN_PATH="/mingw64/share/qt6/plugins"
+          
+          echo "Collecting DLL dependencies..."
+          echo chiaki-config-converter/chiaki-config-converter.exe > tmp0.txt
+          while [ -e tmp0.txt ]; do
+            cp tmp0.txt tmp.txt
+            rm tmp0.txt
+            sort -u tmp.txt -o tmp.txt
+            ldd $(<tmp.txt) | grep -v ":" | cut -d " " -f3 | grep -iv "system32" | grep -iv "not" | xargs -d $'\n' sh -c 'for arg do if [ -n "$arg" ] && [ ! -e "chiaki-config-converter/${arg##*/}" ]; then echo "Copied $arg"; cp "$arg" chiaki-config-converter/ ; echo "$arg" >> tmp0.txt; fi; done' || true
+          done
+          
+          echo "Running windeployqt6 for Qt6 Core..."
+          windeployqt6.exe --verbose 0 --no-translations --no-opengl-sw chiaki-config-converter/chiaki-config-converter.exe
+          
+      - name: Package tool
+        run: |
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          PACKAGE_FILE="chiaki-config-converter-win_x64-${SHORT_SHA}.zip"
+          zip -r $PACKAGE_FILE chiaki-config-converter
+          echo "PACKAGE_PATH=${PACKAGE_FILE}" >> $GITHUB_ENV
+          echo "Package created: ${PACKAGE_FILE}"
+          ls -lh ${PACKAGE_FILE}
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chiaki-config-converter-windows
+          path: ${{ env.PACKAGE_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          
+      - name: Build summary
+        run: |
+          echo "## ✅ Config Converter Tool Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact:** \`${{ env.PACKAGE_PATH }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Usage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "./chiaki-config-converter.exe -i input.ini -o output.json" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
