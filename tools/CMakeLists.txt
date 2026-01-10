@@ -12,7 +12,7 @@ if(CHIAKI_ENABLE_GUI)
 	target_link_libraries(chiaki-config-converter
 		PRIVATE
 		Qt6::Core
-		chiaki
+		chiaki-lib
 	)
 	
 	target_include_directories(chiaki-config-converter
