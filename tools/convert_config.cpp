@@ -99,16 +99,16 @@ int main(int argc, char *argv[])
 	QCoreApplication::setApplicationVersion("1.0");
 	
 	QCommandLineParser parser;
-	parser.setApplicationDescription("Конвертирует INI конфиг chiaki-ng в JSON формат для Android");
+	parser.setApplicationDescription("Converts Chiaki-ng INI config to JSON format for Android");
 	parser.addHelpOption();
 	parser.addVersionOption();
 	
 	QCommandLineOption inputOption(QStringList() << "i" << "input",
-		"Входной INI файл", "file");
+		"Input INI file", "file");
 	parser.addOption(inputOption);
 	
 	QCommandLineOption outputOption(QStringList() << "o" << "output",
-		"Выходной JSON файл", "file");
+		"Output JSON file", "file");
 	parser.addOption(outputOption);
 	
 	parser.process(app);
@@ -118,7 +118,7 @@ int main(int argc, char *argv[])
 	
 	if(inputFile.isEmpty())
 	{
-		qCritical() << "Ошибка: не указан входной файл";
+		qCritical() << "Error: input file not specified";
 		parser.showHelp(1);
 	}
 	
@@ -139,12 +139,11 @@ int main(int argc, char *argv[])
 	
 	QJsonObject settings;
 	QJsonArray registeredHosts;
+	QJsonArray manualHosts;
 	
-	// Загружаем registered_hosts
-	int count = iniSettings.beginReadArray("registered_hosts");
-	
-	// Определяем активный хост (из manual_hosts с registered=true)
+	// Сначала определяем активный хост из manual_hosts (с registered=true)
 	QString activeMac;
+	QString activeManualHost;
 	int manualCount = iniSettings.beginReadArray("manual_hosts");
 	for(int i = 0; i < manualCount; i++)
 	{
@@ -155,24 +154,32 @@ int main(int argc, char *argv[])
 			QByteArray registeredMacBytes = iniSettings.value("registered_mac").toByteArray();
 			if(registeredMacBytes.size() == 6)
 			{
-				activeMac = macToHex((const uint8_t *)registeredMacBytes.constData(), 6);
-				break;
+				QString mac = macToHex((const uint8_t *)registeredMacBytes.constData(), 6);
+				QString host = iniSettings.value("host").toString();
+				if(!host.isEmpty())
+				{
+					activeMac = mac;
+					activeManualHost = host;
+					break;
+				}
 			}
 		}
 	}
 	iniSettings.endArray();
 	
+	// Загружаем registered_hosts
+	int count = iniSettings.beginReadArray("registered_hosts");
+	
 	// Если не нашли активный хост в manual_hosts, берем первый из registered_hosts
 	if(activeMac.isEmpty() && count > 0)
 	{
 		iniSettings.setArrayIndex(0);
-		QByteArray firstMacBytes = iniSettings.value("server_mac").toByteArray();
-		if(firstMacBytes.size() == 6)
-		{
-			activeMac = macToHex((const uint8_t *)firstMacBytes.constData(), 6);
-		}
+		RegisteredHost firstHost = RegisteredHost::LoadFromSettings(&iniSettings);
+		HostMAC firstHostMAC = firstHost.GetServerMAC();
+		activeMac = macToHex(firstHostMAC.GetMAC(), 6);
 	}
 	
+	// Читаем все registered_hosts и оставляем только активный
 	for(int i = 0; i < count; i++)
 	{
 		iniSettings.setArrayIndex(i);
@@ -183,14 +190,17 @@ int main(int argc, char *argv[])
 		// Проверяем, соответствует ли этот хост активному
 		HostMAC hostMAC = host.GetServerMAC();
 		QString hostMac = macToHex(hostMAC.GetMAC(), 6);
+		
+		// Если activeMac пуст, берем первый; иначе берем только соответствующий
 		if(activeMac.isEmpty() || hostMac == activeMac)
 		{
-			// Используем текущий контекст QSettings для чтения значений
+			// Обновляем activeMac, если он был пуст
+			if(activeMac.isEmpty())
+				activeMac = hostMac;
+			
 			QJsonObject hostJson = hostToJson(host);
 			
-			// Добавляем строковые поля из QSettings (они правильно распарсены)
-			// Но после LoadFromSettings значения уже в host
-			// Читаем из QSettings для получения оригинальных строковых значений
+			// Читаем строковые поля из QSettings (они правильно распарсены)
 			QString ap_ssid = iniSettings.value("ap_ssid").toString();
 			hostJson["ap_ssid"] = ap_ssid.isEmpty() ? "" : ap_ssid;
 			
@@ -208,7 +218,7 @@ int main(int argc, char *argv[])
 			registeredHosts.append(hostJson);
 			
 			// Если нашли активный хост, останавливаемся
-			if(!activeMac.isEmpty())
+			if(!activeMac.isEmpty() && hostMac == activeMac)
 				break;
 		}
 	}
@@ -216,48 +226,13 @@ int main(int argc, char *argv[])
 	
 	settings["registered_hosts"] = registeredHosts;
 	
-	// Загружаем manual_hosts (только те, что соответствуют активному хосту)
-	QJsonArray manualHosts;
-	if(registeredHosts.size() > 0)
+	// Добавляем manual_host для активного хоста (если есть)
+	if(!activeMac.isEmpty() && !activeManualHost.isEmpty())
 	{
-		// Берем MAC первого зарегистрированного хоста
-		QString activeMac;
-		if(registeredHosts[0].isObject())
-		{
-			QJsonObject firstHost = registeredHosts[0].toObject();
-			if(firstHost.contains("server_mac"))
-				activeMac = firstHost["server_mac"].toString();
-		}
-		
-		// Ищем manual_host с registered=true и соответствующим MAC
-		int manualCount = iniSettings.beginReadArray("manual_hosts");
-		for(int i = 0; i < manualCount; i++)
-		{
-			iniSettings.setArrayIndex(i);
-			
-			bool registered = iniSettings.value("registered").toBool();
-			if(registered)
-			{
-				QByteArray registeredMacBytes = iniSettings.value("registered_mac").toByteArray();
-				if(registeredMacBytes.size() == 6)
-				{
-					QString registeredMac = macToHex((const uint8_t *)registeredMacBytes.constData(), 6);
-					if(registeredMac == activeMac)
-					{
-						QString host = iniSettings.value("host").toString();
-						if(!host.isEmpty())
-						{
-							QJsonObject manualHost;
-							manualHost["host"] = host;
-							manualHost["server_mac"] = registeredMac;
-							manualHosts.append(manualHost);
-							break; // Берем только первый подходящий
-						}
-					}
-				}
-			}
-		}
-		iniSettings.endArray();
+		QJsonObject manualHost;
+		manualHost["host"] = activeManualHost;
+		manualHost["server_mac"] = activeMac;
+		manualHosts.append(manualHost);
 	}
 	
 	settings["manual_hosts"] = manualHosts;
@@ -268,18 +243,18 @@ int main(int argc, char *argv[])
 	QFile outFile(outputFile);
 	if(!outFile.open(QIODevice::WriteOnly))
 	{
-		qCritical() << "Ошибка: не удалось открыть файл для записи:" << outputFile;
+		qCritical() << "Error: failed to open output file:" << outputFile;
 		return 1;
 	}
 	
 	outFile.write(doc.toJson(QJsonDocument::Indented));
 	outFile.close();
 	
-	qInfo() << "Конвертация завершена:";
-	qInfo() << "  Входной файл:" << inputFile;
-	qInfo() << "  Выходной файл:" << outputFile;
-	qInfo() << "  Зарегистрированных хостов:" << registeredHosts.size();
-	qInfo() << "  Ручных хостов:" << manualHosts.size();
+	qInfo() << "Conversion completed:";
+	qInfo() << "  Input file:" << inputFile;
+	qInfo() << "  Output file:" << outputFile;
+	qInfo() << "  Registered hosts:" << registeredHosts.size();
+	qInfo() << "  Manual hosts:" << manualHosts.size();
 	
 	return 0;
 }
