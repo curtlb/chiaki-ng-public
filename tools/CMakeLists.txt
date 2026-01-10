@@ -1,7 +1,7 @@
 # Инструмент для конвертации INI конфига в JSON формат
 
 if(CHIAKI_ENABLE_GUI)
-	find_package(Qt6 REQUIRED COMPONENTS Core)
+	find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 	
 	# SDL2 нужен для settings.cpp (он включает SDL.h)
 	find_package(SDL2 MODULE REQUIRED)
@@ -15,6 +15,8 @@ if(CHIAKI_ENABLE_GUI)
 	target_link_libraries(chiaki-config-converter
 		PRIVATE
 		Qt6::Core
+		Qt6::Gui
+		Qt6::Widgets
 		chiaki-lib
 	)
 	
