@@ -18,20 +18,20 @@ static QString targetToString(ChiakiTarget target)
 {
 	switch(target)
 	{
+		case CHIAKI_TARGET_PS4_8: return "PS4_8";
+		case CHIAKI_TARGET_PS4_9: return "PS4_9";
 		case CHIAKI_TARGET_PS4_10: return "PS4_10";
-		case CHIAKI_TARGET_PS4_11: return "PS4_11";
-		case CHIAKI_TARGET_PS4_12: return "PS4_12";
-		case CHIAKI_TARGET_PS5: return "PS5_1";
+		case CHIAKI_TARGET_PS5_1: return "PS5_1";
 		default: return "PS4_10";
 	}
 }
 
 static ChiakiTarget stringToTarget(const QString &str)
 {
+	if(str == "PS4_8") return CHIAKI_TARGET_PS4_8;
+	if(str == "PS4_9") return CHIAKI_TARGET_PS4_9;
 	if(str == "PS4_10") return CHIAKI_TARGET_PS4_10;
-	if(str == "PS4_11") return CHIAKI_TARGET_PS4_11;
-	if(str == "PS4_12") return CHIAKI_TARGET_PS4_12;
-	if(str == "PS5_1") return CHIAKI_TARGET_PS5;
+	if(str == "PS5_1") return CHIAKI_TARGET_PS5_1;
 	return CHIAKI_TARGET_PS4_10;
 }
 
