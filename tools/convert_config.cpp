@@ -3,7 +3,6 @@
 // Инструмент для конвертации INI конфига chiaki-ng в JSON формат для Android
 // Использует нативные библиотеки chiaki-ng для правильного парсинга @ByteArray
 
-#include <settings.h>
 #include <host.h>
 #include <QCoreApplication>
 #include <QSettings>
