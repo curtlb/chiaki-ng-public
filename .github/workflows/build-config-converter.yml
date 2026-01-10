@@ -52,17 +52,31 @@ jobs:
             cmake:p
             curl:p
             diffutils:p
+            fast_float:p
             gcc:p
+            json-c:p
+            lcms2:p
+            libdovi:p
+            meson:p
+            nasm:p
             ninja:p
             openssl:p
             pkgconf:p
             python:p
             python-pip:p
             qt6-base:p
+            shaderc:p
+            spirv-cross:p
+            vulkan:p
+            vulkan-headers:p
             
       - name: Install Python dependencies
         run: |
           pip install protobuf
+          
+      - name: Build libplacebo
+        run: |
+          scripts/build-libplacebo-windows.sh
           
       - name: Configure chiaki-ng
         run: |
