@@ -23,6 +23,7 @@
 #endif
 
 class SystemdInhibit;
+class JwtManager;
 #ifdef Q_OS_MACOS
     class MacWakeSleep;
 #elif defined(Q_OS_WINDOWS)

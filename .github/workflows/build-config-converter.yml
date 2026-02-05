@@ -3,7 +3,7 @@ name: Build Config Converter Tool
 on:
   push:
     branches:
-      - main
+      
     paths:
       - 'tools/**'
       - 'gui/src/settings.cpp'

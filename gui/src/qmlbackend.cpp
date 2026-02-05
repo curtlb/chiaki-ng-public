@@ -1548,7 +1548,8 @@ void QmlBackend::waitForOnlineStatus(int index, QString nickname, QString np)
     emit splashStatusUpdate("Ожидание статуса Онлайн...", "Проверка статуса консоли...", 50);
 
     // Check console status
-    jwt_manager->getConsoleStatus(np, [this, index, nickname, np](const QString &status) {
+    JwtManager *jwt_mgr = jwt_manager;
+    jwt_manager->getConsoleStatus(np, [this, index, nickname, np, jwt_mgr](const QString &status) {
         QString statusText = status.trimmed();
         emit splashStatusUpdate("Ожидание статуса Онлайн...", "Статус: " + statusText, 50);
 
@@ -1565,7 +1566,7 @@ void QmlBackend::waitForOnlineStatus(int index, QString nickname, QString np)
             });
             
             // Send wakeup via API again
-            jwt_manager->sendWakeupViaApi(np);
+            jwt_mgr->sendWakeupViaApi(np);
         } else {
             // Unknown status, check again
             QTimer::singleShot(5000, this, [this, index, nickname, np]() {
@@ -2670,7 +2671,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
     
     QNetworkReply *reply = network_manager->get(request);
     
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, login]() {
         QByteArray responseData = reply->readAll();
         
         qCInfo(chiakiGui) << "AutoConfig response - Status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt()
