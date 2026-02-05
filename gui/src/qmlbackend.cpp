@@ -163,7 +163,10 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     connect(window, &QmlMainWindow::activeChanged, this, &QmlBackend::setIsAppActive);
     setAllowJoystickBackgroundEvents();
     setIsAppActive();
-    ControllerManager::GetInstance()->SetIsAppActive(window->isActive());
+    // window->isActive() may not be available immediately, use a safe default
+    if (window) {
+        ControllerManager::GetInstance()->SetIsAppActive(window->isActive());
+    }
     updateControllers();
     updateControllerMappings();
     connect(settings, &Settings::ControllerMappingsUpdated, this, &QmlBackend::updateControllerMappings);
