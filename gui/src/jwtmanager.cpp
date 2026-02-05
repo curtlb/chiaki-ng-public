@@ -34,8 +34,16 @@ JwtManager::~JwtManager()
 QSettings* JwtManager::getSettings()
 {
     QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
+    if (configPath.isEmpty()) {
+        qCWarning(chiakiGui) << "JwtManager: Cannot get config location, using fallback";
+        configPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    }
     QDir configDir(configPath);
-    configDir.mkpath("Chiaki");
+    if (!configDir.exists("Chiaki")) {
+        if (!configDir.mkpath("Chiaki")) {
+            qCWarning(chiakiGui) << "JwtManager: Cannot create Chiaki config directory";
+        }
+    }
     QString settingsPath = configPath + "/Chiaki/auth.ini";
     return new QSettings(settingsPath, QSettings::IniFormat);
 }

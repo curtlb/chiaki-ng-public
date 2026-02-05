@@ -252,8 +252,8 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
 #endif
     refreshPsnToken();
     
-    // Check JWT on startup
-    checkJwtOnStartup();
+    // Check JWT on startup - delay to ensure QML is loaded
+    QTimer::singleShot(100, this, &QmlBackend::checkJwtOnStartup);
 }
 
 QmlBackend::~QmlBackend()
@@ -620,6 +620,13 @@ bool QmlBackend::loginRequired() const
 void QmlBackend::checkJwtOnStartup()
 {
     qCInfo(chiakiGui) << "checkJwtOnStartup: Starting JWT check";
+    if (!jwt_manager) {
+        qCWarning(chiakiGui) << "checkJwtOnStartup: jwt_manager is null!";
+        login_required = true;
+        emit loginRequiredChanged();
+        return;
+    }
+    
     QString jwt = JwtManager::getJwt();
     if (jwt.isEmpty()) {
         qCInfo(chiakiGui) << "checkJwtOnStartup: No JWT found, login required";
