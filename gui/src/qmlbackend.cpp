@@ -685,11 +685,12 @@ QString QmlBackend::userEmail() const
 
 QString QmlBackend::subscriptionExpiration() const
 {
+    // Calculate time until expiration from stored date_exp
     QString timeUntil = JwtManager::getTimeUntilExpiration();
-    if (timeUntil.isEmpty()) {
-        return QString();
+    if (!timeUntil.isEmpty()) {
+        return timeUntil;
     }
-    return timeUntil;
+    return QString();
 }
 
 void QmlBackend::logout()

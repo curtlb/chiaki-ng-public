@@ -392,26 +392,35 @@ Item {
 
         function onSplashStatusUpdate(stage, status, progress) {
             // Show splash screen if not already shown
-            if (stack.currentItem != streamSplashViewComponent) {
+            var currentItem = stack.currentItem;
+            var isSplashView = false;
+            if (currentItem) {
+                // Check if current item is StreamSplashView by checking if it has stageText property
+                isSplashView = (currentItem.stageText !== undefined);
+            }
+            if (!isSplashView) {
                 stack.push(streamSplashViewComponent);
+                currentItem = stack.currentItem;
             }
             // Update splash screen status
-            if (stack.currentItem && stack.currentItem.stageText !== undefined) {
-                stack.currentItem.stageText = stage;
-                stack.currentItem.statusText = status;
-                stack.currentItem.progressValue = progress;
+            if (currentItem && currentItem.stageText !== undefined) {
+                currentItem.stageText = stage;
+                currentItem.statusText = status;
+                currentItem.progressValue = progress;
             }
         }
 
         function onSplashCompleted() {
-            if (stack.currentItem == streamSplashViewComponent) {
+            var currentItem = stack.currentItem;
+            if (currentItem && currentItem.stageText !== undefined) {
                 stack.pop();
             }
         }
 
         function onSplashFailed(error) {
             root.showConfirmDialog(qsTr("Ошибка подключения"), error, () => {
-                if (stack.currentItem == streamSplashViewComponent) {
+                var currentItem = stack.currentItem;
+                if (currentItem && currentItem.stageText !== undefined) {
                     stack.pop();
                 }
             });

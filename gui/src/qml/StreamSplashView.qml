@@ -9,9 +9,9 @@ Rectangle {
     id: splashView
     color: "black"
     
-    property alias stageText: stageLabel.text
-    property alias statusText: statusLabel.text
-    property alias progressValue: progressBar.value
+    property string stageText: qsTr("Подготовка подключения...")
+    property string statusText: ""
+    property int progressValue: 0
     
     ColumnLayout {
         anchors.centerIn: parent
@@ -20,7 +20,7 @@ Rectangle {
         Label {
             id: stageLabel
             Layout.alignment: Qt.AlignHCenter
-            text: qsTr("Подготовка подключения...")
+            text: splashView.stageText
             font.pixelSize: 28
             color: "white"
         }
