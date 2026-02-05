@@ -6,7 +6,7 @@
 #include <QUrlQuery>
 #include <functional>
 
-Q_LOGGING_CATEGORY(chiakiGui, "chiaki.gui", QtInfoMsg);
+Q_DECLARE_LOGGING_CATEGORY(chiakiGui);
 
 const QString JwtManager::PREFS_NAME = "chiaki_auth";
 const QString JwtManager::KEY_JWT = "jwt_token";
