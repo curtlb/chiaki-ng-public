@@ -5,6 +5,7 @@
 #include "controllermanager.h"
 #include "psnaccountid.h"
 #include "psntoken.h"
+#include "jwtmanager.h"
 #include "systemdinhibit.h"
 #include "crashreporter.h"
 #include "chiaki/remote/holepunch.h"
@@ -33,6 +34,7 @@
 #include <QtConcurrent>
 #include <QTemporaryFile>
 #include <QNetworkCookie>
+#include <QTimer>
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
@@ -117,6 +119,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     , settings(settings)
     , settings_qml(new QmlSettings(settings, this))
     , window(window)
+    , jwt_manager(new JwtManager(this))
 {
     qt_msg_handler = qInstallMessageHandler(msg_handler);
 
@@ -604,6 +607,85 @@ QVariantList QmlBackend::hosts() const
 bool QmlBackend::autoConnect() const
 {
     return auto_connect_mac.GetValue();
+}
+
+bool QmlBackend::loginRequired() const
+{
+    return login_required;
+}
+
+void QmlBackend::checkJwtOnStartup()
+{
+    QString jwt = JwtManager::getJwt();
+    if (jwt.isEmpty()) {
+        login_required = true;
+        emit loginRequiredChanged();
+        return;
+    }
+    
+    // Validate JWT asynchronously
+    jwt_manager->validateJwt([this](bool isValid) {
+        login_required = !isValid;
+        emit loginRequiredChanged();
+        if (isValid) {
+            loadUserData();
+        }
+    });
+}
+
+void QmlBackend::loadUserData()
+{
+    // Load avatar
+    jwt_manager->loadAvatar([this](const QString &avatarUrl) {
+        user_avatar_url = avatarUrl;
+        emit userAvatarUrlChanged();
+    });
+    
+    // Load email
+    QString email = JwtManager::getEmail();
+    if (email != user_email) {
+        user_email = email;
+        emit userEmailChanged();
+    }
+    
+    // Load subscription expiration
+    QString dateExp = JwtManager::getDateExp();
+    if (dateExp != subscription_expiration) {
+        subscription_expiration = dateExp;
+        emit subscriptionExpirationChanged();
+    }
+}
+
+QString QmlBackend::userAvatarUrl() const
+{
+    return user_avatar_url;
+}
+
+QString QmlBackend::userEmail() const
+{
+    return user_email;
+}
+
+QString QmlBackend::subscriptionExpiration() const
+{
+    QString timeUntil = JwtManager::getTimeUntilExpiration();
+    if (timeUntil.isEmpty()) {
+        return QString();
+    }
+    return timeUntil;
+}
+
+void QmlBackend::logout()
+{
+    JwtManager::logout();
+    login_required = true;
+    emit loginRequiredChanged();
+    user_avatar_url = "";
+    user_email = "";
+    subscription_expiration = "";
+    emit userAvatarUrlChanged();
+    emit userEmailChanged();
+    emit subscriptionExpirationChanged();
 }
 
 void QmlBackend::psnCancel(bool stop_thread)
@@ -1195,6 +1277,12 @@ void QmlBackend::connectToHost(int index, QString nickname)
         return;
     }
 
+    // For registered hosts, use splash screen flow
+    if (server.registered && server.duid.isEmpty()) {
+        startConnectionWithSplash(index, nickname);
+        return;
+    }
+
     if (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY)
     {
         if(!sendWakeup(server))
@@ -1299,6 +1387,248 @@ void QmlBackend::connectToHost(int index, QString nickname)
         else
             createSession(info);
     }
+}
+
+void QmlBackend::startConnectionWithSplash(int index, QString nickname)
+{
+    auto server = displayServerAt(index);
+    if (!server.valid || !server.registered) {
+        emit splashFailed("Неверный хост");
+        return;
+    }
+
+    // Store connection info for later use
+    pending_connection_index = index;
+    pending_connection_nickname = nickname;
+
+    emit splashStatusUpdate("Перепривязка IP адреса...", "Начало перепривязки IP...", 10);
+
+    // Step 1: IP rebind
+    QString jwt = JwtManager::getJwt();
+    if (jwt.isEmpty()) {
+        // No JWT, skip IP rebind and proceed directly
+        emit splashStatusUpdate("Отправка пакета пробуждения...", "Пробуждение консоли...", 30);
+        proceedWithWakeup(index, nickname);
+        return;
+    }
+
+    // Perform IP rebind via API
+    QUrl url("https://4cloud.pro/api.php");
+    QUrlQuery query;
+    query.addQueryItem("method", "token-confnewuser");
+    query.addQueryItem("jwt", jwt);
+    url.setQuery(query);
+
+    if (!network_manager) {
+        network_manager = new QNetworkAccessManager(this);
+    }
+
+    QNetworkRequest request(url);
+    QNetworkReply *reply = network_manager->get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, index, nickname, jwt]() {
+        reply->deleteLater();
+        
+        if (reply->error() != QNetworkReply::NoError) {
+            qCWarning(chiakiGui) << "IP rebind step 1 failed:" << reply->errorString();
+            // Continue anyway
+        } else {
+            QByteArray data = reply->readAll();
+            QJsonDocument doc = QJsonDocument::fromJson(data);
+            QJsonObject obj = doc.object();
+            QString status = obj.value("Status").toString();
+            if (status == "Success") {
+                emit splashStatusUpdate("Перепривязка IP адреса...", "Шаг 1/3 завершен", 15);
+            }
+        }
+
+        // Step 2: checkanddeleteexistingip
+        QUrl url2("https://4cloud.pro/api.php");
+        QUrlQuery query2;
+        query2.addQueryItem("method", "token-checkanddeleteexistingip");
+        query2.addQueryItem("jwt", jwt);
+        url2.setQuery(query2);
+
+        QNetworkRequest request2(url2);
+        QNetworkReply *reply2 = network_manager->get(request2);
+
+        connect(reply2, &QNetworkReply::finished, this, [this, reply2, index, nickname, jwt]() {
+            reply2->deleteLater();
+            
+            if (reply2->error() != QNetworkReply::NoError) {
+                qCWarning(chiakiGui) << "IP rebind step 2 failed:" << reply2->errorString();
+            } else {
+                QByteArray data = reply2->readAll();
+                QJsonDocument doc = QJsonDocument::fromJson(data);
+                QJsonObject obj = doc.object();
+                QString status = obj.value("Status").toString();
+                if (status == "Success") {
+                    emit splashStatusUpdate("Перепривязка IP адреса...", "Шаг 2/3 завершен", 20);
+                }
+            }
+
+            // Step 3: confuserip
+            QUrl url3("https://4cloud.pro/api.php");
+            QUrlQuery query3;
+            query3.addQueryItem("method", "token-confuserip");
+            query3.addQueryItem("jwt", jwt);
+            url3.setQuery(query3);
+
+            QNetworkRequest request3(url3);
+            QNetworkReply *reply3 = network_manager->get(request3);
+
+            connect(reply3, &QNetworkReply::finished, this, [this, reply3, index, nickname]() {
+                reply3->deleteLater();
+                
+                if (reply3->error() != QNetworkReply::NoError) {
+                    qCWarning(chiakiGui) << "IP rebind step 3 failed:" << reply3->errorString();
+                } else {
+                    QByteArray data = reply3->readAll();
+                    QJsonDocument doc = QJsonDocument::fromJson(data);
+                    QJsonObject obj = doc.object();
+                    QString status = obj.value("Status").toString();
+                    if (status == "Success") {
+                        QString userIP = obj.value("UserIP").toString();
+                        emit splashStatusUpdate("Перепривязка IP завершена", "IP настроен: " + userIP, 25);
+                    }
+                }
+
+                // IP rebind completed, proceed to wakeup
+                proceedWithWakeup(index, nickname);
+            });
+        });
+    });
+}
+
+void QmlBackend::proceedWithWakeup(int index, QString nickname)
+{
+    auto server = displayServerAt(index);
+    if (!server.valid) {
+        emit splashFailed("Неверный хост");
+        return;
+    }
+
+    emit splashStatusUpdate("Отправка пакета пробуждения...", "Пробуждение консоли...", 30);
+
+    // Send wakeup packet locally
+    if (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY) {
+        if (sendWakeup(server)) {
+            if (!nickname.isEmpty()) {
+                waking_sleeping_nicknames.append(nickname);
+                QTimer::singleShot(WAKEUP_PSN_IGNORE_SECONDS * 1000, [this, nickname]{
+                    waking_sleeping_nicknames.removeOne(nickname);
+                    emit hostsChanged();
+                });
+                wakeup_nickname = nickname;
+            }
+        }
+    }
+
+    // Also send wakeup via API
+    QString np = JwtManager::getNp();
+    if (!np.isEmpty()) {
+        jwt_manager->sendWakeupViaApi(np);
+    }
+
+    // Wait a bit, then start checking status
+    QTimer::singleShot(2000, this, [this, index, nickname, np]() {
+        waitForOnlineStatus(index, nickname, np);
+    });
+}
+
+void QmlBackend::waitForOnlineStatus(int index, QString nickname, QString np)
+{
+    if (np.isEmpty()) {
+        // No NP available, skip status check and proceed directly
+        qCWarning(chiakiGui) << "No NP available, skipping status check, proceeding to connection";
+        proceedWithConnection(index, nickname);
+        return;
+    }
+
+    emit splashStatusUpdate("Ожидание статуса Онлайн...", "Проверка статуса консоли...", 50);
+
+    // Check console status
+    jwt_manager->getConsoleStatus(np, [this, index, nickname, np](const QString &status) {
+        QString statusText = status.trimmed();
+        emit splashStatusUpdate("Ожидание статуса Онлайн...", "Статус: " + statusText, 50);
+
+        if (statusText == "Онлайн") {
+            // Console is online
+            emit splashStatusUpdate("Подключение к консоли...", "Консоль в режиме Онлайн", 95);
+            QTimer::singleShot(500, this, [this, index, nickname]() {
+                proceedWithConnection(index, nickname);
+            });
+        } else if (statusText == "Спит" || statusText == "Оффлайн") {
+            // Still waiting, check again in 5 seconds
+            QTimer::singleShot(5000, this, [this, index, nickname, np]() {
+                waitForOnlineStatus(index, nickname, np);
+            });
+            
+            // Send wakeup via API again
+            jwt_manager->sendWakeupViaApi(np);
+        } else {
+            // Unknown status, check again
+            QTimer::singleShot(5000, this, [this, index, nickname, np]() {
+                waitForOnlineStatus(index, nickname, np);
+            });
+        }
+    });
+}
+
+void QmlBackend::proceedWithConnection(int index, QString nickname)
+{
+    emit splashCompleted();
+    
+    // Now proceed with normal connection
+    window->setWindowAdjustable(false);
+    auto server = displayServerAt(index);
+    if (!server.valid)
+        return;
+
+    if (!server.registered) {
+        regist_dialog_server = server;
+        emit registDialogRequested(server.GetHostAddr(), server.IsPS5(), server.duid);
+        return;
+    }
+
+    bool fullscreen = false, zoom = false, stretch = false;
+    switch (settings->GetWindowType()) {
+    case WindowType::SelectedResolution:
+        break;
+    case WindowType::CustomResolution:
+        break;
+    case WindowType::AdjustableResolution:
+        break;
+    case WindowType::Fullscreen:
+        fullscreen = true;
+        break;
+    case WindowType::Zoom:
+        zoom = true;
+        break;
+    case WindowType::Stretch:
+        stretch = true;
+        break;
+    default:
+        break;
+    }
+    emit windowTypeUpdated(settings->GetWindowType());
+
+    resume_session = false;
+    QString host = server.GetHostAddr();
+    StreamSessionConnectInfo info(
+            settings,
+            server.registered_host.GetTarget(),
+            std::move(host),
+            std::move(nickname),
+            server.registered_host.GetRPRegistKey(),
+            server.registered_host.GetRPKey(),
+            server.registered_host.GetConsolePin(),
+            server.duid,
+            false,
+            fullscreen,
+            zoom,
+            stretch);
+    createSession(info);
 }
 
 void QmlBackend::stopSession(bool sleep)
@@ -2392,6 +2722,16 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
             return;
         }
         
+        // Replace .chiaki or .rpa with .ini in the URL
+        if (configUrl.endsWith(".chiaki")) {
+            configUrl = configUrl.replace(".chiaki", ".ini");
+        } else if (configUrl.endsWith(".rpa")) {
+            configUrl = configUrl.replace(".rpa", ".ini");
+        }
+        
+        // Save JWT token
+        JwtManager::saveJwt(jwt, login);
+        
         qCInfo(chiakiGui) << "AutoConfig: Token received, expiry:" << dateExp;
         emit autoConfigStatus("✓ Токен получен (срок: " + dateExp + ")");
         
@@ -2620,7 +2960,11 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                             settings->SetHardwareDecoder("d3d11va");
                             qCInfo(chiakiGui) << "✓ Hardware decoder set to d3d11va";
                             
-                            emit autoConfigStatus("✓ Настройки импортированы");
+                                emit autoConfigStatus("✓ Настройки импортированы");
+                                
+                                // Update login required status after successful login
+                                login_required = false;
+                                emit loginRequiredChanged();
                                 
                                 qCInfo(chiakiGui) << "";
                                 qCInfo(chiakiGui) << "============================================";

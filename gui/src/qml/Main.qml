@@ -215,6 +215,12 @@ Item {
             stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
         else if (Chiaki.autoConnect)
             stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
+        else if (Chiaki.loginRequired)
+            showLoginDialog();
+    }
+    
+    function showLoginDialog() {
+        stack.push(loginDialogComponent);
     }
 
     Pane {
@@ -381,6 +387,33 @@ Item {
         function onWakeupStartInitiated() {
             stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
         }
+
+        function onSplashStatusUpdate(stage, status, progress) {
+            // Show splash screen if not already shown
+            if (stack.currentItem != streamSplashViewComponent) {
+                stack.push(streamSplashViewComponent);
+            }
+            // Update splash screen status
+            if (stack.currentItem && stack.currentItem.stageText !== undefined) {
+                stack.currentItem.stageText = stage;
+                stack.currentItem.statusText = status;
+                stack.currentItem.progressValue = progress;
+            }
+        }
+
+        function onSplashCompleted() {
+            if (stack.currentItem == streamSplashViewComponent) {
+                stack.pop();
+            }
+        }
+
+        function onSplashFailed(error) {
+            root.showConfirmDialog(qsTr("Ошибка подключения"), error, () => {
+                if (stack.currentItem == streamSplashViewComponent) {
+                    stack.pop();
+                }
+            });
+        }
     }
 
     Component {
@@ -396,6 +429,11 @@ Item {
     Component {
         id: autoConnectViewComponent
         AutoConnectView { }
+    }
+
+    Component {
+        id: streamSplashViewComponent
+        StreamSplashView { }
     }
 
     Component {
@@ -456,5 +494,21 @@ Item {
     Component {
         id: controllerMappingDialogComponent
         ControllerMappingDialog { }
+    }
+
+    Component {
+        id: loginDialogComponent
+        LoginDialog { }
+    }
+
+    Connections {
+        target: Chiaki
+        
+        function onLoginRequiredChanged() {
+            if (Chiaki.loginRequired && stack.currentItem != loginDialogComponent)
+                root.showLoginDialog();
+            else if (!Chiaki.loginRequired && stack.currentItem == loginDialogComponent)
+                root.showMainView();
+        }
     }
 }
