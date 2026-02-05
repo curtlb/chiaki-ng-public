@@ -211,12 +211,16 @@ Item {
     }
 
     Component.onCompleted: {
-        if (Chiaki.session)
-            stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
-        else if (Chiaki.autoConnect)
-            stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
-        else if (Chiaki.loginRequired)
-            showLoginDialog();
+        // Wait a bit for JWT check to complete, then check login status
+        Qt.callLater(function() {
+            if (Chiaki.session)
+                stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
+            else if (Chiaki.autoConnect)
+                stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
+            else if (Chiaki.loginRequired)
+                showLoginDialog();
+            // else: mainViewComponent is already the initialItem, so no need to replace
+        });
     }
     
     function showLoginDialog() {
@@ -505,10 +509,13 @@ Item {
         target: Chiaki
         
         function onLoginRequiredChanged() {
-            if (Chiaki.loginRequired && stack.currentItem != loginDialogComponent)
+            if (Chiaki.loginRequired) {
+                // Show login dialog
                 root.showLoginDialog();
-            else if (!Chiaki.loginRequired && stack.currentItem == loginDialogComponent)
+            } else {
+                // If login is not required, show main view
                 root.showMainView();
+            }
         }
     }
 }

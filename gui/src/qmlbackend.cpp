@@ -251,6 +251,9 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     connect(windows_wake_sleep, &WindowsWakeSleep::sleeping, this, &QmlBackend::goToSleep);
 #endif
     refreshPsnToken();
+    
+    // Check JWT on startup
+    checkJwtOnStartup();
 }
 
 QmlBackend::~QmlBackend()
@@ -616,19 +619,26 @@ bool QmlBackend::loginRequired() const
 
 void QmlBackend::checkJwtOnStartup()
 {
+    qCInfo(chiakiGui) << "checkJwtOnStartup: Starting JWT check";
     QString jwt = JwtManager::getJwt();
     if (jwt.isEmpty()) {
+        qCInfo(chiakiGui) << "checkJwtOnStartup: No JWT found, login required";
         login_required = true;
         emit loginRequiredChanged();
         return;
     }
     
+    qCInfo(chiakiGui) << "checkJwtOnStartup: JWT found, validating...";
     // Validate JWT asynchronously
     jwt_manager->validateJwt([this](bool isValid) {
+        qCInfo(chiakiGui) << "checkJwtOnStartup: JWT validation result:" << isValid;
         login_required = !isValid;
         emit loginRequiredChanged();
         if (isValid) {
+            qCInfo(chiakiGui) << "checkJwtOnStartup: JWT valid, loading user data";
             loadUserData();
+        } else {
+            qCInfo(chiakiGui) << "checkJwtOnStartup: JWT invalid, login required";
         }
     });
 }
