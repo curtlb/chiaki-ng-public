@@ -86,8 +86,8 @@ DialogView {
         
         function onAutoConfigSuccess() {
             dialog.submitting = false
-            root.closeDialog()
-            // Main view will be shown automatically
+            dialog.close()
+            // Main view will be shown automatically via onLoginRequiredChanged
         }
         
         function onAutoConfigError(errorMessage) {
