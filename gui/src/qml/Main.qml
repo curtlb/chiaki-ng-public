@@ -211,16 +211,14 @@ Item {
     }
 
     Component.onCompleted: {
-        // Wait a bit for JWT check to complete, then check login status
-        Qt.callLater(function() {
-            if (Chiaki.session)
-                stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
-            else if (Chiaki.autoConnect)
-                stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
-            else if (Chiaki.loginRequired)
-                showLoginDialog();
-            // else: mainViewComponent is already the initialItem, so no need to replace
-        });
+        // Initial view setup
+        if (Chiaki.session)
+            stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
+        else if (Chiaki.autoConnect)
+            stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
+        else if (Chiaki.loginRequired)
+            showLoginDialog();
+        // else: mainViewComponent is already the initialItem, so no need to replace
     }
     
     function showLoginDialog() {

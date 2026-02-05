@@ -17,33 +17,10 @@ Item {
     signal rejected()
 
     function close() {
-        // Try to find StackView through StackView.view attached property
-        var stackView = null;
-        var item = dialog;
-        while (item && !stackView) {
-            // Check if this item is in a StackView
-            var attached = item.StackView;
-            if (attached && attached.view) {
-                stackView = attached.view;
-                break;
-            }
-            item = item.parent;
-        }
-        
+        // Use StackView.view attached property to get the StackView
+        var stackView = dialog.StackView.view;
         if (stackView && stackView.depth > 1) {
             stackView.pop();
-        } else {
-            // Fallback: try to find root through Window
-            var rootItem = Window.window ? Window.window.contentItem : null;
-            if (rootItem) {
-                // Find stack in root
-                var stack = rootItem.children ? rootItem.children.find(function(child) {
-                    return child && child.hasOwnProperty("pop");
-                }) : null;
-                if (stack && stack.depth > 1) {
-                    stack.pop();
-                }
-            }
         }
     }
 
