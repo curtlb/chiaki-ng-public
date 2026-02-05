@@ -211,7 +211,10 @@ Item {
     }
 
     Component.onCompleted: {
-        // Initial view setup
+        // Check JWT on startup - this will emit loginRequiredChanged signal
+        Chiaki.checkJwtOnStartup();
+        
+        // Initial view setup - will be updated by onLoginRequiredChanged signal
         if (Chiaki.session)
             stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
         else if (Chiaki.autoConnect)

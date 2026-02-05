@@ -236,7 +236,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     {
         emit wakeupStartFailed();
     });
-    psn_auto_connect_timer->start(PSN_INTERNET_WAIT_SECONDS * 1000);
+    // Don't start psn_auto_connect_timer here - it's already started in the if block above if needed
     sleep_inhibit = new SystemdInhibit(QGuiApplication::applicationName(), tr("Remote Play session"), "sleep", "delay", this);
     connect(sleep_inhibit, &SystemdInhibit::sleep, this, &QmlBackend::goToSleep);
     connect(sleep_inhibit, &SystemdInhibit::resume, this, &QmlBackend::resumeFromSleep);
@@ -252,8 +252,8 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
 #endif
     refreshPsnToken();
     
-    // Check JWT on startup - delay to ensure QML is loaded
-    QTimer::singleShot(100, this, &QmlBackend::checkJwtOnStartup);
+    // Check JWT on startup will be called from QML Component.onCompleted
+    // to ensure QML is fully loaded before checking
 }
 
 QmlBackend::~QmlBackend()

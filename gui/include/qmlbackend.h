@@ -166,7 +166,7 @@ public:
     bool autoConnect() const;
 
     bool loginRequired() const;
-    void checkJwtOnStartup();
+    Q_INVOKABLE void checkJwtOnStartup();
 
     void psnConnector();
 
