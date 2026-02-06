@@ -2788,14 +2788,21 @@ void QmlBackend::checkJwtToken()
         // Проверяем наличие Date_exp
         QJsonValue dateExpValue = obj.value("Date_exp");
         
-        if (dateExpValue.isNull() || dateExpValue.toString().isEmpty()) {
-            qCInfo(chiakiGui) << "No active subscription (Date_exp is null)";
+        // Проверяем, является ли значение JSON null или пустой строкой
+        bool isDateExpNull = dateExpValue.isNull() || 
+                            dateExpValue.type() == QJsonValue::Null ||
+                            dateExpValue.type() == QJsonValue::Undefined;
+        
+        QString dateExp = dateExpValue.toString();
+        bool isDateExpEmpty = dateExp.isEmpty() || dateExp == "null";
+        
+        if (isDateExpNull || isDateExpEmpty) {
+            qCInfo(chiakiGui) << "No active subscription (Date_exp is null or empty). Type:" << dateExpValue.type() << "Value:" << dateExp;
             settings->SetJwtToken("");
             emit subscriptionExpired("Нет активной подписки");
             return;
         }
         
-        QString dateExp = dateExpValue.toString();
         qCInfo(chiakiGui) << "Subscription expiry date:" << dateExp;
         
         // Получаем текущую дату для сравнения
