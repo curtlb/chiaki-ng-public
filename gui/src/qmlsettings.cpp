@@ -639,6 +639,17 @@ void QmlSettings::setPsnAccountId(const QString &account_id)
     emit psnAccountIdChanged();
 }
 
+QString QmlSettings::jwtToken() const
+{
+    return settings->GetJwtToken();
+}
+
+void QmlSettings::setJwtToken(const QString &token)
+{
+    settings->SetJwtToken(token);
+    emit jwtTokenChanged();
+}
+
 void QmlSettings::authorizeYandex(const QString &login, const QString &password)
 {
     if (!network_manager) {

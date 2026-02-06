@@ -207,6 +207,7 @@ public:
     Q_INVOKABLE void controllerMappingApply();
     Q_INVOKABLE void autoRegister();
     Q_INVOKABLE void startAutoConfig(const QString &login, const QString &password);
+    Q_INVOKABLE void authenticate(const QString &email, const QString &password);
 #if CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
     Q_INVOKABLE void createSteamShortcut(QString shortcutName, QString launchOptions, const QJSValue &callback, QString steamDir);
 #endif
@@ -249,6 +250,8 @@ signals:
     void autoConfigStatus(const QString &message);
     void autoConfigSuccess();
     void autoConfigError(const QString &errorMessage);
+    void authenticationSuccess();
+    void authenticationError(const QString &errorMessage);
 
 private:
     struct DisplayServer {

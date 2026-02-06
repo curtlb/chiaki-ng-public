@@ -33,6 +33,8 @@
 #include <QtConcurrent>
 #include <QTemporaryFile>
 #include <QNetworkCookie>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
@@ -2635,6 +2637,85 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
                 });
             });
         });
+}
+
+void QmlBackend::authenticate(const QString &email, const QString &password)
+{
+    qCInfo(chiakiGui) << "Authentication request for email:" << email;
+    
+    if (!network_manager) {
+        network_manager = new QNetworkAccessManager(this);
+    }
+    
+    // Формируем URL для авторизации
+    QUrl url("https://4cloud.pro/.new/api.php");
+    QUrlQuery query;
+    query.addQueryItem("method", "sign-in");
+    query.addQueryItem("Email", email);
+    query.addQueryItem("Password", password);
+    url.setQuery(query);
+    
+    qCInfo(chiakiGui) << "Auth request URL:" << url.toString();
+    
+    QNetworkRequest request(url);
+    QNetworkReply *reply = network_manager->get(request);
+    
+    connect(reply, &QNetworkReply::finished, this, [this, reply, email]() {
+        QByteArray responseData = reply->readAll();
+        int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        
+        qCInfo(chiakiGui) << "Auth response - Status:" << statusCode << "Body length:" << responseData.length();
+        reply->deleteLater();
+        
+        if (reply->error() != QNetworkReply::NoError && responseData.isEmpty()) {
+            QString errorMsg = QString("Ошибка сети: %1").arg(reply->errorString());
+            qCWarning(chiakiGui) << "Auth error:" << errorMsg;
+            emit authenticationError(errorMsg);
+            return;
+        }
+        
+        QJsonParseError parseError;
+        QJsonDocument doc = QJsonDocument::fromJson(responseData, &parseError);
+        
+        if (parseError.error != QJsonParseError::NoError) {
+            QString errorMsg = QString("Ошибка парсинга ответа: %1").arg(parseError.errorString());
+            qCWarning(chiakiGui) << "Auth parse error:" << errorMsg;
+            emit authenticationError(errorMsg);
+            return;
+        }
+        
+        QJsonObject obj = doc.object();
+        QString status = obj.value("status").toString();
+        
+        if (status == "error") {
+            QString errorMsg = obj.value("message").toString();
+            if (errorMsg.isEmpty()) {
+                errorMsg = "Неверный логин или пароль";
+            }
+            qCWarning(chiakiGui) << "Authentication failed:" << errorMsg;
+            emit authenticationError(errorMsg);
+            return;
+        }
+        
+        if (status == "success") {
+            QString jwt = obj.value("jwt").toString();
+            if (jwt.isEmpty()) {
+                QString errorMsg = "Ответ не содержит JWT токена";
+                qCWarning(chiakiGui) << "Auth error:" << errorMsg;
+                emit authenticationError(errorMsg);
+                return;
+            }
+            
+            // Сохраняем JWT токен в настройках
+            settings->SetJwtToken(jwt);
+            qCInfo(chiakiGui) << "Authentication successful, JWT token saved";
+            emit authenticationSuccess();
+        } else {
+            QString errorMsg = "Неизвестный статус ответа: " + status;
+            qCWarning(chiakiGui) << "Auth error:" << errorMsg;
+            emit authenticationError(errorMsg);
+        }
+    });
 }
 
 void PsnConnectionWorker::ConnectPsnConnection(StreamSession *session, const QString &duid, const bool &ps5)

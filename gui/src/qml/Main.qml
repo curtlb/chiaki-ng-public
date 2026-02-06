@@ -211,10 +211,14 @@ Item {
     }
 
     Component.onCompleted: {
-        if (Chiaki.session)
+        // Check if JWT token exists, if not show login first
+        if (!Chiaki.settings.jwtToken || Chiaki.settings.jwtToken.length === 0) {
+            stack.replace(stack.get(0), loginViewComponent, {}, StackView.Immediate);
+        } else if (Chiaki.session) {
             stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
-        else if (Chiaki.autoConnect)
+        } else if (Chiaki.autoConnect) {
             stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
+        }
     }
 
     Pane {
@@ -226,7 +230,7 @@ Item {
         id: stack
         anchors.fill: parent
         hoverEnabled: false
-        initialItem: mainViewComponent
+        initialItem: (!Chiaki.settings.jwtToken || Chiaki.settings.jwtToken.length === 0) ? loginViewComponent : mainViewComponent
         font.pixelSize: 20
 
         replaceEnter: Transition {
@@ -343,6 +347,11 @@ Item {
     Connections {
         target: Chiaki
 
+        function onAuthenticationSuccess() {
+            // After successful authentication, show main view
+            root.showMainView();
+        }
+
         function onSessionChanged() {
             if (Chiaki.session)
                 root.showStreamView();
@@ -381,6 +390,11 @@ Item {
         function onWakeupStartInitiated() {
             stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
         }
+    }
+
+    Component {
+        id: loginViewComponent
+        LoginView { }
     }
 
     Component {

@@ -394,6 +394,10 @@ class Settings : public QObject
 	QString GetYandexFolderId() const			{ return settings.value("settings/yandex_folder_id", "").toString(); }
 	void SetYandexFolderId(QString folder_id)	{ settings.setValue("settings/yandex_folder_id", folder_id); }
 
+	// Authentication JWT token
+	QString GetJwtToken() const					{ return settings.value("settings/jwt_token", "").toString(); }
+	void SetJwtToken(QString token)			{ settings.setValue("settings/jwt_token", token); }
+
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);
 
