@@ -2706,10 +2706,140 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 return;
             }
             
-            // Сохраняем JWT токен в настройках
+            // Сохраняем JWT токен временно
             settings->SetJwtToken(jwt);
-            qCInfo(chiakiGui) << "Authentication successful, JWT token saved";
-            emit authenticationSuccess();
+            qCInfo(chiakiGui) << "Authentication successful, JWT token received, checking subscription...";
+            
+            // Проверяем подписку через decode-jwt API
+            QUrl decodeUrl("https://4cloud.pro/api.php");
+            QUrlQuery decodeQuery;
+            decodeQuery.addQueryItem("method", "decode-jwt");
+            decodeQuery.addQueryItem("jwt", jwt);
+            decodeUrl.setQuery(decodeQuery);
+            
+            QNetworkRequest decodeRequest(decodeUrl);
+            QNetworkReply *decodeReply = network_manager->get(decodeRequest);
+            
+            connect(decodeReply, &QNetworkReply::finished, this, [this, decodeReply, jwt]() {
+                QByteArray decodeResponseData = decodeReply->readAll();
+                decodeReply->deleteLater();
+                
+                qCInfo(chiakiGui) << "Auth decode-jwt response:" << decodeResponseData;
+                
+                QJsonParseError parseError2;
+                QJsonDocument decodeDoc = QJsonDocument::fromJson(decodeResponseData, &parseError2);
+                
+                if (parseError2.error != QJsonParseError::NoError) {
+                    qCWarning(chiakiGui) << "Failed to parse decode-jwt response during auth";
+                    settings->SetJwtToken("");
+                    emit authenticationError("Ошибка проверки подписки");
+                    return;
+                }
+                
+                QJsonObject decodeObj = decodeDoc.object();
+                
+                // Проверяем наличие Date_exp
+                if (!decodeObj.contains("Date_exp")) {
+                    qCWarning(chiakiGui) << "No active subscription (Date_exp key missing)";
+                    settings->SetJwtToken("");
+                    emit authenticationError("Нет активной подписки");
+                    return;
+                }
+                
+                QJsonValue dateExpValue = decodeObj.value("Date_exp");
+                QJsonValue::Type valueType = dateExpValue.type();
+                
+                QString dateExp = dateExpValue.toString();
+                QString dateExpTrimmed = dateExp.trimmed();
+                QString dateExpLower = dateExpTrimmed.toLower();
+                
+                qCInfo(chiakiGui) << "Auth Date_exp check - Type:" << valueType 
+                                  << "Value:'" << dateExp << "' Trimmed:'" << dateExpTrimmed << "'";
+                
+                bool isNullType = (valueType == QJsonValue::Null) || (valueType == QJsonValue::Undefined);
+                bool isEmptyString = dateExp.isEmpty() || dateExpTrimmed.isEmpty();
+                bool isNullString = (dateExpTrimmed == "null") || (dateExpLower == "null");
+                
+                if (isNullType || isEmptyString || isNullString) {
+                    qCWarning(chiakiGui) << "No active subscription (Date_exp is null/empty)";
+                    settings->SetJwtToken("");
+                    emit authenticationError("Нет активной подписки");
+                    return;
+                }
+                
+                // Если Date_exp есть, проверяем срок действия подписки
+                // Получаем текущую дату для сравнения
+                QUrl currentDateUrl("https://4cloud.pro/api.php");
+                QUrlQuery currentDateQuery;
+                currentDateQuery.addQueryItem("method", "get-date-now");
+                currentDateUrl.setQuery(currentDateQuery);
+                
+                QNetworkRequest currentDateRequest(currentDateUrl);
+                QNetworkReply *currentDateReply = network_manager->get(currentDateRequest);
+                
+                connect(currentDateReply, &QNetworkReply::finished, this, [this, currentDateReply, dateExp, jwt]() {
+                    QByteArray currentDateData = currentDateReply->readAll();
+                    currentDateReply->deleteLater();
+                    
+                    QJsonParseError parseError3;
+                    QJsonDocument currentDateDoc = QJsonDocument::fromJson(currentDateData, &parseError3);
+                    
+                    if (parseError3.error != QJsonParseError::NoError) {
+                        qCWarning(chiakiGui) << "Failed to parse current date response during auth";
+                        settings->SetJwtToken("");
+                        emit authenticationError("Ошибка проверки подписки");
+                        return;
+                    }
+                    
+                    QJsonArray array = currentDateDoc.array();
+                    if (array.isEmpty()) {
+                        qCWarning(chiakiGui) << "Current date array is empty during auth";
+                        settings->SetJwtToken("");
+                        emit authenticationError("Ошибка проверки подписки");
+                        return;
+                    }
+                    
+                    QJsonObject nowObj = array[0].toObject();
+                    QString nowStr = nowObj.value("Now").toString();
+                    
+                    if (nowStr.isEmpty()) {
+                        qCWarning(chiakiGui) << "Current date Now field is empty during auth";
+                        settings->SetJwtToken("");
+                        emit authenticationError("Ошибка проверки подписки");
+                        return;
+                    }
+                    
+                    // Парсим даты
+                    QDateTime subscriptionExpiry = QDateTime::fromString(dateExp, "dd.MM.yyyy HH:mm");
+                    QDateTime currentDateTime = QDateTime::fromString(nowStr, "yyyy-MM-dd HH:mm:ss");
+                    
+                    if (!subscriptionExpiry.isValid()) {
+                        qCWarning(chiakiGui) << "Invalid subscription expiry date format during auth:" << dateExp;
+                        settings->SetJwtToken("");
+                        emit authenticationError("Ошибка проверки подписки");
+                        return;
+                    }
+                    
+                    if (!currentDateTime.isValid()) {
+                        qCWarning(chiakiGui) << "Invalid current date format during auth:" << nowStr;
+                        settings->SetJwtToken("");
+                        emit authenticationError("Ошибка проверки подписки");
+                        return;
+                    }
+                    
+                    // Проверяем, не истекла ли подписка
+                    if (currentDateTime >= subscriptionExpiry) {
+                        qCWarning(chiakiGui) << "Subscription has expired during auth";
+                        settings->SetJwtToken("");
+                        emit authenticationError("Нет активной подписки");
+                        return;
+                    }
+                    
+                    // Подписка активна, авторизация успешна
+                    qCInfo(chiakiGui) << "Authentication successful, subscription is active";
+                    emit authenticationSuccess();
+                });
+            });
         } else {
             QString errorMsg = "Неизвестный статус ответа: " + status;
             qCWarning(chiakiGui) << "Auth error:" << errorMsg;
