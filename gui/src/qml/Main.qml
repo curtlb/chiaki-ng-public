@@ -214,7 +214,15 @@ Item {
         // Check if JWT token exists, if not show login first
         if (!Chiaki.settings.jwtToken || Chiaki.settings.jwtToken.length === 0) {
             stack.replace(stack.get(0), loginViewComponent, {}, StackView.Immediate);
-        } else if (Chiaki.session) {
+        } else {
+            // If JWT exists, check its validity first
+            // Show login form while checking (will be replaced if token is valid)
+            stack.replace(stack.get(0), loginViewComponent, {}, StackView.Immediate);
+            Chiaki.checkJwtToken();
+        }
+        
+        // Handle session/autoconnect (these take priority over JWT check)
+        if (Chiaki.session) {
             stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
         } else if (Chiaki.autoConnect) {
             stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
@@ -350,6 +358,22 @@ Item {
         function onAuthenticationSuccess() {
             // After successful authentication, show main view
             root.showMainView();
+        }
+
+        function onJwtTokenExpired() {
+            // JWT token expired or invalid, show login form
+            stack.replace(stack.get(0), loginViewComponent, {}, StackView.Immediate);
+        }
+
+        function onJwtTokenValid() {
+            // JWT token is valid and subscription is active, show main view
+            root.showMainView();
+        }
+
+        function onSubscriptionExpired(message) {
+            // Subscription expired, show login form with error message
+            stack.replace(stack.get(0), loginViewComponent, {}, StackView.Immediate);
+            // The error will be shown in LoginView
         }
 
         function onSessionChanged() {

@@ -92,5 +92,10 @@ Pane {
             authenticating = false
             errorText.text = errorMessage
         }
+
+        function onSubscriptionExpired(message) {
+            authenticating = false
+            errorText.text = message
+        }
     }
 }
