@@ -72,8 +72,6 @@ set(SOURCE_FILES
 	src/psnaccountid.cpp
 	include/psntoken.h
 	src/psntoken.cpp
-	include/jwtmanager.h
-	src/jwtmanager.cpp
 	include/jsonrequester.h
 	src/jsonrequester.cpp
 	src/qml/qml.qrc

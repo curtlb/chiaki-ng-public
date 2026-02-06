@@ -23,7 +23,6 @@
 #endif
 
 class SystemdInhibit;
-class JwtManager;
 #ifdef Q_OS_MACOS
     class MacWakeSleep;
 #elif defined(Q_OS_WINDOWS)
@@ -90,16 +89,12 @@ class QmlBackend : public QObject
     Q_PROPERTY(QVariantList hiddenHosts READ hiddenHosts NOTIFY hiddenHostsChanged)
     Q_PROPERTY(bool autoConnect READ autoConnect NOTIFY autoConnectChanged)
     Q_PROPERTY(PsnConnectState connectState READ connectState WRITE setConnectState NOTIFY connectStateChanged)
-    Q_PROPERTY(bool loginRequired READ loginRequired NOTIFY loginRequiredChanged)
     Q_PROPERTY(QVariantList currentControllerMapping READ currentControllerMapping NOTIFY currentControllerMappingChanged)
     Q_PROPERTY(QString currentControllerType READ currentControllerType NOTIFY currentControllerTypeChanged)
     Q_PROPERTY(bool controllerMappingDefaultMapping READ controllerMappingDefaultMapping NOTIFY controllerMappingDefaultMappingChanged)
     Q_PROPERTY(bool controllerMappingInProgress READ controllerMappingInProgress NOTIFY controllerMappingInProgressChanged)
     Q_PROPERTY(bool controllerMappingAltered READ controllerMappingAltered NOTIFY controllerMappingAlteredChanged)
     Q_PROPERTY(bool enableAnalogStickMapping READ enableAnalogStickMapping WRITE setEnableAnalogStickMapping NOTIFY enableAnalogStickMappingChanged)
-    Q_PROPERTY(QString userAvatarUrl READ userAvatarUrl NOTIFY userAvatarUrlChanged)
-    Q_PROPERTY(QString userEmail READ userEmail NOTIFY userEmailChanged)
-    Q_PROPERTY(QString subscriptionExpiration READ subscriptionExpiration NOTIFY subscriptionExpirationChanged)
 
 public:
 
@@ -156,17 +151,9 @@ public:
     bool enableAnalogStickMapping() const { return enable_analog_stick_mapping; }
     void setEnableAnalogStickMapping(bool enabled);
 
-    QString userAvatarUrl() const;
-    QString userEmail() const;
-    QString subscriptionExpiration() const;
-    Q_INVOKABLE void logout();
-
     void finishAutoRegister(const ChiakiRegisteredHost &host);
 
     bool autoConnect() const;
-
-    bool loginRequired() const;
-    Q_INVOKABLE void checkJwtOnStartup();
 
     void psnConnector();
 
@@ -198,8 +185,6 @@ public:
     Q_INVOKABLE void unhideHost(const QString &mac_string);
     Q_INVOKABLE bool registerHost(const QString &host, const QString &psn_id, const QString &pin, const QString &cpin, bool broadcast, int target, const QJSValue &callback);
     Q_INVOKABLE void connectToHost(int index, QString nickname = QString());
-    Q_INVOKABLE void startConnectionWithSplash(int index, QString nickname = QString());
-    Q_INVOKABLE void proceedWithConnection(int index, QString nickname = QString());
     Q_INVOKABLE void stopSession(bool sleep);
     Q_INVOKABLE void sessionGoHome();
     Q_INVOKABLE void enterPin(const QString &pin);
@@ -253,10 +238,6 @@ signals:
     void wakeupStartInitiated();
     void wakeupStartFailed();
     void windowTypeUpdated(WindowType type);
-    void loginRequiredChanged();
-    void userAvatarUrlChanged();
-    void userEmailChanged();
-    void subscriptionExpirationChanged();
 
     void error(const QString &title, const QString &text);
     void sessionError(const QString &title, const QString &text);
@@ -268,9 +249,6 @@ signals:
     void autoConfigStatus(const QString &message);
     void autoConfigSuccess();
     void autoConfigError(const QString &errorMessage);
-    void splashStatusUpdate(const QString &stage, const QString &status, int progress);
-    void splashCompleted();
-    void splashFailed(const QString &error);
 
 private:
     struct DisplayServer {
@@ -353,17 +331,6 @@ private:
     bool wakeup_start = false;
     QMap<QString, PsnHost> psn_hosts = {};
     QMap<QString, PsnHost> psn_nickname_hosts = {};
-    bool login_required = true;
-    JwtManager *jwt_manager = nullptr;
-    int pending_connection_index = -1;
-    QString pending_connection_nickname = "";
-    QString user_avatar_url = "";
-    QString user_email = "";
-    QString subscription_expiration = "";
-    
-    void proceedWithWakeup(int index, QString nickname);
-    void waitForOnlineStatus(int index, QString nickname, QString np);
-    void loadUserData();
 #ifdef CHIAKI_HAVE_WEBENGINE
     SecUaRequestInterceptor * request_interceptor = {};
 #endif

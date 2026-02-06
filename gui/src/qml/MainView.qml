@@ -178,78 +178,6 @@ Pane {
                 onClicked: root.showSettingsDialog()
                 Material.roundedScale: Material.SmallScale
             }
-
-            Item { Layout.preferredWidth: 10 }
-
-            // User avatar and logout
-            ColumnLayout {
-                Layout.fillHeight: true
-                Layout.preferredWidth: 80
-                spacing: 2
-
-                Label {
-                    Layout.alignment: Qt.AlignHCenter
-                    text: Chiaki.userEmail || ""
-                    font.pixelSize: 12
-                    color: Material.foreground
-                    visible: Chiaki.userEmail.length > 0
-                    elide: Text.ElideRight
-                    maximumLineCount: 1
-                }
-
-                Rectangle {
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredWidth: 50
-                    Layout.preferredHeight: 50
-                    radius: 25
-                    color: Material.background
-                    border.color: Material.accent
-                    border.width: 2
-                    visible: Chiaki.userAvatarUrl.length > 0
-
-                    Image {
-                        anchors.fill: parent
-                        anchors.margins: 2
-                        source: Chiaki.userAvatarUrl || ""
-                        fillMode: Image.PreserveAspectCrop
-                        smooth: true
-                        antialiasing: true
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: logoutMenu.open()
-                    }
-                }
-
-                Menu {
-                    id: logoutMenu
-                    y: parent.height
-
-                    MenuItem {
-                        text: qsTr("Выйти")
-                        onTriggered: {
-                            Chiaki.logout()
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Connections {
-        target: Chiaki
-        
-        function onUserAvatarUrlChanged() {
-            // Avatar URL updated
-        }
-        
-        function onUserEmailChanged() {
-            // Email updated
-        }
-        
-        function onSubscriptionExpirationChanged() {
-            // Subscription expiration updated
         }
     }
 
@@ -292,9 +220,9 @@ Pane {
 
             function connectToHost() {
                 if(modelData.discovered)
-                    Chiaki.startConnectionWithSplash(index, modelData.name);
+                    Chiaki.connectToHost(index, modelData.name);
                 else
-                    Chiaki.startConnectionWithSplash(index);
+                    Chiaki.connectToHost(index);
             }
 
             function wakeUpHost() {
@@ -333,50 +261,37 @@ Pane {
                     sourceSize: Qt.size(width, height)
                 }
 
-                ColumnLayout {
+                Label {
                     Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
-                    spacing: 4
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: {
-                            let t = "";
-                            if (modelData.name)
-                                t += modelData.name + "\n";
-                            if (modelData.address)
-                                t += qsTr("Address: %1").arg(Chiaki.settings.streamerMode ? "hidden" : modelData.address);
-                            if (modelData.mac)
-                                t += "\n" + qsTr("ID: %1 (%2)").arg(Chiaki.settings.streamerMode ? "hidden" : modelData.mac).arg(modelData.registered ? qsTr("registered") : qsTr("unregistered"));
-                            if (modelData.duid)
-                            {
-                                if(modelData.discovered)
-                                    t += "\n" + qsTr("Automatic Registration Available");
-                                else
-                                    t += "\n" + qsTr("Remote Connection via PSN");
-                            } 
+                    text: {
+                        let t = "";
+                        if (modelData.name)
+                            t += modelData.name + "\n";
+                        if (modelData.address)
+                            t += qsTr("Address: %1").arg(Chiaki.settings.streamerMode ? "hidden" : modelData.address);
+                        if (modelData.mac)
+                            t += "\n" + qsTr("ID: %1 (%2)").arg(Chiaki.settings.streamerMode ? "hidden" : modelData.mac).arg(modelData.registered ? qsTr("registered") : qsTr("unregistered"));
+                        if (modelData.duid)
+                        {
+                            if(modelData.discovered)
+                                t += "\n" + qsTr("Automatic Registration Available");
                             else
+                                t += "\n" + qsTr("Remote Connection via PSN");
+                        } 
+                        else
+                        {
+                            t += "\n";
+                            if(modelData.discovered)
                             {
-                                t += "\n";
-                                if(modelData.discovered)
-                                {
-                                    if(modelData.manual)
-                                        t += qsTr("discovered + manual")
-                                    else
-                                        t += qsTr("discovered");
-                                }
+                                if(modelData.manual)
+                                    t += qsTr("discovered + manual")
                                 else
-                                    t += qsTr("manual");
+                                    t += qsTr("discovered");
                             }
-                            return t;
+                            else
+                                t += qsTr("manual");
                         }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: Chiaki.subscriptionExpiration.length > 0
-                        text: qsTr("Подписка: %1").arg(Chiaki.subscriptionExpiration)
-                        font.pixelSize: 14
-                        color: Material.accent
+                        return t;
                     }
                 }
 

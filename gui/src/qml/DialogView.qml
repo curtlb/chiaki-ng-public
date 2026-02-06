@@ -17,11 +17,7 @@ Item {
     signal rejected()
 
     function close() {
-        // Use StackView.view attached property to get the StackView
-        var stackView = dialog.StackView.view;
-        if (stackView && stackView.depth > 1) {
-            stackView.pop();
-        }
+        root.closeDialog();
     }
 
     Keys.onEscapePressed: close()

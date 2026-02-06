@@ -211,24 +211,10 @@ Item {
     }
 
     Component.onCompleted: {
-        // Initial view setup based on current state
         if (Chiaki.session)
             stack.replace(stack.get(0), streamViewComponent, {}, StackView.Immediate);
         else if (Chiaki.autoConnect)
             stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
-        else if (Chiaki.loginRequired)
-            showLoginDialog();
-        // else: mainViewComponent is already the initialItem, so no need to replace
-        
-        // Check JWT on startup after initial setup - this will emit loginRequiredChanged signal
-        // Use Qt.callLater to ensure all bindings are evaluated first
-        Qt.callLater(function() {
-            Chiaki.checkJwtOnStartup();
-        });
-    }
-    
-    function showLoginDialog() {
-        stack.push(loginDialogComponent);
     }
 
     Pane {
@@ -395,42 +381,6 @@ Item {
         function onWakeupStartInitiated() {
             stack.replace(stack.get(0), autoConnectViewComponent, {}, StackView.Immediate);
         }
-
-        function onSplashStatusUpdate(stage, status, progress) {
-            // Show splash screen if not already shown
-            var currentItem = stack.currentItem;
-            var isSplashView = false;
-            if (currentItem) {
-                // Check if current item is StreamSplashView by checking if it has stageText property
-                isSplashView = (currentItem.stageText !== undefined);
-            }
-            if (!isSplashView) {
-                stack.push(streamSplashViewComponent);
-                currentItem = stack.currentItem;
-            }
-            // Update splash screen status
-            if (currentItem && currentItem.stageText !== undefined) {
-                currentItem.stageText = stage;
-                currentItem.statusText = status;
-                currentItem.progressValue = progress;
-            }
-        }
-
-        function onSplashCompleted() {
-            var currentItem = stack.currentItem;
-            if (currentItem && currentItem.stageText !== undefined) {
-                stack.pop();
-            }
-        }
-
-        function onSplashFailed(error) {
-            root.showConfirmDialog(qsTr("Ошибка подключения"), error, () => {
-                var currentItem = stack.currentItem;
-                if (currentItem && currentItem.stageText !== undefined) {
-                    stack.pop();
-                }
-            });
-        }
     }
 
     Component {
@@ -446,11 +396,6 @@ Item {
     Component {
         id: autoConnectViewComponent
         AutoConnectView { }
-    }
-
-    Component {
-        id: streamSplashViewComponent
-        StreamSplashView { }
     }
 
     Component {
@@ -511,24 +456,5 @@ Item {
     Component {
         id: controllerMappingDialogComponent
         ControllerMappingDialog { }
-    }
-
-    Component {
-        id: loginDialogComponent
-        LoginDialog { }
-    }
-
-    Connections {
-        target: Chiaki
-        
-        function onLoginRequiredChanged() {
-            if (Chiaki.loginRequired) {
-                // Show login dialog
-                root.showLoginDialog();
-            } else {
-                // If login is not required, show main view
-                root.showMainView();
-            }
-        }
     }
 }
