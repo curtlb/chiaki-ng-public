@@ -2774,6 +2774,9 @@ void QmlBackend::checkJwtToken()
         
         QJsonObject obj = doc.object();
         
+        // Логируем весь ответ для отладки
+        qCInfo(chiakiGui) << "JWT decode response JSON:" << QJsonDocument(obj).toJson(QJsonDocument::Compact);
+        
         // Проверяем наличие ошибки "Token has expired"
         if (obj.contains("error")) {
             QString error = obj.value("error").toString();
@@ -2786,18 +2789,41 @@ void QmlBackend::checkJwtToken()
         }
         
         // Проверяем наличие Date_exp
+        if (!obj.contains("Date_exp")) {
+            qCWarning(chiakiGui) << "No active subscription (Date_exp key missing)";
+            settings->SetJwtToken("");
+            emit subscriptionExpired("Нет активной подписки");
+            return;
+        }
+        
         QJsonValue dateExpValue = obj.value("Date_exp");
+        QJsonValue::Type valueType = dateExpValue.type();
         
-        // Проверяем, является ли значение JSON null или пустой строкой
-        bool isDateExpNull = dateExpValue.isNull() || 
-                            dateExpValue.type() == QJsonValue::Null ||
-                            dateExpValue.type() == QJsonValue::Undefined;
+        qCInfo(chiakiGui) << "Date_exp check - Type:" << valueType 
+                          << "isNull:" << dateExpValue.isNull()
+                          << "isUndefined:" << (valueType == QJsonValue::Undefined)
+                          << "isNullType:" << (valueType == QJsonValue::Null);
         
+        // Сначала проверяем строковое представление (toString() на null возвращает пустую строку)
         QString dateExp = dateExpValue.toString();
-        bool isDateExpEmpty = dateExp.isEmpty() || dateExp == "null";
+        QString dateExpTrimmed = dateExp.trimmed();
+        QString dateExpLower = dateExpTrimmed.toLower();
         
-        if (isDateExpNull || isDateExpEmpty) {
-            qCInfo(chiakiGui) << "No active subscription (Date_exp is null or empty). Type:" << dateExpValue.type() << "Value:" << dateExp;
+        qCInfo(chiakiGui) << "Date_exp string value: '" << dateExp << "' isEmpty:" << dateExp.isEmpty() 
+                          << "Trimmed:'" << dateExpTrimmed << "' Lower:'" << dateExpLower << "'";
+        
+        // Проверяем, является ли значение JSON null, undefined или пустой строкой
+        bool isNullType = (valueType == QJsonValue::Null) || (valueType == QJsonValue::Undefined);
+        bool isEmptyString = dateExp.isEmpty() || dateExpTrimmed.isEmpty();
+        bool isNullString = (dateExpTrimmed == "null") || (dateExpLower == "null");
+        
+        qCInfo(chiakiGui) << "Date_exp validation - isNullType:" << isNullType 
+                          << "isEmptyString:" << isEmptyString 
+                          << "isNullString:" << isNullString;
+        
+        if (isNullType || isEmptyString || isNullString) {
+            qCWarning(chiakiGui) << "No active subscription (Date_exp is null/empty). Type:" << valueType 
+                                 << "Value:'" << dateExp << "' Trimmed:'" << dateExpTrimmed << "'";
             settings->SetJwtToken("");
             emit subscriptionExpired("Нет активной подписки");
             return;
