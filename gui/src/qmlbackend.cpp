@@ -2939,7 +2939,7 @@ void QmlBackend::checkJwtToken()
     QNetworkRequest request(url);
     QNetworkReply *reply = network_manager->get(request);
     
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, jwt]() {
         QByteArray responseData = reply->readAll();
         int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         
