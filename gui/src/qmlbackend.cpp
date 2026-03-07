@@ -321,6 +321,8 @@ void QmlBackend::resumeFromSleep()
         resume_session = false;
         if(session_info.duid.isEmpty())
         {
+            bool resume_zoom = session_info.zoom;
+            bool resume_stretch = session_info.stretch;
             StreamSessionConnectInfo resume_info(
                 session_info.settings,
                 session_info.target,
@@ -332,8 +334,8 @@ void QmlBackend::resumeFromSleep()
                 session_info.duid,
                 session_info.auto_regist,
                 session_info.fullscreen,
-                session_info.zoom,
-                session_info.stretch,
+                resume_zoom,
+                resume_stretch
             );
             resume_info.custom_port_base = session_info.custom_port_base;
             createSession(resume_info);
