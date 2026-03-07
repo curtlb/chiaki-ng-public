@@ -69,7 +69,7 @@ int Host::Wakeup()
 
 	uint64_t credential = (uint64_t)strtoull(this->rp_regist_key, NULL, 16);
 	ChiakiErrorCode ret = chiaki_discovery_wakeup(this->log, NULL,
-		host_addr.c_str(), credential, this->IsPS5());
+		host_addr.c_str(), credential, this->IsPS5(), 0);
 
 	if(ret == CHIAKI_ERR_SUCCESS)
 	{

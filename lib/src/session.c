@@ -27,6 +27,7 @@
 
 
 #define SESSION_PORT					9295
+#define SESSION_PORT_OFFSET_FROM_BASE	3000
 
 #define SESSION_EXPECT_TIMEOUT_MS		5000
 
@@ -263,6 +264,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	session->connect_info.video_profile_auto_downgrade = connect_info->video_profile_auto_downgrade;
 	session->connect_info.enable_keyboard = connect_info->enable_keyboard;
 	session->connect_info.enable_dualsense = connect_info->enable_dualsense;
+	session->connect_info.custom_port_base = connect_info->custom_port_base;
 
 	return CHIAKI_ERR_SUCCESS;
 
@@ -795,7 +797,9 @@ static ChiakiErrorCode session_thread_request_session(ChiakiSession *session, Ch
 				continue;
 			}
 
-			set_port(sa, htons(SESSION_PORT));
+			uint16_t session_port = session->connect_info.custom_port_base
+				? (session->connect_info.custom_port_base - SESSION_PORT_OFFSET_FROM_BASE) : SESSION_PORT;
+			set_port(sa, htons(session_port));
 
 			// TODO: this can block, make cancelable somehow
 			int r = getnameinfo(sa, (socklen_t)ai->ai_addrlen, session->connect_info.hostname, sizeof(session->connect_info.hostname), NULL, 0, NI_NUMERICHOST);
@@ -805,7 +809,7 @@ static ChiakiErrorCode session_thread_request_session(ChiakiSession *session, Ch
 				memcpy(session->connect_info.hostname, "unknown", 8);
 			}
 
-			CHIAKI_LOGI(session->log, "Trying to request session from %s:%d", session->connect_info.hostname, SESSION_PORT);
+			CHIAKI_LOGI(session->log, "Trying to request session from %s:%d", session->connect_info.hostname, session_port);
 
 			session_sock = socket(ai->ai_family, SOCK_STREAM, 0);
 			if(CHIAKI_SOCKET_IS_INVALID(session_sock))
@@ -868,7 +872,11 @@ static ChiakiErrorCode session_thread_request_session(ChiakiSession *session, Ch
 			return CHIAKI_ERR_NETWORK;
 		}
 		else
-			CHIAKI_LOGI(session->log, "Connected to %s:%d", session->connect_info.hostname, SESSION_PORT);
+		{
+			uint16_t session_port = session->connect_info.custom_port_base
+				? (session->connect_info.custom_port_base - SESSION_PORT_OFFSET_FROM_BASE) : SESSION_PORT;
+			CHIAKI_LOGI(session->log, "Connected to %s:%d", session->connect_info.hostname, session_port);
+		}
 	}
 
 	static const char session_request_fmt[] =
@@ -919,12 +927,13 @@ static ChiakiErrorCode session_thread_request_session(ChiakiSession *session, Ch
 	}
 
 	char send_buf[512];
-	int port = SESSION_PORT;
+	int port = session->holepunch_session
+		? chiaki_get_ps_ctrl_port(session->holepunch_session)
+		: (session->connect_info.custom_port_base
+			? (session->connect_info.custom_port_base - SESSION_PORT_OFFSET_FROM_BASE)
+			: SESSION_PORT);
 	if(session->holepunch_session)
-	{
 		chiaki_get_ps_selected_addr(session->holepunch_session, session->connect_info.hostname);
-		port = chiaki_get_ps_ctrl_port(session->holepunch_session);
-	}
 	int request_len = snprintf(send_buf, sizeof(send_buf), session_request_fmt,
 			path, session->connect_info.hostname, port, regist_key_hex, rp_version_str);
 	if(request_len < 0 || request_len >= sizeof(send_buf))

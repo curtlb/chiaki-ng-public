@@ -88,6 +88,8 @@ typedef struct chiaki_connect_info_t
 	chiaki_socket_t *rudp_sock;
 	uint8_t psn_account_id[CHIAKI_PSN_ACCOUNT_ID_SIZE];
 	double packet_loss_max;
+	/** Custom port base from JWT (4cloud). 0 = use default ports. Non-zero: session/ctrl = base-3000, stream = base-2000, senkusha = base-1000, discovery_ps5 = base, discovery_ps4 = base-4000 */
+	uint16_t custom_port_base;
 } ChiakiConnectInfo;
 
 
@@ -217,6 +219,7 @@ typedef struct chiaki_session_t
 		bool enable_keyboard;
 		bool enable_dualsense;
 		uint8_t psn_account_id[CHIAKI_PSN_ACCOUNT_ID_SIZE];
+		uint16_t custom_port_base;
 	} connect_info;
 
 	ChiakiTarget target;

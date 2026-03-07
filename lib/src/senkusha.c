@@ -27,6 +27,7 @@
 
 
 #define SENKUSHA_PORT 9297
+#define SENKUSHA_PORT_OFFSET_FROM_BASE 1000
 
 #define EXPECT_TIMEOUT_MS 5000
 #define CONNECT_TIMEOUT_MS 30000
@@ -145,7 +146,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		}
 
 		memcpy(takion_info.sa, session->connect_info.host_addrinfo_selected->ai_addr, takion_info.sa_len);
-		err = set_port(takion_info.sa, htons(SENKUSHA_PORT));
+		uint16_t senkusha_port = session->connect_info.custom_port_base
+			? (session->connect_info.custom_port_base - SENKUSHA_PORT_OFFSET_FROM_BASE) : SENKUSHA_PORT;
+		err = set_port(takion_info.sa, htons(senkusha_port));
 		assert(err == CHIAKI_ERR_SUCCESS);
 	}
 	else

@@ -431,7 +431,7 @@ static void *discovery_thread_func_oneshot(void *user)
 	return NULL;
 }
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_wakeup(ChiakiLog *log, ChiakiDiscovery *discovery, const char *host, uint64_t user_credential, bool ps5)
+CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_wakeup(ChiakiLog *log, ChiakiDiscovery *discovery, const char *host, uint64_t user_credential, bool ps5, uint16_t port_override)
 {
 	struct addrinfo *addrinfos;
 	// make hostname use ipv4 for now
@@ -468,10 +468,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_wakeup(ChiakiLog *log, ChiakiDisc
 		CHIAKI_LOGE(log, "DiscoveryManager failed to get suitable address from getaddrinfo for wakeup");
 		return CHIAKI_ERR_UNKNOWN;
 	}
+	uint16_t port = port_override ? port_override : (ps5 ? CHIAKI_DISCOVERY_PORT_PS5 : CHIAKI_DISCOVERY_PORT_PS4);
 	if(((struct sockaddr *)&addr)->sa_family == AF_INET)
-		((struct sockaddr_in *)&addr)->sin_port = htons(ps5 ? CHIAKI_DISCOVERY_PORT_PS5 : CHIAKI_DISCOVERY_PORT_PS4);
+		((struct sockaddr_in *)&addr)->sin_port = htons(port);
 	else
-		addr.sin6_port = htons(ps5 ? CHIAKI_DISCOVERY_PORT_PS5 : CHIAKI_DISCOVERY_PORT_PS4);
+		addr.sin6_port = htons(port);
 
 	ChiakiDiscoveryPacket packet = { 0 };
 	packet.cmd = CHIAKI_DISCOVERY_CMD_WAKEUP;

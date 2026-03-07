@@ -29,6 +29,7 @@
 
 
 #define STREAM_CONNECTION_PORT 9296
+#define STREAM_CONNECTION_PORT_OFFSET_FROM_BASE 2000
 
 #define EXPECT_TIMEOUT_MS 5000
 
@@ -158,7 +159,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 		if(!takion_info.sa)
 			return CHIAKI_ERR_MEMORY;
 		memcpy(takion_info.sa, session->connect_info.host_addrinfo_selected->ai_addr, takion_info.sa_len);
-		err = set_port(takion_info.sa, htons(STREAM_CONNECTION_PORT));
+		uint16_t stream_port = session->connect_info.custom_port_base
+			? (session->connect_info.custom_port_base - STREAM_CONNECTION_PORT_OFFSET_FROM_BASE) : STREAM_CONNECTION_PORT;
+		err = set_port(takion_info.sa, htons(stream_port));
 		assert(err == CHIAKI_ERR_SUCCESS);
 	}
 	takion_info.ip_dontfrag = session->dontfrag;

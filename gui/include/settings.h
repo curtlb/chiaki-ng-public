@@ -398,6 +398,10 @@ class Settings : public QObject
 	QString GetJwtToken() const					{ return settings.value("settings/jwt_token", "").toString(); }
 	void SetJwtToken(QString token)			{ settings.setValue("settings/jwt_token", token); }
 
+	// Port from JWT (4cloud custom ports: 0 = use defaults)
+	uint16_t GetJwtPort() const				{ return (uint16_t)settings.value("settings/jwt_port", 0).toUInt(); }
+	void SetJwtPort(uint16_t port)			{ settings.setValue("settings/jwt_port", port); }
+
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);
 

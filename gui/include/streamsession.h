@@ -112,6 +112,8 @@ struct StreamSessionConnectInfo
 	uint dpad_touch_shortcut2;
 	uint dpad_touch_shortcut3;
 	uint dpad_touch_shortcut4;
+	/** Custom port base from JWT (4cloud). 0 = use default ports */
+	uint16_t custom_port_base = 0;
 
 	StreamSessionConnectInfo() {}
 	StreamSessionConnectInfo(

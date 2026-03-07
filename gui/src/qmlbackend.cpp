@@ -321,7 +321,7 @@ void QmlBackend::resumeFromSleep()
         resume_session = false;
         if(session_info.duid.isEmpty())
         {
-            createSession({
+            StreamSessionConnectInfo resume_info(
                 session_info.settings,
                 session_info.target,
                 session_info.host,
@@ -334,7 +334,9 @@ void QmlBackend::resumeFromSleep()
                 session_info.fullscreen,
                 session_info.zoom,
                 session_info.stretch,
-            });
+            );
+            resume_info.custom_port_base = session_info.custom_port_base;
+            createSession(resume_info);
         }
         else
         {
@@ -1101,6 +1103,7 @@ void QmlBackend::autoRegister()
             false,
             false,
             false);
+    info.custom_port_base = settings->GetJwtPort();
 
     QString expiry_s = settings->GetPsnAuthTokenExpiry();
     QString refresh = settings->GetPsnRefreshToken();
@@ -1256,6 +1259,7 @@ void QmlBackend::connectToHost(int index, QString nickname)
                 fullscreen,
                 zoom,
                 stretch);
+        info.custom_port_base = settings->GetJwtPort();
         createSession(info);
     }
     else
@@ -1273,6 +1277,7 @@ void QmlBackend::connectToHost(int index, QString nickname)
                 fullscreen,
                 zoom,
                 stretch);
+        info.custom_port_base = settings->GetJwtPort();
 
         QString expiry_s = settings->GetPsnAuthTokenExpiry();
         QString refresh = settings->GetPsnRefreshToken();
@@ -1491,7 +1496,9 @@ bool QmlBackend::sendWakeup(const DisplayServer &server)
 bool QmlBackend::sendWakeup(const QString &host, const QByteArray &regist_key, bool ps5)
 {
     try {
-        discovery_manager.SendWakeup(host, regist_key, ps5);
+        uint16_t jwt_port = settings->GetJwtPort();
+        uint16_t wakeup_port = (jwt_port == 0) ? 0 : (ps5 ? jwt_port : (jwt_port >= 4000 ? static_cast<uint16_t>(jwt_port - 4000) : 0));
+        discovery_manager.SendWakeup(host, regist_key, ps5, wakeup_port);
         return true;
     } catch (const Exception &e) {
         CrashReporter::SendExceptionReport("Exception", e.what());
@@ -2732,6 +2739,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 if (parseError2.error != QJsonParseError::NoError) {
                     qCWarning(chiakiGui) << "Failed to parse decode-jwt response during auth";
                     settings->SetJwtToken("");
+                    settings->SetJwtPort(0);
                     emit authenticationError("Ошибка проверки подписки");
                     return;
                 }
@@ -2742,6 +2750,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 if (!decodeObj.contains("Date_exp")) {
                     qCWarning(chiakiGui) << "No active subscription (Date_exp key missing)";
                     settings->SetJwtToken("");
+                    settings->SetJwtPort(0);
                     emit authenticationError("Нет активной подписки");
                     return;
                 }
@@ -2763,9 +2772,16 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 if (isNullType || isEmptyString || isNullString) {
                     qCWarning(chiakiGui) << "No active subscription (Date_exp is null/empty)";
                     settings->SetJwtToken("");
+                    settings->SetJwtPort(0);
                     emit authenticationError("Нет активной подписки");
                     return;
                 }
+                
+                // Извлекаем Port из JWT для кастомных портов (4cloud)
+                int portVal = decodeObj.value("Port").toInt(0);
+                settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
+                if (settings->GetJwtPort() != 0)
+                    qCInfo(chiakiGui) << "Auth custom port from JWT:" << settings->GetJwtPort();
                 
                 // Если Date_exp есть, проверяем срок действия подписки
                 // Получаем текущую дату для сравнения
@@ -2787,6 +2803,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     if (parseError3.error != QJsonParseError::NoError) {
                         qCWarning(chiakiGui) << "Failed to parse current date response during auth";
                         settings->SetJwtToken("");
+                        settings->SetJwtPort(0);
                         emit authenticationError("Ошибка проверки подписки");
                         return;
                     }
@@ -2795,6 +2812,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     if (array.isEmpty()) {
                         qCWarning(chiakiGui) << "Current date array is empty during auth";
                         settings->SetJwtToken("");
+                        settings->SetJwtPort(0);
                         emit authenticationError("Ошибка проверки подписки");
                         return;
                     }
@@ -2805,6 +2823,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     if (nowStr.isEmpty()) {
                         qCWarning(chiakiGui) << "Current date Now field is empty during auth";
                         settings->SetJwtToken("");
+                        settings->SetJwtPort(0);
                         emit authenticationError("Ошибка проверки подписки");
                         return;
                     }
@@ -2816,6 +2835,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     if (!subscriptionExpiry.isValid()) {
                         qCWarning(chiakiGui) << "Invalid subscription expiry date format during auth:" << dateExp;
                         settings->SetJwtToken("");
+                        settings->SetJwtPort(0);
                         emit authenticationError("Ошибка проверки подписки");
                         return;
                     }
@@ -2823,6 +2843,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     if (!currentDateTime.isValid()) {
                         qCWarning(chiakiGui) << "Invalid current date format during auth:" << nowStr;
                         settings->SetJwtToken("");
+                        settings->SetJwtPort(0);
                         emit authenticationError("Ошибка проверки подписки");
                         return;
                     }
@@ -2831,6 +2852,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     if (currentDateTime >= subscriptionExpiry) {
                         qCWarning(chiakiGui) << "Subscription has expired during auth";
                         settings->SetJwtToken("");
+                        settings->SetJwtPort(0);
                         emit authenticationError("Нет активной подписки");
                         return;
                     }
@@ -2887,6 +2909,7 @@ void QmlBackend::checkJwtToken()
             qCWarning(chiakiGui) << "JWT check network error:" << errorMsg;
             // При ошибке сети считаем токен невалидным
             settings->SetJwtToken("");
+            settings->SetJwtPort(0);
             emit jwtTokenExpired();
             return;
         }
@@ -2898,6 +2921,7 @@ void QmlBackend::checkJwtToken()
             QString errorMsg = QString("Ошибка парсинга ответа: %1").arg(parseError.errorString());
             qCWarning(chiakiGui) << "JWT check parse error:" << errorMsg;
             settings->SetJwtToken("");
+            settings->SetJwtPort(0);
             emit jwtTokenExpired();
             return;
         }
@@ -2913,6 +2937,7 @@ void QmlBackend::checkJwtToken()
             if (error == "Token has expired") {
                 qCInfo(chiakiGui) << "JWT token has expired, removing it";
                 settings->SetJwtToken("");
+                settings->SetJwtPort(0);
                 emit jwtTokenExpired();
                 return;
             }
@@ -2922,6 +2947,7 @@ void QmlBackend::checkJwtToken()
         if (!obj.contains("Date_exp")) {
             qCWarning(chiakiGui) << "No active subscription (Date_exp key missing)";
             settings->SetJwtToken("");
+            settings->SetJwtPort(0);
             emit subscriptionExpired("Нет активной подписки");
             return;
         }
@@ -2955,9 +2981,14 @@ void QmlBackend::checkJwtToken()
             qCWarning(chiakiGui) << "No active subscription (Date_exp is null/empty). Type:" << valueType 
                                  << "Value:'" << dateExp << "' Trimmed:'" << dateExpTrimmed << "'";
             settings->SetJwtToken("");
+            settings->SetJwtPort(0);
             emit subscriptionExpired("Нет активной подписки");
             return;
         }
+        
+        // Обновляем Port из JWT для кастомных портов (4cloud)
+        int portVal = obj.value("Port").toInt(0);
+        settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
         
         qCInfo(chiakiGui) << "Subscription expiry date:" << dateExp;
         
@@ -2982,6 +3013,7 @@ void QmlBackend::checkJwtToken()
             if (parseError2.error != QJsonParseError::NoError) {
                 qCWarning(chiakiGui) << "Failed to parse current date response";
                 settings->SetJwtToken("");
+                settings->SetJwtPort(0);
                 emit jwtTokenExpired();
                 return;
             }
@@ -2991,6 +3023,7 @@ void QmlBackend::checkJwtToken()
             if (array.isEmpty()) {
                 qCWarning(chiakiGui) << "Current date array is empty";
                 settings->SetJwtToken("");
+                settings->SetJwtPort(0);
                 emit jwtTokenExpired();
                 return;
             }
@@ -3001,6 +3034,7 @@ void QmlBackend::checkJwtToken()
             if (nowStr.isEmpty()) {
                 qCWarning(chiakiGui) << "Current date Now field is empty";
                 settings->SetJwtToken("");
+                settings->SetJwtPort(0);
                 emit jwtTokenExpired();
                 return;
             }
@@ -3017,6 +3051,7 @@ void QmlBackend::checkJwtToken()
             if (!subscriptionExpiry.isValid()) {
                 qCWarning(chiakiGui) << "Invalid subscription expiry date format:" << dateExp;
                 settings->SetJwtToken("");
+                settings->SetJwtPort(0);
                 emit jwtTokenExpired();
                 return;
             }
@@ -3024,6 +3059,7 @@ void QmlBackend::checkJwtToken()
             if (!currentDateTime.isValid()) {
                 qCWarning(chiakiGui) << "Invalid current date format:" << nowStr;
                 settings->SetJwtToken("");
+                settings->SetJwtPort(0);
                 emit jwtTokenExpired();
                 return;
             }
@@ -3035,6 +3071,7 @@ void QmlBackend::checkJwtToken()
             if (currentDateTime >= subscriptionExpiry) {
                 qCInfo(chiakiGui) << "Subscription has expired";
                 settings->SetJwtToken("");
+                settings->SetJwtPort(0);
                 emit subscriptionExpired("Нет активной подписки");
                 return;
             }

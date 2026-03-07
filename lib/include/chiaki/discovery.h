@@ -108,8 +108,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_thread_stop(ChiakiDiscoveryThread
 /**
  * Convenience function to send a wakeup packet
  * @param discovery Discovery to send the packet on. May be NULL, in which case a new temporary Discovery will be created
+ * @param port_override If non-zero, use this port instead of CHIAKI_DISCOVERY_PORT_PS4/PS5 (e.g. for 4cloud custom ports)
  */
-CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_wakeup(ChiakiLog *log, ChiakiDiscovery *discovery, const char *host, uint64_t user_credential, bool ps5);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_discovery_wakeup(ChiakiLog *log, ChiakiDiscovery *discovery, const char *host, uint64_t user_credential, bool ps5, uint16_t port_override);
 
 #ifdef __cplusplus
 }
