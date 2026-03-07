@@ -402,6 +402,10 @@ class Settings : public QObject
 	uint16_t GetJwtPort() const				{ return (uint16_t)settings.value("settings/jwt_port", 0).toUInt(); }
 	void SetJwtPort(uint16_t port)			{ settings.setValue("settings/jwt_port", port); }
 
+	// Last loaded chiaki config URL (4cloud) — при повторном входе с тем же URL конфиг не подгружаем
+	QString GetLastLoadedChiakiConfigUrl() const	{ return settings.value("settings/last_loaded_chiaki_config_url", "").toString(); }
+	void SetLastLoadedChiakiConfigUrl(QString url)	{ settings.setValue("settings/last_loaded_chiaki_config_url", url); }
+
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);
 

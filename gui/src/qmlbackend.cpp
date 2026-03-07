@@ -2785,6 +2785,11 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 if (settings->GetJwtPort() != 0)
                     qCInfo(chiakiGui) << "Auth custom port from JWT:" << settings->GetJwtPort();
                 
+                // URL конфига Chiaki (4cloud) — подгружаем только при первом входе (при повторных не подгружаем)
+                QString chiaki_url = decodeObj.value("chiaki_url").toString().trimmed();
+                if (!chiaki_url.isEmpty())
+                    qCInfo(chiakiGui) << "Auth chiaki_url from JWT:" << chiaki_url;
+                
                 // Если Date_exp есть, проверяем срок действия подписки
                 // Получаем текущую дату для сравнения
                 QUrl currentDateUrl("https://4cloud.pro/api.php");
@@ -2795,7 +2800,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 QNetworkRequest currentDateRequest(currentDateUrl);
                 QNetworkReply *currentDateReply = network_manager->get(currentDateRequest);
                 
-                connect(currentDateReply, &QNetworkReply::finished, this, [this, currentDateReply, dateExp, jwt]() {
+                connect(currentDateReply, &QNetworkReply::finished, this, [this, currentDateReply, dateExp, jwt, chiaki_url]() {
                     QByteArray currentDateData = currentDateReply->readAll();
                     currentDateReply->deleteLater();
                     
@@ -2859,9 +2864,43 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         return;
                     }
                     
-                    // Подписка активна, авторизация успешна
-                    qCInfo(chiakiGui) << "Authentication successful, subscription is active";
-                    emit authenticationSuccess();
+                    // Подписка активна. При первом входе подгружаем конфиг из chiaki_url (при повторных — уже не подгружаем)
+                    bool needLoadConfig = !chiaki_url.isEmpty() && (chiaki_url != settings->GetLastLoadedChiakiConfigUrl());
+                    if (!needLoadConfig) {
+                        qCInfo(chiakiGui) << "Authentication successful, subscription is active";
+                        emit authenticationSuccess();
+                        return;
+                    }
+                    // Сохраняем JWT и порт до импорта конфига: ImportSettings перезаписывает настройки из ini и затирает их
+                    QString jwtToRestore = settings->GetJwtToken();
+                    uint16_t portToRestore = settings->GetJwtPort();
+                    qCInfo(chiakiGui) << "Authentication successful, loading chiaki config from:" << chiaki_url;
+                    QUrl configUrlObj(chiaki_url);
+                    QNetworkRequest configRequest(configUrlObj);
+                    QNetworkReply *configReply = network_manager->get(configRequest);
+                    connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore, portToRestore]() {
+                        configReply->deleteLater();
+                        if (configReply->error() != QNetworkReply::NoError) {
+                            qCWarning(chiakiGui) << "Failed to download chiaki config:" << configReply->errorString();
+                            emit authenticationSuccess();
+                            return;
+                        }
+                        QByteArray configData = configReply->readAll();
+                        QTemporaryFile tempFile;
+                        if (!tempFile.open()) {
+                            qCWarning(chiakiGui) << "Failed to create temp file for config";
+                            emit authenticationSuccess();
+                            return;
+                        }
+                        tempFile.write(configData);
+                        tempFile.flush();
+                        settings->ImportSettings(tempFile.fileName());
+                        settings->SetLastLoadedChiakiConfigUrl(chiaki_url);
+                        settings->SetJwtToken(jwtToRestore);
+                        settings->SetJwtPort(portToRestore);
+                        qCInfo(chiakiGui) << "Chiaki config imported successfully, JWT and port restored";
+                        emit authenticationSuccess();
+                    });
                 });
             });
         } else {
