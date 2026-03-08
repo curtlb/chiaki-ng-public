@@ -36,6 +36,8 @@ typedef struct chiaki_regist_info_t
 
 	uint32_t pin;
 	uint32_t console_pin;
+	/** Custom port base (4cloud). 0 = use REGIST_PORT (9295). Non-zero: use custom_port_base - 3000 */
+	uint16_t custom_port_base;
 	/**
 	 * may be null, in which regular regist (instead of PSN Regist will be used)
 	 */

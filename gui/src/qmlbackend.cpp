@@ -1042,6 +1042,7 @@ bool QmlBackend::registerHost(const QString &host, const QString &psn_id, const 
     info.broadcast = broadcast;
     info.pin = (uint32_t)pin.toULong();
     info.console_pin = (uint32_t)cpin.toULong();
+    info.custom_port_base = settings->GetJwtPort();
     info.holepunch_info = nullptr;
     info.rudp = nullptr;
     QByteArray psn_idb;

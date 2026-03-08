@@ -24,6 +24,7 @@ typedef uint32_t in_addr_t;
 #endif
 
 #define REGIST_PORT 9295
+#define REGIST_PORT_OFFSET_FROM_BASE 3000
 
 #define SEARCH_REQUEST_SLEEP_MS 100
 #define REGIST_SEARCH_TIMEOUT_MS 3000
@@ -524,7 +525,9 @@ static chiaki_socket_t regist_search_connect(ChiakiRegist *regist, struct addrin
 		memcpy(send_addr, ai->ai_addr, ai->ai_addrlen);
 		*send_addr_len = ai->ai_addrlen;
 
-		set_port(send_addr, htons(REGIST_PORT));
+		uint16_t regist_port = regist->info.custom_port_base
+			? (regist->info.custom_port_base - REGIST_PORT_OFFSET_FROM_BASE) : REGIST_PORT;
+		set_port(send_addr, htons(regist_port));
 
 		sock = socket(send_addr->sa_family, SOCK_DGRAM, IPPROTO_UDP);
 		if(CHIAKI_SOCKET_IS_INVALID(sock))
