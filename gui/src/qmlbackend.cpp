@@ -1212,7 +1212,15 @@ void QmlBackend::connectToHost(int index, QString nickname)
         return;
     }
 
+    // Консоль спит (STANDBY) или статус неизвестен при 4cloud (JwtPort) — будим и ждём READY
+    bool need_wakeup = false;
     if (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY)
+        need_wakeup = true;
+    else if (settings->GetJwtPort() != 0 && !nickname.isEmpty()
+              && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN))
+        need_wakeup = true;
+
+    if (need_wakeup)
     {
         if(!sendWakeup(server))
         {
@@ -1224,6 +1232,11 @@ void QmlBackend::connectToHost(int index, QString nickname)
             qCWarning(chiakiGui) << "No nickname given for registered connection, not connecting...";
             return;
         }
+        wakeup_host_addr = server.GetHostAddr();
+        wakeup_regist_key = server.registered_host.GetRPRegistKey();
+        wakeup_ps5 = server.IsPS5();
+        if (!wakeup_repeat_timer->isActive())
+            wakeup_repeat_timer->start();
         waking_sleeping_nicknames.append(nickname);
         QTimer::singleShot(WAKEUP_PSN_IGNORE_SECONDS * 1000, [this, nickname]{
             waking_sleeping_nicknames.removeOne(nickname);

@@ -321,6 +321,8 @@ void DiscoveryManager::DiscoveryServiceHosts(QList<DiscoveryHost> hosts)
 
 void DiscoveryManager::RefreshManualServices()
 {
+	qDeleteAll(manual_services);
+	manual_services.clear();
 	UpdateManualServices();
 }
 
