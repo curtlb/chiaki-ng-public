@@ -319,6 +319,11 @@ void DiscoveryManager::DiscoveryServiceHosts(QList<DiscoveryHost> hosts)
 	emit HostsUpdated();
 }
 
+void DiscoveryManager::RefreshManualServices()
+{
+	UpdateManualServices();
+}
+
 void DiscoveryManager::UpdateManualServices()
 {
 	if(!settings || (!service_active && !service_active_ipv6))
@@ -350,6 +355,9 @@ void DiscoveryManager::UpdateManualServices()
 		options.host_drop_pings = DROP_PINGS;
 		options.cb = DiscoveryServiceHostsManualCallback;
 		options.cb_user = s;
+		uint16_t jwt_port = settings ? settings->GetJwtPort() : 0;
+		options.send_port_override_ps4 = (jwt_port >= 4000) ? (uint16_t)(jwt_port - 4000) : 0;
+		options.send_port_override_ps5 = jwt_port;
 
 		QByteArray host_utf8 = host.toUtf8();
 		options.send_host = host_utf8.data();

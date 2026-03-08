@@ -297,6 +297,10 @@ private:
     QTimer *psn_reconnect_timer = {};
     QTimer *psn_auto_connect_timer = {};
     QTimer *wakeup_start_timer = {};
+    QTimer *wakeup_repeat_timer = {};
+    QString wakeup_host_addr;
+    QByteArray wakeup_regist_key;
+    bool wakeup_ps5 = false;
     int psn_reconnect_tries = 0;
     QThread psn_connection_thread;
     PsnConnectState psn_connect_state;

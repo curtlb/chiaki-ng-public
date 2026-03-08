@@ -175,6 +175,12 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     psn_reconnect_timer = new QTimer(this);
     wakeup_start_timer = new QTimer(this);
     wakeup_start_timer->setSingleShot(true);
+    wakeup_repeat_timer = new QTimer(this);
+    wakeup_repeat_timer->setInterval(10000);
+    connect(wakeup_repeat_timer, &QTimer::timeout, this, [this]() {
+        if (wakeup_start && !wakeup_host_addr.isEmpty())
+            sendWakeup(wakeup_host_addr, wakeup_regist_key, wakeup_ps5);
+    });
     if(autoConnect() && !auto_connect_nickname.isEmpty())
     {
         connect(psn_auto_connect_timer, &QTimer::timeout, this, [this]
@@ -233,6 +239,9 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     });
     connect(wakeup_start_timer, &QTimer::timeout, this, [this]
     {
+        wakeup_repeat_timer->stop();
+        wakeup_host_addr.clear();
+        wakeup_regist_key.clear();
         emit wakeupStartFailed();
     });
     psn_auto_connect_timer->start(PSN_INTERNET_WAIT_SECONDS * 1000);
@@ -1389,6 +1398,9 @@ void QmlBackend::stopAutoConnect()
     if(!wakeup_nickname.isEmpty())
     {
         wakeup_start_timer->stop();
+        wakeup_repeat_timer->stop();
+        wakeup_host_addr.clear();
+        wakeup_regist_key.clear();
         wakeup_nickname.clear();
         if(wakeup_start)
         {
@@ -2002,6 +2014,9 @@ void QmlBackend::updateDiscoveryHosts()
                 wakeup_nickname.clear();
                 wakeup_start = false;
                 wakeup_start_timer->stop();
+                wakeup_repeat_timer->stop();
+                wakeup_host_addr.clear();
+                wakeup_regist_key.clear();
                 bool session_start_succeeded = true;
 
                 try {
@@ -2025,6 +2040,11 @@ void QmlBackend::updateDiscoveryHosts()
             else if(host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY && session && session->IsConnecting())
             {
                 sendWakeup(host.host_addr, registered.GetRPRegistKey(), host.ps5);
+                wakeup_host_addr = host.host_addr;
+                wakeup_regist_key = registered.GetRPRegistKey();
+                wakeup_ps5 = host.ps5;
+                if (!wakeup_repeat_timer->isActive())
+                    wakeup_repeat_timer->start();
                 QString nickname = host.host_name;
                 wakeup_nickname = nickname;
                 waking_sleeping_nicknames.append(nickname);
@@ -2783,8 +2803,10 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 // Извлекаем Port из JWT для кастомных портов (4cloud)
                 int portVal = decodeObj.value("Port").toInt(0);
                 settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
-                if (settings->GetJwtPort() != 0)
+                if (settings->GetJwtPort() != 0) {
                     qCInfo(chiakiGui) << "Auth custom port from JWT:" << settings->GetJwtPort();
+                    discovery_manager.RefreshManualServices();
+                }
                 
                 // URL конфига Chiaki (4cloud) — подгружаем только при первом входе (при повторных не подгружаем)
                 QString chiaki_url = decodeObj.value("chiaki_url").toString().trimmed();
@@ -3032,6 +3054,8 @@ void QmlBackend::checkJwtToken()
         // Обновляем Port из JWT для кастомных портов (4cloud)
         int portVal = obj.value("Port").toInt(0);
         settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
+        if (settings->GetJwtPort() != 0)
+            discovery_manager.RefreshManualServices();
         
         qCInfo(chiakiGui) << "Subscription expiry date:" << dateExp;
         

@@ -23,6 +23,9 @@ typedef struct chiaki_discovery_service_options_t
 	struct sockaddr_storage *broadcast_addrs;
 	size_t broadcast_num;
 	char *send_host;
+	/** When send_host is set: use these ports instead of CHIAKI_DISCOVERY_PORT_PS4/PS5 (0 = default). E.g. 4cloud: ps5 = Port, ps4 = Port - 4000 */
+	uint16_t send_port_override_ps4;
+	uint16_t send_port_override_ps5;
 	ChiakiDiscoveryServiceCb cb;
 	void *cb_user;
 } ChiakiDiscoveryServiceOptions;

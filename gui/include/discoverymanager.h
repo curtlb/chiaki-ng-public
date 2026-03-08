@@ -65,6 +65,7 @@ class DiscoveryManager : public QObject
 
 		void SetActive(bool active);
 		void SetSettings(Settings *settings);
+		void RefreshManualServices();
 
 		void SendWakeup(const QString &host, const QByteArray &regist_key, bool ps5, uint16_t port_override = 0);
 
