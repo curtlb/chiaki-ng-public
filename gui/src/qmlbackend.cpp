@@ -222,6 +222,9 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     fourcloud_state_timer = new QTimer(this);
     fourcloud_state_timer->setInterval(15000);
     connect(fourcloud_state_timer, &QTimer::timeout, this, &QmlBackend::fetchFourcloudState);
+    subscription_expiry_timer = new QTimer(this);
+    subscription_expiry_timer->setInterval(60000); // 1 раз в минуту
+    connect(subscription_expiry_timer, &QTimer::timeout, this, &QmlBackend::fetchSubscriptionExpiry);
     if(autoConnect() && !auto_connect_nickname.isEmpty())
     {
         connect(psn_auto_connect_timer, &QTimer::timeout, this, [this]
@@ -693,6 +696,7 @@ void QmlBackend::checkPsnConnection(const ChiakiErrorCode &err)
                 session->deleteLater();
                 session = nullptr;
                 setDiscoveryEnabled(true);
+                startSubscriptionExpiryTimer();
             }
             break;
         case CHIAKI_ERR_HOST_UNREACH:
@@ -705,6 +709,7 @@ void QmlBackend::checkPsnConnection(const ChiakiErrorCode &err)
                 session->deleteLater();
                 session = nullptr;
                 setDiscoveryEnabled(true);
+                startSubscriptionExpiryTimer();
             }
             break;
         default:
@@ -717,6 +722,7 @@ void QmlBackend::checkPsnConnection(const ChiakiErrorCode &err)
                 session->deleteLater();
                 session = nullptr;
                 setDiscoveryEnabled(true);
+                startSubscriptionExpiryTimer();
             }
             break;
     }
@@ -751,6 +757,9 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
         qCWarning(chiakiGui) << "Another session is already active";
         return;
     }
+
+    if (subscription_expiry_timer && subscription_expiry_timer->isActive())
+        subscription_expiry_timer->stop();
 
     session_info = connect_info;
     QStringList availableDecoders = settings_qml->availableDecoders();
@@ -878,6 +887,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
         session->deleteLater();
         session = nullptr;
         emit sessionChanged(session);
+        startSubscriptionExpiryTimer();
 
         sleep_inhibit->release();
         setDiscoveryEnabled(true);
@@ -950,6 +960,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
             chiaki_log_mutex.unlock();
             session->deleteLater();
             session = nullptr;
+            startSubscriptionExpiryTimer();
             return;
         }
         emit sessionChanged(session);
@@ -1507,6 +1518,7 @@ void QmlBackend::stopAutoConnect()
 
             session->deleteLater();
             session = nullptr;
+            startSubscriptionExpiryTimer();
         }
     }
     emit autoConnectChanged();
@@ -1660,7 +1672,100 @@ void QmlBackend::clearFourcloudState()
         settings->SetJwtPsn("");
     if (fourcloud_state_timer && fourcloud_state_timer->isActive())
         fourcloud_state_timer->stop();
+    if (subscription_expiry_timer && subscription_expiry_timer->isActive())
+        subscription_expiry_timer->stop();
+    subscription_time_remaining.clear();
+    emit subscriptionTimeRemainingChanged();
     emit hostsChanged();
+}
+
+void QmlBackend::fetchSubscriptionExpiry()
+{
+    QString jwt = settings->GetJwtToken();
+    if (jwt.isEmpty()) {
+        subscription_time_remaining.clear();
+        emit subscriptionTimeRemainingChanged();
+        return;
+    }
+    if (!network_manager)
+        network_manager = new QNetworkAccessManager(this);
+    QUrl url("https://4cloud.pro/api.php");
+    QUrlQuery q;
+    q.addQueryItem("method", "get-date-exp-jwt");
+    q.addQueryItem("jwt", jwt);
+    url.setQuery(q);
+    QNetworkRequest req(url);
+    QNetworkReply *reply = network_manager->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (settings->GetJwtToken().isEmpty())
+            return;
+        QByteArray body = reply->readAll();
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(body, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isArray()) {
+            subscription_time_remaining.clear();
+            emit subscriptionTimeRemainingChanged();
+            return;
+        }
+        QJsonArray arr = doc.array();
+        if (arr.isEmpty()) {
+            subscription_time_remaining.clear();
+            emit subscriptionTimeRemainingChanged();
+            return;
+        }
+        QJsonObject item = arr[0].toObject();
+        QString dateStr = item.value("Date").toString().trimmed();
+        if (dateStr.compare("Error", Qt::CaseInsensitive) == 0) {
+            settings->SetJwtToken("");
+            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
+            emit subscriptionExpired("Нет активной подписки");
+            return;
+        }
+        QString nowStr = item.value("Now").toString().trimmed();
+        if (nowStr.isEmpty()) {
+            subscription_time_remaining.clear();
+            emit subscriptionTimeRemainingChanged();
+            return;
+        }
+        // Date: "31.03.2026 23:00", Now: "2026-03-09 14:36:43"
+        QDateTime expiry = QDateTime::fromString(dateStr, "dd.MM.yyyy HH:mm");
+        QDateTime now = QDateTime::fromString(nowStr, "yyyy-MM-dd HH:mm:ss");
+        if (!expiry.isValid() || !now.isValid()) {
+            subscription_time_remaining.clear();
+            emit subscriptionTimeRemainingChanged();
+            return;
+        }
+        if (now >= expiry) {
+            settings->SetJwtToken("");
+            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
+            emit subscriptionExpired("Срок подписки истёк");
+            return;
+        }
+        qint64 secs = now.secsTo(expiry);
+        int days = static_cast<int>(secs / 86400);
+        int hours = static_cast<int>((secs % 86400) / 3600);
+        int mins = static_cast<int>((secs % 3600) / 60);
+        QStringList parts;
+        if (days > 0)
+            parts << QString::number(days) + " дн.";
+        if (hours > 0)
+            parts << QString::number(hours) + " ч.";
+        if (mins > 0 || parts.isEmpty())
+            parts << QString::number(mins) + " мин.";
+        subscription_time_remaining = parts.join(" ");
+        emit subscriptionTimeRemainingChanged();
+    });
+}
+
+void QmlBackend::startSubscriptionExpiryTimer()
+{
+    if (settings->GetJwtToken().isEmpty())
+        return;
+    if (subscription_expiry_timer) {
+        subscription_expiry_timer->start(60000);
+        fetchSubscriptionExpiry();
+    }
 }
 
 void QmlBackend::setAllowJoystickBackgroundEvents()
@@ -2989,6 +3094,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     bool needLoadConfig = !chiaki_url.isEmpty() && (chiaki_url != settings->GetLastLoadedChiakiConfigUrl());
                     if (!needLoadConfig) {
                         qCInfo(chiakiGui) << "Authentication successful, subscription is active";
+                        startSubscriptionExpiryTimer();
                         emit authenticationSuccess();
                         return;
                     }
@@ -3003,6 +3109,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         configReply->deleteLater();
                         if (configReply->error() != QNetworkReply::NoError) {
                             qCWarning(chiakiGui) << "Failed to download chiaki config:" << configReply->errorString();
+                            startSubscriptionExpiryTimer();
                             emit authenticationSuccess();
                             return;
                         }
@@ -3010,6 +3117,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         QTemporaryFile tempFile;
                         if (!tempFile.open()) {
                             qCWarning(chiakiGui) << "Failed to create temp file for config";
+                            startSubscriptionExpiryTimer();
                             emit authenticationSuccess();
                             return;
                         }
@@ -3021,6 +3129,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         settings->SetJwtPort(portToRestore);
                         settings->SetHardwareDecoder("d3d11va");
                         qCInfo(chiakiGui) << "Chiaki config imported successfully, JWT and port restored, hardware decoder set to d3d11va";
+                        startSubscriptionExpiryTimer();
                         emit authenticationSuccess();
                     });
                 });
@@ -3257,6 +3366,7 @@ void QmlBackend::checkJwtToken()
             }
             
             qCInfo(chiakiGui) << "JWT token is valid, subscription is active";
+            startSubscriptionExpiryTimer();
             emit jwtTokenValid();
         });
     });

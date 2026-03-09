@@ -95,6 +95,7 @@ class QmlBackend : public QObject
     Q_PROPERTY(bool controllerMappingInProgress READ controllerMappingInProgress NOTIFY controllerMappingInProgressChanged)
     Q_PROPERTY(bool controllerMappingAltered READ controllerMappingAltered NOTIFY controllerMappingAlteredChanged)
     Q_PROPERTY(bool enableAnalogStickMapping READ enableAnalogStickMapping WRITE setEnableAnalogStickMapping NOTIFY enableAnalogStickMappingChanged)
+    Q_PROPERTY(QString subscriptionTimeRemaining READ subscriptionTimeRemaining NOTIFY subscriptionTimeRemainingChanged)
 
 public:
 
@@ -149,6 +150,7 @@ public:
     void setControllerMappingInProgress(bool is_in_progress);
 
     bool enableAnalogStickMapping() const { return enable_analog_stick_mapping; }
+    QString subscriptionTimeRemaining() const { return subscription_time_remaining; }
     void setEnableAnalogStickMapping(bool enabled);
 
     void finishAutoRegister(const ChiakiRegisteredHost &host);
@@ -256,6 +258,7 @@ signals:
     void jwtTokenExpired();
     void jwtTokenValid();
     void subscriptionExpired(const QString &message);
+    void subscriptionTimeRemainingChanged();
 
 private:
     struct DisplayServer {
@@ -345,6 +348,10 @@ private:
     QTimer *fourcloud_state_timer = nullptr;
     void fetchFourcloudState();
     void clearFourcloudState();
+    QString subscription_time_remaining;
+    QTimer *subscription_expiry_timer = nullptr;
+    void fetchSubscriptionExpiry();
+    void startSubscriptionExpiryTimer();
     QMap<QString, PsnHost> psn_hosts = {};
     QMap<QString, PsnHost> psn_nickname_hosts = {};
 #ifdef CHIAKI_HAVE_WEBENGINE

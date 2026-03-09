@@ -251,19 +251,29 @@ Pane {
                 }
                 spacing: 50
 
-                Image {
+                Item {
                     Layout.fillHeight: true
                     Layout.preferredWidth: 150
-                    fillMode: Image.PreserveAspectFit
-                    source: "image://svg/console-ps" + (modelData.ps5 ? "5" : "4") + (modelData.state == "standby" ? "#light_standby" : "#light_on")
-                    sourceSize: Qt.size(width, height)
+                    Image {
+                        width: parent.height
+                        height: parent.width
+                        anchors.centerIn: parent
+                        rotation: -90
+                        fillMode: Image.PreserveAspectFit
+                        source: "image://svg/console-ps" + (modelData.ps5 ? "5" : "4") + (modelData.state == "standby" ? "#light_standby" : "#light_on")
+                        sourceSize: Qt.size(width, height)
+                    }
                 }
 
                 Label {
                     Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
                     text: {
-                        if (modelData.manual)
-                            return modelData.name || "";
+                        if (modelData.manual) {
+                            let t = modelData.name || "";
+                            if (Chiaki.subscriptionTimeRemaining)
+                                t += "\n" + Chiaki.subscriptionTimeRemaining;
+                            return t;
+                        }
                         let t = "";
                         if (modelData.name)
                             t += modelData.name + "\n";
