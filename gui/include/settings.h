@@ -406,6 +406,10 @@ class Settings : public QObject
 	QString GetLastLoadedChiakiConfigUrl() const	{ return settings.value("settings/last_loaded_chiaki_config_url", "").toString(); }
 	void SetLastLoadedChiakiConfigUrl(QString url)	{ settings.setValue("settings/last_loaded_chiaki_config_url", url); }
 
+	// NPS4 from JWT (4cloud) — для запроса статуса консоли через status_console.php?NPS4=<value>
+	QString GetNps4() const				{ return settings.value("settings/nps4", "").toString().trimmed(); }
+	void SetNps4(QString value)			{ settings.setValue("settings/nps4", value.trimmed()); }
+
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);
 

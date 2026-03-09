@@ -278,6 +278,7 @@ private:
     DisplayServer displayServerAt(int index) const;
     bool sendWakeup(const DisplayServer &server);
     bool sendWakeup(const QString &host, const QByteArray &regist_key, bool ps5);
+    void continueConnectToHost(int index, QString nickname, bool need_wakeup);
     void updateControllers();
     void updateControllerMappings();
     void updateDiscoveryHosts();
