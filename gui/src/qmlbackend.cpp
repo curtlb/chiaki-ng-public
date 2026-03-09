@@ -35,8 +35,40 @@
 #include <QNetworkCookie>
 #include <QJsonDocument>
 #include <QJsonObject>
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#include <QTextCodec>
+#else
+#include <QStringDecoder>
+#endif
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
+
+// Парсит ответ status_console.php (тело ответа). Не смотрим на HTTP код. Пробуем UTF-8 и Windows-1251.
+static QString parseFourcloudStatusBody(const QByteArray &body)
+{
+	QString text = QString::fromUtf8(body).trimmed();
+	auto hasKeyword = [&text]() {
+		return text.contains(QStringLiteral("Онлайн")) || text.contains(QStringLiteral("Спит")) || text.contains(QStringLiteral("Оффлайн"));
+	};
+	if (!hasKeyword()) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+		QTextCodec *codec = QTextCodec::codecForName("Windows-1251");
+		if (codec)
+			text = codec->toUnicode(body).trimmed();
+#else
+		QStringDecoder dec("Windows-1251");
+		if (dec.isValid())
+			text = dec.decode(body).trimmed();
+#endif
+	}
+	if (text.contains(QStringLiteral("Онлайн")))
+		return QStringLiteral("ready");
+	if (text.contains(QStringLiteral("Спит")))
+		return QStringLiteral("standby");
+	if (text.contains(QStringLiteral("Оффлайн")))
+		return QStringLiteral("unknown");
+	return QString();
+}
 
 #define PSN_DEVICES_TRIES 2
 #define MAX_PSN_RECONNECT_TRIES 6
@@ -1252,18 +1284,16 @@ void QmlBackend::connectToHost(int index, QString nickname)
             resolved_nickname = server.registered_host.GetServerNickname();
         QByteArray body = statusReply->readAll();
         statusReply->deleteLater();
-        QString text = QString::fromUtf8(body).trimmed();
-        bool need_wakeup = false;
-        if (statusReply->error() == QNetworkReply::NoError) {
-            if (text.contains("Спит") || text.contains("Оффлайн"))
-                need_wakeup = true;
-            qCInfo(chiakiGui) << "4cloud status_console response:" << text << "-> need_wakeup:" << need_wakeup;
-        } else {
-            // При ошибке сети — как при unknown: будим если 4cloud (JwtPort)
+        // Ответ всегда разбираем по телу, код HTTP не учитываем
+        QString status = parseFourcloudStatusBody(body);
+        bool need_wakeup = (status == QStringLiteral("standby") || status == QStringLiteral("unknown"));
+        if (status.isEmpty()) {
+            // Не удалось распознать — fallback по discovery
             need_wakeup = (settings->GetJwtPort() != 0
                            && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN))
                          || (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY);
         }
+        qCInfo(chiakiGui) << "4cloud status_console body -> status:" << (status.isEmpty() ? "parse_failed" : status) << "need_wakeup:" << need_wakeup;
         continueConnectToHost(index, resolved_nickname, need_wakeup);
     });
 }
@@ -1614,18 +1644,9 @@ void QmlBackend::fetchFourcloudState()
             return;
         }
         QByteArray body = reply->readAll();
-        QString text = QString::fromUtf8(body).trimmed();
-        if (reply->error() != QNetworkReply::NoError) {
-            fourcloud_state_cache.clear();
-        } else if (text.contains("Онлайн")) {
-            fourcloud_state_cache = QStringLiteral("ready");
-        } else if (text.contains("Спит")) {
-            fourcloud_state_cache = QStringLiteral("standby");
-        } else if (text.contains("Оффлайн")) {
-            fourcloud_state_cache = QStringLiteral("unknown");
-        } else {
-            fourcloud_state_cache.clear();
-        }
+        // Ответ всегда разбираем по телу, код HTTP не учитываем
+        QString status = parseFourcloudStatusBody(body);
+        fourcloud_state_cache = status;
         emit hostsChanged();
     });
 }
