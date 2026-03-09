@@ -3022,8 +3022,10 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     qCInfo(chiakiGui) << "Auth custom port from JWT:" << settings->GetJwtPort();
                     discovery_manager.RefreshManualServices();
                 }
-                // NPS4 для статуса консоли через API 4cloud (status_console.php?NPS4=)
-                QString nps4 = decodeObj.value("NPS4").toString().trimmed();
+                // Номер консоли для статуса через API 4cloud (status_console.php?NPS4=) — в JWT поле "NP"
+                QString nps4 = decodeObj.value("NP").toString().trimmed();
+                if (nps4.isEmpty())
+                    nps4 = decodeObj.value("NPS4").toString().trimmed();
                 if (nps4.isEmpty())
                     nps4 = decodeObj.value("NSP4").toString().trimmed();
                 settings->SetNps4(nps4);
@@ -3284,12 +3286,14 @@ void QmlBackend::checkJwtToken()
             return;
         }
         
-        // Обновляем Port и NPS4 из JWT для кастомных портов и статуса консоли (4cloud)
+        // Обновляем Port и номер консоли (NP) из JWT для кастомных портов и статуса консоли (4cloud)
         int portVal = obj.value("Port").toInt(0);
         settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
         if (settings->GetJwtPort() != 0)
             discovery_manager.RefreshManualServices();
-        QString nps4 = obj.value("NPS4").toString().trimmed();
+        QString nps4 = obj.value("NP").toString().trimmed();
+        if (nps4.isEmpty())
+            nps4 = obj.value("NPS4").toString().trimmed();
         if (nps4.isEmpty())
             nps4 = obj.value("NSP4").toString().trimmed();
         settings->SetNps4(nps4);
