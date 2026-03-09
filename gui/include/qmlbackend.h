@@ -341,6 +341,10 @@ private:
     QString auto_connect_nickname = "";
     QString wakeup_nickname = "";
     bool wakeup_start = false;
+    QString fourcloud_state_cache;  // "ready"/"standby"/"unknown" из API 4cloud для manual host
+    QTimer *fourcloud_state_timer = nullptr;
+    void fetchFourcloudState();
+    void clearFourcloudState();
     QMap<QString, PsnHost> psn_hosts = {};
     QMap<QString, PsnHost> psn_nickname_hosts = {};
 #ifdef CHIAKI_HAVE_WEBENGINE
