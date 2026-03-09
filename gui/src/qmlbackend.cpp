@@ -609,6 +609,7 @@ QVariantList QmlBackend::hosts() const
         if(!host.ps5 && registered)
             registered_discovered_ps4s++;
     }
+    QString jwt_psn = settings->GetJwtPsn();
     for (const auto &host : settings->GetManualHosts()) {
         QVariantMap m;
         m["discovered"] = false;
@@ -624,10 +625,13 @@ QVariantList QmlBackend::hosts() const
         if (host.GetRegistered() && settings->GetRegisteredHostRegistered(host.GetMAC())) {
             auto registered = settings->GetRegisteredHost(host.GetMAC());
             m["registered"] = true;
-            m["name"] = registered.GetServerNickname();
             m["ps5"] = chiaki_target_is_ps5(registered.GetTarget());
             m["mac"] = registered.GetServerMAC().ToString();
         }
+        if (!jwt_psn.isEmpty())
+            m["name"] = jwt_psn;
+        else if (m["registered"].toBool())
+            m["name"] = settings->GetRegisteredHost(host.GetMAC()).GetServerNickname();
         out.append(m);
     }
     if(registered_discovered_ps4s >= settings->GetPS4RegisteredHostsRegistered())
@@ -1652,6 +1656,8 @@ void QmlBackend::fetchFourcloudState()
 void QmlBackend::clearFourcloudState()
 {
     fourcloud_state_cache.clear();
+    if (settings)
+        settings->SetJwtPsn("");
     if (fourcloud_state_timer && fourcloud_state_timer->isActive())
         fourcloud_state_timer->stop();
     emit hostsChanged();
@@ -2890,6 +2896,10 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 if (nps4.isEmpty())
                     nps4 = decodeObj.value("NSP4").toString().trimmed();
                 settings->SetNps4(nps4);
+                QString jwt_psn = decodeObj.value("PSN").toString().trimmed();
+                if (jwt_psn.isEmpty())
+                    jwt_psn = decodeObj.value("psn").toString().trimmed();
+                settings->SetJwtPsn(jwt_psn);
                 if (!nps4.isEmpty()) {
                     qCInfo(chiakiGui) << "Auth NPS4 from JWT:" << nps4;
                     fetchFourcloudState();
@@ -3148,6 +3158,10 @@ void QmlBackend::checkJwtToken()
         if (nps4.isEmpty())
             nps4 = obj.value("NSP4").toString().trimmed();
         settings->SetNps4(nps4);
+        QString jwt_psn = obj.value("PSN").toString().trimmed();
+        if (jwt_psn.isEmpty())
+            jwt_psn = obj.value("psn").toString().trimmed();
+        settings->SetJwtPsn(jwt_psn);
         if (!nps4.isEmpty()) {
             fetchFourcloudState();
             fourcloud_state_timer->start(15000);

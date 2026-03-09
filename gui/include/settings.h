@@ -410,6 +410,10 @@ class Settings : public QObject
 	QString GetNps4() const				{ return settings.value("settings/nps4", "").toString().trimmed(); }
 	void SetNps4(QString value)			{ settings.setValue("settings/nps4", value.trimmed()); }
 
+	// PSN из decode-jwt (4cloud) — отображаемое имя для manual host
+	QString GetJwtPsn() const			{ return settings.value("settings/jwt_psn", "").toString().trimmed(); }
+	void SetJwtPsn(QString value)		{ settings.setValue("settings/jwt_psn", value.trimmed()); }
+
 		QString GetCurrentProfile() const;
 		void SetCurrentProfile(QString profile);
 

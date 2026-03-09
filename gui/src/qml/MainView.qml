@@ -262,6 +262,8 @@ Pane {
                 Label {
                     Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
                     text: {
+                        if (modelData.manual)
+                            return modelData.name || "";
                         let t = "";
                         if (modelData.name)
                             t += modelData.name + "\n";
@@ -275,7 +277,7 @@ Pane {
                                 t += "\n" + qsTr("Automatic Registration Available");
                             else
                                 t += "\n" + qsTr("Remote Connection via PSN");
-                        } 
+                        }
                         else
                         {
                             t += "\n";
@@ -295,6 +297,7 @@ Pane {
 
                 Label {
                     Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
+                    visible: !modelData.manual
                     text: {
                         let t = "";
                         if(modelData.duid)
@@ -372,7 +375,7 @@ Pane {
                         flat: true
                         padding: 20
                         leftPadding: delegate.highlighted ? 50 : undefined
-                        visible: modelData.registered
+                        visible: modelData.registered && !modelData.manual
                         focusPolicy: Qt.NoFocus
                         onClicked: delegate.setConsolePin()
                         Material.roundedScale: Material.SmallScale
