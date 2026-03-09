@@ -212,6 +212,7 @@ public:
     Q_INVOKABLE void authenticate(const QString &email, const QString &password);
     Q_INVOKABLE void checkJwtToken();
     Q_INVOKABLE void ensureFourcloudPolling();
+    Q_INVOKABLE void logoutFourcloud();
 #if CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
     Q_INVOKABLE void createSteamShortcut(QString shortcutName, QString launchOptions, const QJSValue &callback, QString steamDir);
 #endif

@@ -89,6 +89,17 @@ Pane {
                 Material.roundedScale: Material.SmallScale
             }
 
+            Button {
+                Layout.fillHeight: true
+                Layout.preferredWidth: 120
+                flat: true
+                text: qsTr("Выйти")
+                focusPolicy: Qt.NoFocus
+                visible: !!Chiaki.settings.jwtToken
+                onClicked: Chiaki.logoutFourcloud()
+                Material.roundedScale: Material.SmallScale
+            }
+
             Item { Layout.fillWidth: true }
 
             Button {

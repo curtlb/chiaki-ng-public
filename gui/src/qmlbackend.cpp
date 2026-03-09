@@ -1691,6 +1691,16 @@ void QmlBackend::ensureFourcloudPolling()
     fourcloud_state_timer->start(15000);
 }
 
+void QmlBackend::logoutFourcloud()
+{
+    if (settings) {
+        settings->SetJwtToken("");
+        settings->SetJwtPort(0);
+        settings->SetNps4("");
+    }
+    clearFourcloudState();
+}
+
 void QmlBackend::clearFourcloudState()
 {
     fourcloud_state_cache.clear();
