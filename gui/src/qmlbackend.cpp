@@ -63,13 +63,17 @@ static QString parseFourcloudStatusBody(const QByteArray &body)
 		}
 #endif
 	}
+	QString result;
 	if (text.contains(QStringLiteral("Онлайн")))
-		return QStringLiteral("ready");
-	if (text.contains(QStringLiteral("Спит")))
-		return QStringLiteral("standby");
-	if (text.contains(QStringLiteral("Оффлайн")))
-		return QStringLiteral("unknown");
-	return QString();
+		result = QStringLiteral("ready");
+	else if (text.contains(QStringLiteral("Спит")))
+		result = QStringLiteral("standby");
+	else if (text.contains(QStringLiteral("Оффлайн")))
+		result = QStringLiteral("unknown");
+	qCInfo(chiakiGui) << "[4cloud parse] body size:" << body.size()
+		<< "preview:" << QString::fromUtf8(body.left(300)).replace(QChar('\n'), QChar(' '))
+		<< "parsed:" << (result.isEmpty() ? "fail" : result);
+	return result;
 }
 
 #define PSN_DEVICES_TRIES 2
@@ -931,31 +935,21 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
 
     if(connect_info.duid.isEmpty())
     {
-        if(!wakeup_nickname.isEmpty())
-        {
-            wakeup_start = true;
-            wakeup_start_timer->start(WAKEUP_WAIT_SECONDS * 1000);
-            emit wakeupStartInitiated();
-            updateDiscoveryHosts();
+        // Сразу подключаемся без ожидания READY (wake-up уже отправлен при need_wakeup)
+        try {
+            session->Start();
+        } catch (const Exception &e) {
+            CrashReporter::SendExceptionReport("Exception", e.what());
+            emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
+            chiaki_log_mutex.lock();
+            chiaki_log_ctx = nullptr;
+            chiaki_log_mutex.unlock();
+            session->deleteLater();
+            session = nullptr;
+            return;
         }
-        else
-        {
-            try {
-                session->Start();
-            } catch (const Exception &e) {
-                CrashReporter::SendExceptionReport("Exception", e.what());
-                emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
-                chiaki_log_mutex.lock();
-                chiaki_log_ctx = nullptr;
-                chiaki_log_mutex.unlock();
-                session->deleteLater();
-                session = nullptr;
-                return;
-            }
-            emit sessionChanged(session);
-
-            sleep_inhibit->inhibit();
-        }
+        emit sessionChanged(session);
+        sleep_inhibit->inhibit();
     }
     else
     {
@@ -1259,9 +1253,9 @@ void QmlBackend::connectToHost(int index, QString nickname)
 
     QString nps4 = settings->GetNps4();
     if (nps4.isEmpty()) {
-        // Без 4cloud API — решаем по discovery (STANDBY или unknown при JwtPort)
         bool need_wakeup = (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY)
                         || (settings->GetJwtPort() != 0 && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN));
+        qCInfo(chiakiGui) << "[4cloud connect] no NPS4, need_wakeup from discovery:" << need_wakeup;
         continueConnectToHost(index, nickname, need_wakeup);
         return;
     }
@@ -1273,6 +1267,7 @@ void QmlBackend::connectToHost(int index, QString nickname)
     QUrlQuery statusQuery;
     statusQuery.addQueryItem("NPS4", nps4);
     statusUrl.setQuery(statusQuery);
+    qCInfo(chiakiGui) << "[4cloud status] request URL:" << statusUrl.toString();
     QNetworkRequest statusRequest(statusUrl);
     QNetworkReply *statusReply = network_manager->get(statusRequest);
     connect(statusReply, &QNetworkReply::finished, this, [this, statusReply, index, nickname]() {
@@ -1281,21 +1276,25 @@ void QmlBackend::connectToHost(int index, QString nickname)
             statusReply->deleteLater();
             return;
         }
+        int httpCode = statusReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        auto replyError = statusReply->error();
+        QByteArray body = statusReply->readAll();
+        statusReply->deleteLater();
+        qCInfo(chiakiGui) << "[4cloud status] response httpCode:" << httpCode
+            << "error:" << replyError
+            << "bodySize:" << body.size();
         QString resolved_nickname = nickname;
         if (resolved_nickname.isEmpty() && server.registered)
             resolved_nickname = server.registered_host.GetServerNickname();
-        QByteArray body = statusReply->readAll();
-        statusReply->deleteLater();
-        // Ответ всегда разбираем по телу, код HTTP не учитываем
         QString status = parseFourcloudStatusBody(body);
         bool need_wakeup = (status == QStringLiteral("standby") || status == QStringLiteral("unknown"));
         if (status.isEmpty()) {
-            // Не удалось распознать — fallback по discovery
             need_wakeup = (settings->GetJwtPort() != 0
                            && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN))
                          || (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY);
         }
-        qCInfo(chiakiGui) << "4cloud status_console body -> status:" << (status.isEmpty() ? "parse_failed" : status) << "need_wakeup:" << need_wakeup;
+        qCInfo(chiakiGui) << "[4cloud status] status:" << (status.isEmpty() ? "parse_failed" : status)
+            << "need_wakeup:" << need_wakeup << "-> continueConnectToHost";
         continueConnectToHost(index, resolved_nickname, need_wakeup);
     });
 }
@@ -1309,6 +1308,7 @@ void QmlBackend::continueConnectToHost(int index, QString nickname, bool need_wa
     if (nickname.isEmpty() && server.registered)
         nickname = server.registered_host.GetServerNickname();
 
+    qCInfo(chiakiGui) << "[4cloud connect] need_wakeup:" << need_wakeup << "nickname:" << nickname;
     if (need_wakeup)
     {
         if(!sendWakeup(server))
@@ -1316,22 +1316,12 @@ void QmlBackend::continueConnectToHost(int index, QString nickname, bool need_wa
             qCWarning(chiakiGui) << "Couldn't wakeup server";
             return;
         }
-        if(nickname.isEmpty())
-        {
-            qCWarning(chiakiGui) << "No nickname given for registered connection, not connecting...";
-            return;
-        }
-        wakeup_host_addr = server.GetHostAddr();
-        wakeup_regist_key = server.registered_host.GetRPRegistKey();
-        wakeup_ps5 = server.IsPS5();
-        if (!wakeup_repeat_timer->isActive())
-            wakeup_repeat_timer->start();
+        qCInfo(chiakiGui) << "[4cloud connect] wakeup sent, proceeding to createSession";
         waking_sleeping_nicknames.append(nickname);
         QTimer::singleShot(WAKEUP_PSN_IGNORE_SECONDS * 1000, [this, nickname]{
             waking_sleeping_nicknames.removeOne(nickname);
             emit hostsChanged();
         });
-        wakeup_nickname = nickname;
     }
 
     bool fullscreen = false, zoom = false, stretch = false;
@@ -1615,6 +1605,7 @@ bool QmlBackend::sendWakeup(const QString &host, const QByteArray &regist_key, b
     try {
         uint16_t jwt_port = settings->GetJwtPort();
         uint16_t wakeup_port = (jwt_port == 0) ? 0 : (ps5 ? jwt_port : (jwt_port >= 4000 ? static_cast<uint16_t>(jwt_port - 4000) : 0));
+        qCInfo(chiakiGui) << "[4cloud wakeup] host:" << host << "port:" << wakeup_port << "ps5:" << ps5;
         discovery_manager.SendWakeup(host, regist_key, ps5, wakeup_port);
         return true;
     } catch (const Exception &e) {
@@ -1637,18 +1628,23 @@ void QmlBackend::fetchFourcloudState()
     QUrlQuery statusQuery;
     statusQuery.addQueryItem("NPS4", nps4);
     statusUrl.setQuery(statusQuery);
+    qCInfo(chiakiGui) << "[4cloud state poll] request URL:" << statusUrl.toString();
     QNetworkRequest statusRequest(statusUrl);
     QNetworkReply *reply = network_manager->get(statusRequest);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        reply->deleteLater();
         if (settings->GetNps4().isEmpty()) {
+            reply->deleteLater();
             clearFourcloudState();
             return;
         }
+        int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        auto err = reply->error();
         QByteArray body = reply->readAll();
-        // Ответ всегда разбираем по телу, код HTTP не учитываем
+        reply->deleteLater();
+        qCInfo(chiakiGui) << "[4cloud state poll] response httpCode:" << httpCode << "error:" << err << "bodySize:" << body.size();
         QString status = parseFourcloudStatusBody(body);
         fourcloud_state_cache = status;
+        qCInfo(chiakiGui) << "[4cloud state poll] cache set to:" << (status.isEmpty() ? "empty" : status);
         emit hostsChanged();
     });
 }
@@ -2138,64 +2134,6 @@ void QmlBackend::controllerMappingApply()
 
 void QmlBackend::updateDiscoveryHosts()
 {
-    // Wakeup console that we are currently connecting to
-    for (const auto &host : discovery_manager.GetHosts()) {
-        if (host.host_addr != session_info.host)
-            continue;
-        if (host.ps5 != chiaki_target_is_ps5(session_info.target))
-            continue;
-        if (!settings->GetRegisteredHostRegistered(host.GetHostMAC()))
-            continue;
-        auto registered = settings->GetRegisteredHost(host.GetHostMAC());
-        if (registered.GetRPRegistKey() == session_info.regist_key) {
-            // READY: совпадение по host_addr и regist_key достаточно (host_name может отличаться у manual/4cloud)
-            if(wakeup_start && session && host.state == CHIAKI_DISCOVERY_HOST_STATE_READY)
-            {
-                wakeup_nickname.clear();
-                wakeup_start = false;
-                wakeup_start_timer->stop();
-                wakeup_repeat_timer->stop();
-                wakeup_host_addr.clear();
-                wakeup_regist_key.clear();
-                bool session_start_succeeded = true;
-
-                try {
-                    session->Start();
-                } catch (const Exception &e) {
-                    CrashReporter::SendExceptionReport("Exception", e.what());
-                    emit error(tr("Stream failed"), tr("Failed to start Stream Session: %1").arg(e.what()));
-                    session_start_succeeded = false;
-                    chiaki_log_mutex.lock();
-                    chiaki_log_ctx = nullptr;
-                    chiaki_log_mutex.unlock();
-                    session->deleteLater();
-                    session = nullptr;
-                }
-                if(session_start_succeeded)
-                {
-                    emit sessionChanged(session);
-                    sleep_inhibit->inhibit();
-                }
-            }
-            else if(host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY && session && session->IsConnecting())
-            {
-                sendWakeup(host.host_addr, registered.GetRPRegistKey(), host.ps5);
-                wakeup_host_addr = host.host_addr;
-                wakeup_regist_key = registered.GetRPRegistKey();
-                wakeup_ps5 = host.ps5;
-                if (!wakeup_repeat_timer->isActive())
-                    wakeup_repeat_timer->start();
-                QString nickname = host.host_name;
-                wakeup_nickname = nickname;
-                waking_sleeping_nicknames.append(nickname);
-                QTimer::singleShot(WAKEUP_PSN_IGNORE_SECONDS * 1000, [this, nickname]{
-                    waking_sleeping_nicknames.removeOne(nickname);
-                    emit hostsChanged();
-                });
-                break;
-            }
-        }
-    }
     if (autoConnect()) {
         const int hosts_count = discovery_manager.GetHosts().count();
         for (int i = 0; i < hosts_count; ++i) {
