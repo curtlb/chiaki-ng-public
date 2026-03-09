@@ -269,17 +269,30 @@ Pane {
                     Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
                     visible: modelData.manual
                     spacing: 2
-                    // Строка 1: статус консоли (зелёный онлайн, жёлтый спит, красный оффлайн)
-                    Label {
-                        text: {
-                            if (modelData.state === "ready") return qsTr("Онлайн");
-                            if (modelData.state === "standby") return qsTr("Спит");
-                            return qsTr("Оффлайн");
+                    // Строка 1: статус консоли с подложкой (зелёный онлайн, жёлтый спит, красный оффлайн)
+                    Item {
+                        implicitWidth: statusLabel.implicitWidth + 16
+                        implicitHeight: statusLabel.implicitHeight + 8
+                        Layout.minimumWidth: 70
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 4
+                            color: {
+                                if (modelData.state === "ready") return "#4CAF50";
+                                if (modelData.state === "standby") return "#FFC107";
+                                return "#F44336";
+                            }
+                            opacity: 0.85
                         }
-                        color: {
-                            if (modelData.state === "ready") return "#4CAF50";
-                            if (modelData.state === "standby") return "#FFC107";
-                            return "#F44336";
+                        Label {
+                            id: statusLabel
+                            anchors.centerIn: parent
+                            text: {
+                                if (modelData.state === "ready") return qsTr("Онлайн");
+                                if (modelData.state === "standby") return qsTr("Спит");
+                                return qsTr("Оффлайн");
+                            }
+                            color: "#FFFFFF"
                         }
                     }
                     // Строка 2: логин PSN

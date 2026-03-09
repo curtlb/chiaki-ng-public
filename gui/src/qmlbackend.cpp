@@ -46,7 +46,17 @@ Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 // Парсит ответ status_console.php (тело ответа). Не смотрим на HTTP код. Пробуем UTF-8 и Windows-1251.
 static QString parseFourcloudStatusBody(const QByteArray &body)
 {
-	QString text = QString::fromUtf8(body).trimmed();
+	QByteArray trimmedBody = body.trimmed();
+	// Убираем UTF-8 BOM, если есть (PHP может отдавать с BOM)
+	if (trimmedBody.startsWith("\xEF\xBB\xBF"))
+		trimmedBody = trimmedBody.mid(3);
+	// Берём первую строку — статус должен быть в начале (защита от HTML/Notice в ответе)
+	int firstLineEnd = trimmedBody.indexOf('\n');
+	if (firstLineEnd > 0)
+		trimmedBody = trimmedBody.left(firstLineEnd);
+	trimmedBody = trimmedBody.trimmed();
+
+	QString text = QString::fromUtf8(trimmedBody);
 	auto hasKeyword = [&text]() {
 		return text.contains(QStringLiteral("Онлайн")) || text.contains(QStringLiteral("Спит")) || text.contains(QStringLiteral("Оффлайн"));
 	};
@@ -54,14 +64,15 @@ static QString parseFourcloudStatusBody(const QByteArray &body)
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 		QTextCodec *codec = QTextCodec::codecForName("Windows-1251");
 		if (codec)
-			text = codec->toUnicode(body).trimmed();
+			text = codec->toUnicode(trimmedBody);
 #else
 		QStringDecoder dec("Windows-1251");
 		if (dec.isValid()) {
-			QString decoded = dec.decode(body);
-			text = decoded.trimmed();
+			QString decoded = dec.decode(trimmedBody);
+			text = decoded;
 		}
 #endif
+		text = text.trimmed();
 	}
 	QString result;
 	if (text.contains(QStringLiteral("Онлайн")))
@@ -71,7 +82,7 @@ static QString parseFourcloudStatusBody(const QByteArray &body)
 	else if (text.contains(QStringLiteral("Оффлайн")))
 		result = QStringLiteral("unknown");
 	qCInfo(chiakiGui) << "[4cloud parse] body size:" << body.size()
-		<< "preview:" << QString::fromUtf8(body.left(300)).replace(QChar('\n'), QChar(' '))
+		<< "firstLine:" << QString::fromUtf8(trimmedBody.left(80)).replace(QChar('\r'), QChar(' ')).replace(QChar('\n'), QChar(' '))
 		<< "parsed:" << (result.isEmpty() ? "fail" : result);
 	return result;
 }
@@ -551,6 +562,11 @@ void QmlBackend::setConnectState(PsnConnectState connect_state)
 
 QVariantList QmlBackend::hosts() const
 {
+    // При открытии списка хостов запускаем опрос статуса 4cloud, если есть NPS4 и таймер ещё не запущен
+    if (!settings->GetManualHosts().isEmpty() && !settings->GetNps4().isEmpty()
+        && fourcloud_state_timer && !fourcloud_state_timer->isActive()) {
+        QMetaObject::invokeMethod(const_cast<QmlBackend *>(this), "ensureFourcloudPolling", Qt::QueuedConnection);
+    }
     QVariantList out;
     QList<QString> discovered_nicknames;
     QList<ManualHost> discovered_manual_hosts;
@@ -1663,6 +1679,16 @@ void QmlBackend::fetchFourcloudState()
         qCInfo(chiakiGui) << "[4cloud state poll] cache set to:" << (status.isEmpty() ? "empty" : status);
         emit hostsChanged();
     });
+}
+
+void QmlBackend::ensureFourcloudPolling()
+{
+    if (settings->GetNps4().isEmpty())
+        return;
+    if (!fourcloud_state_timer || fourcloud_state_timer->isActive())
+        return;
+    fetchFourcloudState();
+    fourcloud_state_timer->start(15000);
 }
 
 void QmlBackend::clearFourcloudState()
