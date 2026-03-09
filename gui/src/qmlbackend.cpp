@@ -1212,15 +1212,15 @@ void QmlBackend::connectToHost(int index, QString nickname)
         return;
     }
 
+    // Для manual/4cloud хоста QML может не передать nickname — берём из зарегистрированного хоста
+    if (nickname.isEmpty() && server.registered)
+        nickname = server.registered_host.GetServerNickname();
+
     QString nps4 = settings->GetNps4();
     if (nps4.isEmpty()) {
-        // Без 4cloud API — решаем по discovery (STANDBY / unknown при JwtPort)
-        bool need_wakeup = false;
-        if (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY)
-            need_wakeup = true;
-        else if (settings->GetJwtPort() != 0 && !nickname.isEmpty()
-                  && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN))
-            need_wakeup = true;
+        // Без 4cloud API — решаем по discovery (STANDBY или unknown при JwtPort)
+        bool need_wakeup = (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY)
+                        || (settings->GetJwtPort() != 0 && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN));
         continueConnectToHost(index, nickname, need_wakeup);
         return;
     }
@@ -1240,6 +1240,9 @@ void QmlBackend::connectToHost(int index, QString nickname)
             statusReply->deleteLater();
             return;
         }
+        QString resolved_nickname = nickname;
+        if (resolved_nickname.isEmpty() && server.registered)
+            resolved_nickname = server.registered_host.GetServerNickname();
         QByteArray body = statusReply->readAll();
         statusReply->deleteLater();
         QString text = QString::fromUtf8(body).trimmed();
@@ -1249,12 +1252,12 @@ void QmlBackend::connectToHost(int index, QString nickname)
                 need_wakeup = true;
             qCInfo(chiakiGui) << "4cloud status_console response:" << text << "-> need_wakeup:" << need_wakeup;
         } else {
-            // При ошибке сети — как при unknown: будим если 4cloud (JwtPort) и есть nickname
-            need_wakeup = (settings->GetJwtPort() != 0 && !nickname.isEmpty()
+            // При ошибке сети — как при unknown: будим если 4cloud (JwtPort)
+            need_wakeup = (settings->GetJwtPort() != 0
                            && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN))
                          || (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY);
         }
-        continueConnectToHost(index, nickname, need_wakeup);
+        continueConnectToHost(index, resolved_nickname, need_wakeup);
     });
 }
 
@@ -1263,6 +1266,9 @@ void QmlBackend::continueConnectToHost(int index, QString nickname, bool need_wa
     auto server = displayServerAt(index);
     if (!server.valid)
         return;
+
+    if (nickname.isEmpty() && server.registered)
+        nickname = server.registered_host.GetServerNickname();
 
     if (need_wakeup)
     {

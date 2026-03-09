@@ -219,10 +219,8 @@ Pane {
             onClicked: connectToHost()
 
             function connectToHost() {
-                if(modelData.discovered)
-                    Chiaki.connectToHost(index, modelData.name);
-                else
-                    Chiaki.connectToHost(index);
+                // Всегда передаём name (для manual host с регистрацией это nickname из настроек)
+                Chiaki.connectToHost(index, modelData.name || "");
             }
 
             function wakeUpHost() {
