@@ -265,15 +265,47 @@ Pane {
                     }
                 }
 
+                ColumnLayout {
+                    Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
+                    visible: modelData.manual
+                    spacing: 2
+                    // Строка 1: статус консоли (зелёный онлайн, жёлтый спит, красный оффлайн)
+                    Label {
+                        text: {
+                            if (modelData.state === "ready") return qsTr("Онлайн");
+                            if (modelData.state === "standby") return qsTr("Спит");
+                            return qsTr("Оффлайн");
+                        }
+                        color: {
+                            if (modelData.state === "ready") return "#4CAF50";
+                            if (modelData.state === "standby") return "#FFC107";
+                            return "#F44336";
+                        }
+                    }
+                    // Строка 2: логин PSN
+                    Label {
+                        text: modelData.name || ""
+                    }
+                    // Строка 3: дата окончания подписки
+                    RowLayout {
+                        spacing: 6
+                        visible: !!Chiaki.subscriptionTimeRemaining
+                        Image {
+                            Layout.preferredWidth: 20
+                            Layout.preferredHeight: 21
+                            sourceSize: Qt.size(20, 21)
+                            source: "qrc:/icons/clock.svg"
+                            fillMode: Image.PreserveAspectFit
+                        }
+                        Label {
+                            text: Chiaki.subscriptionTimeRemaining || ""
+                        }
+                    }
+                }
                 Label {
                     Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
+                    visible: !modelData.manual
                     text: {
-                        if (modelData.manual) {
-                            let t = modelData.name || "";
-                            if (Chiaki.subscriptionTimeRemaining)
-                                t += "\n" + Chiaki.subscriptionTimeRemaining;
-                            return t;
-                        }
                         let t = "";
                         if (modelData.name)
                             t += modelData.name + "\n";
