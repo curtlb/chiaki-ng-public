@@ -57,8 +57,10 @@ static QString parseFourcloudStatusBody(const QByteArray &body)
 			text = codec->toUnicode(body).trimmed();
 #else
 		QStringDecoder dec("Windows-1251");
-		if (dec.isValid())
-			text = dec.decode(body).trimmed();
+		if (dec.isValid()) {
+			QString decoded = dec.decode(body);
+			text = decoded.trimmed();
+		}
 #endif
 	}
 	if (text.contains(QStringLiteral("Онлайн")))
