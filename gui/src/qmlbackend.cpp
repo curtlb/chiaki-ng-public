@@ -1699,6 +1699,7 @@ void QmlBackend::logoutFourcloud()
         settings->SetNps4("");
     }
     clearFourcloudState();
+    emit jwtTokenExpired();
 }
 
 void QmlBackend::clearFourcloudState()
