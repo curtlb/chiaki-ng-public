@@ -774,6 +774,9 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
         return;
     }
 
+    // Не опрашивать статус консоли и подписку во время стрима — они могут блокировать трансляцию
+    if (fourcloud_state_timer && fourcloud_state_timer->isActive())
+        fourcloud_state_timer->stop();
     if (subscription_expiry_timer && subscription_expiry_timer->isActive())
         subscription_expiry_timer->stop();
 
