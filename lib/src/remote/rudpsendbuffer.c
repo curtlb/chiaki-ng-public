@@ -296,7 +296,7 @@ static void rudp_send_buffer_resend(ChiakiRudpSendBuffer *send_buffer)
 		{
 			if(packet->tries >= RUDP_DATA_RESEND_TRIES_MAX)
 			{
-				CHIAKI_LOGI(send_buffer->log, "Hit max retries of %d tries giving up on packet with seqnum %#lx", RUDP_DATA_RESEND_TRIES_MAX, (unsigned long)packet->seq_num);
+				CHIAKI_LOGV(send_buffer->log, "Hit max retries of %d tries giving up on packet with seqnum %#lx", RUDP_DATA_RESEND_TRIES_MAX, (unsigned long)packet->seq_num);
 				ChiakiSeqNum16 ack_seq_nums[RUDP_SEND_BUFFER_SIZE];
 				size_t ack_seq_nums_count;
 				chiaki_mutex_unlock(&send_buffer->mutex);
@@ -308,7 +308,8 @@ static void rudp_send_buffer_resend(ChiakiRudpSendBuffer *send_buffer)
 			}
 			char packet_type[29] = {0};
 			GetRudpPacketType(send_buffer, *((uint16_t *)(packet->buf + 6)), packet_type);
-			CHIAKI_LOGI(send_buffer->log, "rudp Send Buffer re-sending packet with seqnum %#lx and type %s, tries: %llu", (unsigned long)packet->seq_num, packet_type, (unsigned long long)packet->tries);
+			if(packet->tries == 0 || packet->tries % 5 == 0)
+				CHIAKI_LOGV(send_buffer->log, "rudp Send Buffer re-sending packet with seqnum %#lx and type %s, tries: %llu", (unsigned long)packet->seq_num, packet_type, (unsigned long long)packet->tries);
 			packet->last_send_ms = now;
 			chiaki_rudp_send_raw(send_buffer->rudp, packet->buf, packet->buf_size);
 			packet->tries++;

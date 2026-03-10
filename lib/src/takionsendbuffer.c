@@ -245,7 +245,7 @@ static void takion_send_buffer_resend(ChiakiTakionSendBuffer *send_buffer)
 		{
 			if(packet->tries >= TAKION_DATA_RESEND_TRIES_MAX)
 			{
-				CHIAKI_LOGI(send_buffer->log, "Hit max retries of %d tries... giving up on packet with seqnum %#llx", TAKION_DATA_RESEND_TRIES_MAX, (unsigned long long)packet->seq_num);
+				CHIAKI_LOGV(send_buffer->log, "Hit max retries of %d tries... giving up on packet with seqnum %#llx", TAKION_DATA_RESEND_TRIES_MAX, (unsigned long long)packet->seq_num);
 				ChiakiSeqNum32 ack_seq_nums[TAKION_SEND_BUFFER_SIZE];
 				size_t ack_seq_nums_count;
 				chiaki_mutex_unlock(&send_buffer->mutex);
@@ -255,7 +255,10 @@ static void takion_send_buffer_resend(ChiakiTakionSendBuffer *send_buffer)
 					i-= 1;
 				continue;
 			}
-			CHIAKI_LOGI(send_buffer->log, "Takion Send Buffer re-sending packet with seqnum %#llx, tries: %llu", (unsigned long long)packet->seq_num, (unsigned long long)packet->tries);
+			// This can spam heavily on packet loss and cause IO stalls if session logging flushes each line.
+			// Log at verbose and rate-limit to reduce overhead.
+			if(packet->tries == 0 || packet->tries % 5 == 0)
+				CHIAKI_LOGV(send_buffer->log, "Takion Send Buffer re-sending packet with seqnum %#llx, tries: %llu", (unsigned long long)packet->seq_num, (unsigned long long)packet->tries);
 			packet->last_send_ms = now;
 			chiaki_takion_send_raw(send_buffer->takion, packet->buf, packet->buf_size);
 			packet->tries++;
