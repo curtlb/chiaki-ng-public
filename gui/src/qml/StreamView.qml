@@ -63,20 +63,13 @@ Item {
                     topMargin: 30
                 }
                 text: {
-                    if(Chiaki.settings.dpadTouchEnabled)
-                    {
-                        if(Chiaki.settings.audioVideoDisabled == 0x01)
-                            qsTr("Audio Disabled in settings\n") + qsTr("Press %1 to open stream menu").arg(Chiaki.controllers.length ? Chiaki.settings.stringForStreamMenuShortcut() : "Ctrl+O") + "\n" + qsTr("Press %1 to toggle between regular dpad and dpad touch").arg(Chiaki.settings.stringForDpadShortcut())
-                        else
-                            qsTr("Press %1 to open stream menu").arg(Chiaki.controllers.length ? Chiaki.settings.stringForStreamMenuShortcut() : "Ctrl+O") + "\n" + qsTr("Press %1 to toggle between regular dpad and dpad touch").arg(Chiaki.settings.stringForDpadShortcut())
-                    }
-                    else
-                    {
-                        if(Chiaki.settings.audioVideoDisabled == 0x01)
-                            qsTr("Audio Disabled in settings\n") + qsTr("Press %1 to open stream menu").arg(Chiaki.controllers.length ? Chiaki.settings.stringForStreamMenuShortcut() : "Ctrl+O")
-                        else
-                            qsTr("Press %1 to open stream menu").arg(Chiaki.controllers.length ? Chiaki.settings.stringForStreamMenuShortcut() : "Ctrl+O")
-                    }
+                    var base = qsTr("L1+R1+L3+R3 (или ctrl+O) – меню трансляции") + "\n"
+                        + qsTr("L1+R1+L2+R2 (или двойной клик ПКМ) – во весь экран") + "\n"
+                        + qsTr("ALT+T – включить AI-переводчик") + "\n"
+                        + qsTr("ALT+Y – скрыть перевод");
+                    if (Chiaki.settings.audioVideoDisabled === 0x01)
+                        return qsTr("Audio Disabled in settings") + "\n" + base;
+                    return base;
                 }
                 visible: sessionLoading
             }

@@ -1702,6 +1702,57 @@ void QmlBackend::logoutFourcloud()
     emit jwtTokenExpired();
 }
 
+void QmlBackend::fetchYandexIamByJwt(const QString &jwt)
+{
+    if (jwt.isEmpty())
+        return;
+    if (!network_manager)
+        network_manager = new QNetworkAccessManager(this);
+    QUrl url("https://4cloud.pro/api.php");
+    QUrlQuery query;
+    query.addQueryItem("method", "get-iam-token-by-jwt");
+    query.addQueryItem("jwt", jwt);
+    url.setQuery(query);
+    qCInfo(chiakiGui) << "Yandex IAM by JWT request (translator)";
+    QNetworkRequest request(url);
+    QNetworkReply *reply = network_manager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        QByteArray data = reply->readAll();
+        if (reply->error() != QNetworkReply::NoError && data.isEmpty()) {
+            qCInfo(chiakiGui) << "Yandex IAM by JWT: network error, skipping";
+            return;
+        }
+        QJsonParseError parseError;
+        QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+        if (parseError.error != QJsonParseError::NoError) {
+            qCInfo(chiakiGui) << "Yandex IAM by JWT: parse error, skipping";
+            return;
+        }
+        QJsonObject obj = doc.object();
+        if (obj.contains("error") && !obj.value("error").toString().trimmed().isEmpty()) {
+            qCInfo(chiakiGui) << "Yandex IAM by JWT: API error, skipping";
+            return;
+        }
+        QString status = obj.value("Status").toString();
+        if (status.isEmpty())
+            status = obj.value("status").toString();
+        if (status.toLower() != "success") {
+            qCInfo(chiakiGui) << "Yandex IAM by JWT: status not success, skipping";
+            return;
+        }
+        QString iamToken = obj.value("Key").toString();
+        QString folderId = obj.value("Folder").toString();
+        if (iamToken.isEmpty() || folderId.isEmpty()) {
+            qCInfo(chiakiGui) << "Yandex IAM by JWT: missing Key/Folder, skipping";
+            return;
+        }
+        settings->SetYandexIamToken(iamToken);
+        settings->SetYandexFolderId(folderId);
+        qCInfo(chiakiGui) << "Yandex IAM by JWT: token updated for translator";
+    });
+}
+
 void QmlBackend::clearFourcloudState()
 {
     fourcloud_state_cache.clear();
@@ -2916,7 +2967,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
     QNetworkRequest request(url);
     QNetworkReply *reply = network_manager->get(request);
     
-    connect(reply, &QNetworkReply::finished, this, [this, reply, email]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         QByteArray responseData = reply->readAll();
         int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         
@@ -2965,6 +3016,9 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
             // Сохраняем JWT токен временно
             settings->SetJwtToken(jwt);
             qCInfo(chiakiGui) << "Authentication successful, JWT token received, checking subscription...";
+
+            // IAM-токен Yandex Cloud для переводчика по JWT (без хранения пароля)
+            fetchYandexIamByJwt(jwt);
             
             // Проверяем подписку через decode-jwt API
             QUrl decodeUrl("https://4cloud.pro/api.php");
@@ -3329,7 +3383,7 @@ void QmlBackend::checkJwtToken()
         QNetworkRequest dateExpRequest(dateExpUrl);
         QNetworkReply *dateExpReply = network_manager->get(dateExpRequest);
         
-        connect(dateExpReply, &QNetworkReply::finished, this, [this, dateExpReply]() {
+        connect(dateExpReply, &QNetworkReply::finished, this, [this, dateExpReply, jwt]() {
             QByteArray responseData = dateExpReply->readAll();
             dateExpReply->deleteLater();
             
@@ -3407,6 +3461,7 @@ void QmlBackend::checkJwtToken()
             }
             
             qCInfo(chiakiGui) << "JWT token is valid, subscription is active";
+            fetchYandexIamByJwt(jwt);
             startSubscriptionExpiryTimer();
             emit jwtTokenValid();
         });

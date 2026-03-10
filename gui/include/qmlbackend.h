@@ -350,6 +350,7 @@ private:
     QTimer *fourcloud_state_timer = nullptr;
     void fetchFourcloudState();
     void clearFourcloudState();
+    void fetchYandexIamByJwt(const QString &jwt);
     QString subscription_time_remaining;
     QTimer *subscription_expiry_timer = nullptr;
     void fetchSubscriptionExpiry();
