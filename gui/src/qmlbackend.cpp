@@ -637,8 +637,12 @@ QVariantList QmlBackend::hosts() const
         m["duid"] = "";
         m["address"] = host.GetHost();
         m["state"] = "unknown";
-        if (!settings->GetNps4().isEmpty() && !fourcloud_state_cache.isEmpty())
-            m["state"] = fourcloud_state_cache;
+        if (!settings->GetNps4().isEmpty()) {
+            if (fourcloud_state_retrying && (fourcloud_state_cache.isEmpty() || fourcloud_state_cache == QStringLiteral("unknown")))
+                m["state"] = QStringLiteral("checking");  // повторная проверка, не показываем оффлайн
+            else if (!fourcloud_state_cache.isEmpty())
+                m["state"] = fourcloud_state_cache;
+        }
         m["registered"] = false;
         m["display"] = discovered_manual_hosts.contains(host) ? false : true;
         if (host.GetRegistered() && settings->GetRegisteredHostRegistered(host.GetMAC())) {
@@ -1678,6 +1682,18 @@ void QmlBackend::fetchFourcloudState()
         reply->deleteLater();
         qCInfo(chiakiGui) << "[4cloud state poll] response httpCode:" << httpCode << "error:" << err << "bodySize:" << body.size();
         QString status = parseFourcloudStatusBody(body);
+        if (status == QStringLiteral("unknown")) {
+            if (!fourcloud_state_retrying) {
+                fourcloud_state_retrying = true;
+                qCInfo(chiakiGui) << "[4cloud state poll] got offline, scheduling retry in 2.5s";
+                QTimer::singleShot(2500, this, [this]() { fetchFourcloudState(); });
+                emit hostsChanged();  // показать «Проверка…»
+                reply->deleteLater();
+                return;
+            }
+        } else {
+            fourcloud_state_retrying = false;
+        }
         fourcloud_state_cache = status;
         qCInfo(chiakiGui) << "[4cloud state poll] cache set to:" << (status.isEmpty() ? "empty" : status);
         emit hostsChanged();
@@ -1759,6 +1775,7 @@ void QmlBackend::fetchYandexIamByJwt(const QString &jwt)
 void QmlBackend::clearFourcloudState()
 {
     fourcloud_state_cache.clear();
+    fourcloud_state_retrying = false;
     if (settings)
         settings->SetJwtPsn("");
     if (fourcloud_state_timer && fourcloud_state_timer->isActive())

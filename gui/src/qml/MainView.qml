@@ -291,6 +291,7 @@ Pane {
                             color: {
                                 if (modelData.state === "ready") return "#4CAF50";
                                 if (modelData.state === "standby") return "#FFC107";
+                                if (modelData.state === "checking") return "#9E9E9E";
                                 return "#F44336";
                             }
                             opacity: 0.85
@@ -301,6 +302,7 @@ Pane {
                             text: {
                                 if (modelData.state === "ready") return qsTr("Онлайн");
                                 if (modelData.state === "standby") return qsTr("Спит");
+                                if (modelData.state === "checking") return qsTr("Проверка…");
                                 return qsTr("Оффлайн");
                             }
                             color: "#FFFFFF"

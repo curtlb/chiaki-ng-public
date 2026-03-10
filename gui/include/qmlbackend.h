@@ -347,6 +347,7 @@ private:
     QString wakeup_nickname = "";
     bool wakeup_start = false;
     QString fourcloud_state_cache;  // "ready"/"standby"/"unknown" из API 4cloud для manual host
+    bool fourcloud_state_retrying = false;  // повторная проверка после первого "оффлайн"
     QTimer *fourcloud_state_timer = nullptr;
     void fetchFourcloudState();
     void clearFourcloudState();
