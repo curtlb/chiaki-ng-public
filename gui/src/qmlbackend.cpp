@@ -914,6 +914,8 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
         session = nullptr;
         emit sessionChanged(session);
         startSubscriptionExpiryTimer();
+        // Сразу запускаем опрос статуса 4cloud, чтобы обновить «Онлайн/Спит/Оффлайн» на главном экране
+        ensureFourcloudPolling();
 
         sleep_inhibit->release();
         setDiscoveryEnabled(true);
