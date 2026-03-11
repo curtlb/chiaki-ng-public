@@ -107,6 +107,7 @@ Pane {
                 Layout.preferredWidth: 280
                 flat: true
                 text: "Автоматическая настройка"
+                visible: false
                 focusPolicy: Qt.NoFocus
                 onClicked: autoConfigDialog.open()
                 Material.roundedScale: Material.SmallScale

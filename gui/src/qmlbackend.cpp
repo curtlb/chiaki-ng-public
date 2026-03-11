@@ -1828,9 +1828,9 @@ void QmlBackend::fetchSubscriptionExpiry()
         QJsonObject item = arr[0].toObject();
         QString dateStr = item.value("Date").toString().trimmed();
         if (dateStr.compare("Error", Qt::CaseInsensitive) == 0) {
-            settings->SetJwtToken("");
-            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-            emit subscriptionExpired("Нет активной подписки");
+            // Не очищаем JWT при ответе "Error" — может быть временная ошибка API после отключения от консоли
+            subscription_time_remaining.clear();
+            emit subscriptionTimeRemainingChanged();
             return;
         }
         QString nowStr = item.value("Now").toString().trimmed();
