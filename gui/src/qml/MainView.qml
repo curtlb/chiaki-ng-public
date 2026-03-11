@@ -315,7 +315,8 @@ Pane {
                     // Строка 3: дата окончания подписки
                     RowLayout {
                         spacing: 6
-                        visible: !!Chiaki.subscriptionTimeRemaining
+                        // При первом заходе после авторизации значение приходит асинхронно — показываем "Проверка…"
+                        visible: !!Chiaki.settings.jwtToken
                         Image {
                             Layout.preferredWidth: 20
                             Layout.preferredHeight: 21
@@ -324,7 +325,7 @@ Pane {
                             fillMode: Image.PreserveAspectFit
                         }
                         Label {
-                            text: Chiaki.subscriptionTimeRemaining || ""
+                            text: Chiaki.subscriptionTimeRemaining || qsTr("Проверка…")
                         }
                     }
                 }

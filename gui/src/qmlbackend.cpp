@@ -638,7 +638,10 @@ QVariantList QmlBackend::hosts() const
         m["address"] = host.GetHost();
         m["state"] = "unknown";
         if (!settings->GetNps4().isEmpty()) {
-            if (fourcloud_state_retrying && (fourcloud_state_cache.isEmpty() || fourcloud_state_cache == QStringLiteral("unknown")))
+            // Пока нет ответа от API 4cloud, не показываем "Оффлайн" — показываем "Проверка…"
+            if (fourcloud_state_cache.isEmpty())
+                m["state"] = QStringLiteral("checking");
+            else if (fourcloud_state_retrying && (fourcloud_state_cache == QStringLiteral("unknown")))
                 m["state"] = QStringLiteral("checking");  // повторная проверка, не показываем оффлайн
             else if (!fourcloud_state_cache.isEmpty())
                 m["state"] = fourcloud_state_cache;
