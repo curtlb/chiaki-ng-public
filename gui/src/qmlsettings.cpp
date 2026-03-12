@@ -1916,9 +1916,29 @@ void QmlSettings::importSettings()
                                                     QFileDialog::DontUseNativeDialog);
     if(fileName.isEmpty())
         return;
+
+    // Preserve 4cloud/Yandex auth-related values across profile import.
+    // ImportSettings() can clear and overwrite *all* keys from the ini, which would drop JWT/ports.
+    const QString jwtToRestore = settings->GetJwtToken();
+    const uint16_t jwtPortToRestore = settings->GetJwtPort();
+    const QString nps4ToRestore = settings->GetNps4();
+    const QString jwtPsnToRestore = settings->GetJwtPsn();
+    const QString yandexIamToRestore = settings->GetYandexIamToken();
+    const QString yandexFolderToRestore = settings->GetYandexFolderId();
+
     settings->ImportSettings(std::move(fileName));
     // Автоматически устанавливаем декодер на d3d11va после импорта
     settings->SetHardwareDecoder("d3d11va");
+
+    // Restore preserved values
+    settings->SetJwtToken(jwtToRestore);
+    settings->SetJwtPort(jwtPortToRestore);
+    settings->SetNps4(nps4ToRestore);
+    settings->SetJwtPsn(jwtPsnToRestore);
+    settings->SetYandexIamToken(yandexIamToRestore);
+    settings->SetYandexFolderId(yandexFolderToRestore);
+
+    emit jwtTokenChanged();
     refreshAllKeys();
 }
 
