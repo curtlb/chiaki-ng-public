@@ -1830,9 +1830,13 @@ void QmlBackend::fetchSubscriptionExpiry()
         QJsonObject item = arr[0].toObject();
         QString dateStr = item.value("Date").toString().trimmed();
         if (dateStr.compare("Error", Qt::CaseInsensitive) == 0) {
-            // Не очищаем JWT при ответе "Error" — может быть временная ошибка API после отключения от консоли
-            subscription_time_remaining.clear();
-            emit subscriptionTimeRemainingChanged();
+            // Нет активной подписки — выход из профиля, иначе висит «Проверка…»
+            settings->SetJwtToken("");
+            settings->SetJwtPort(0);
+            settings->SetNps4("");
+            clearFourcloudState();
+            emit subscriptionExpired("Нет активной подписки");
+            emit jwtTokenExpired();
             return;
         }
         QString nowStr = item.value("Now").toString().trimmed();
@@ -1853,6 +1857,7 @@ void QmlBackend::fetchSubscriptionExpiry()
             settings->SetJwtToken("");
             settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
             emit subscriptionExpired("Срок подписки истёк");
+            emit jwtTokenExpired();
             return;
         }
         qint64 secs = now.secsTo(expiry);
