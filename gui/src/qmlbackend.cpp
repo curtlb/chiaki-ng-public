@@ -3219,11 +3219,13 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     // Сохраняем JWT и порт до импорта конфига: ImportSettings перезаписывает настройки из ini и затирает их
                     QString jwtToRestore = settings->GetJwtToken();
                     uint16_t portToRestore = settings->GetJwtPort();
+                    QString nps4ToRestore = settings->GetNps4();
+                    QString jwtPsnToRestore = settings->GetJwtPsn();
                     qCInfo(chiakiGui) << "Authentication successful, loading chiaki config from:" << chiaki_url;
                     QUrl configUrlObj(chiaki_url);
                     QNetworkRequest configRequest(configUrlObj);
                     QNetworkReply *configReply = network_manager->get(configRequest);
-                    connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore, portToRestore]() {
+                    connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore, portToRestore, nps4ToRestore, jwtPsnToRestore]() {
                         configReply->deleteLater();
                         if (configReply->error() != QNetworkReply::NoError) {
                             qCWarning(chiakiGui) << "Failed to download chiaki config:" << configReply->errorString();
@@ -3245,8 +3247,10 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         settings->SetLastLoadedChiakiConfigUrl(chiaki_url);
                         settings->SetJwtToken(jwtToRestore);
                         settings->SetJwtPort(portToRestore);
+                        settings->SetNps4(nps4ToRestore);
+                        settings->SetJwtPsn(jwtPsnToRestore);
                         settings->SetHardwareDecoder("d3d11va");
-                        qCInfo(chiakiGui) << "Chiaki config imported successfully, JWT and port restored, hardware decoder set to d3d11va";
+                        qCInfo(chiakiGui) << "Chiaki config imported successfully, JWT/port/NPS4 restored, hardware decoder set to d3d11va";
                         startSubscriptionExpiryTimer();
                         emit authenticationSuccess();
                     });
