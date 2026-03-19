@@ -3214,7 +3214,14 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     }
                     
                     // Подписка активна. При первом входе подгружаем конфиг из chiaki_url (при повторных — уже не подгружаем)
-                    bool needLoadConfig = !chiaki_url.isEmpty() && (chiaki_url != settings->GetLastLoadedChiakiConfigUrl());
+                    // Но если подписка/консоль поменялись (NPS4 в JWT другой), конфиг нужно переимпортировать,
+                    // даже когда chiaki_url совпадает.
+                    QString lastLoadedNps4 = settings->GetLastLoadedNps4();
+                    QString currentNps4 = settings->GetNps4();
+                    bool consoleChanged = !currentNps4.isEmpty()
+                        && (lastLoadedNps4.isEmpty() || (currentNps4 != lastLoadedNps4));
+                    bool needLoadConfig = !chiaki_url.isEmpty()
+                        && (chiaki_url != settings->GetLastLoadedChiakiConfigUrl() || consoleChanged);
                     if (!needLoadConfig) {
                         qCInfo(chiakiGui) << "Authentication successful, subscription is active";
                         startSubscriptionExpiryTimer();
@@ -3250,6 +3257,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         tempFile.flush();
                         settings->ImportSettings(tempFile.fileName());
                         settings->SetLastLoadedChiakiConfigUrl(chiaki_url);
+                        settings->SetLastLoadedNps4(nps4ToRestore);
                         settings->SetJwtToken(jwtToRestore);
                         settings->SetJwtPort(portToRestore);
                         settings->SetNps4(nps4ToRestore);
