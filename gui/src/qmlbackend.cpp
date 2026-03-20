@@ -1721,6 +1721,7 @@ void QmlBackend::logoutFourcloud()
         settings->SetJwtToken("");
         settings->SetJwtPort(0);
         settings->SetNps4("");
+		settings->SetSubscriptionExpiryDate("");
     }
     clearFourcloudState();
     emit jwtTokenExpired();
@@ -3149,7 +3150,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                 QNetworkRequest currentDateRequest(currentDateUrl);
                 QNetworkReply *currentDateReply = network_manager->get(currentDateRequest);
                 
-                connect(currentDateReply, &QNetworkReply::finished, this, [this, currentDateReply, dateExp, jwt, chiaki_url]() {
+                connect(currentDateReply, &QNetworkReply::finished, this, [this, currentDateReply, dateExp, dateExpTrimmed, jwt, chiaki_url]() {
                     QByteArray currentDateData = currentDateReply->readAll();
                     currentDateReply->deleteLater();
                     
@@ -3209,6 +3210,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         qCWarning(chiakiGui) << "Subscription has expired during auth";
                         settings->SetJwtToken("");
                         settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
+                        settings->SetSubscriptionExpiryDate("");
                         emit authenticationError("Нет активной подписки");
                         return;
                     }
@@ -3216,6 +3218,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     // Подписка активна. При первом входе подгружаем конфиг из chiaki_url (при повторных — уже не подгружаем)
                     // Но если подписка/консоль поменялись (NPS4 в JWT другой), конфиг нужно переимпортировать,
                     // даже когда chiaki_url совпадает.
+                    settings->SetSubscriptionExpiryDate(dateExpTrimmed);
                     QString lastLoadedNps4 = settings->GetLastLoadedNps4();
                     QString currentNps4 = settings->GetNps4();
                     bool consoleChanged = !currentNps4.isEmpty()
@@ -3233,11 +3236,12 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     uint16_t portToRestore = settings->GetJwtPort();
                     QString nps4ToRestore = settings->GetNps4();
                     QString jwtPsnToRestore = settings->GetJwtPsn();
+                    QString subscriptionExpiryToRestore = settings->GetSubscriptionExpiryDate();
                     qCInfo(chiakiGui) << "Authentication successful, loading chiaki config from:" << chiaki_url;
                     QUrl configUrlObj(chiaki_url);
                     QNetworkRequest configRequest(configUrlObj);
                     QNetworkReply *configReply = network_manager->get(configRequest);
-                    connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore, portToRestore, nps4ToRestore, jwtPsnToRestore]() {
+                    connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore, portToRestore, nps4ToRestore, jwtPsnToRestore, subscriptionExpiryToRestore]() {
                         configReply->deleteLater();
                         if (configReply->error() != QNetworkReply::NoError) {
                             qCWarning(chiakiGui) << "Failed to download chiaki config:" << configReply->errorString();
@@ -3262,6 +3266,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                         settings->SetJwtPort(portToRestore);
                         settings->SetNps4(nps4ToRestore);
                         settings->SetJwtPsn(jwtPsnToRestore);
+                        settings->SetSubscriptionExpiryDate(subscriptionExpiryToRestore);
                         settings->SetHardwareDecoder("d3d11va");
                         qCInfo(chiakiGui) << "Chiaki config imported successfully, JWT/port/NPS4 restored, hardware decoder set to d3d11va";
                         startSubscriptionExpiryTimer();
@@ -3284,6 +3289,23 @@ void QmlBackend::checkJwtToken()
         qCInfo(chiakiGui) << "No JWT token to check";
         emit jwtTokenExpired();
         return;
+    }
+
+    // Быстрая локальная проверка подписки при входе без пароля:
+    // если мы уже знаем Date_exp из decode-jwt, не ходим в сеть, а сразу разлогиниваем.
+    QString localExpiryStr = settings->GetSubscriptionExpiryDate();
+    if (!localExpiryStr.isEmpty()) {
+        QDateTime localExpiry = QDateTime::fromString(localExpiryStr, "dd.MM.yyyy HH:mm");
+        if (localExpiry.isValid() && QDateTime::currentDateTime() >= localExpiry) {
+            qCWarning(chiakiGui) << "Local subscription expiry reached, logging out";
+            settings->SetJwtToken("");
+            settings->SetJwtPort(0);
+            settings->SetNps4("");
+            settings->SetSubscriptionExpiryDate("");
+            clearFourcloudState();
+            emit subscriptionExpired("Нет активной подписки");
+            return;
+        }
     }
     
     qCInfo(chiakiGui) << "Checking JWT token validity...";
@@ -3355,6 +3377,7 @@ void QmlBackend::checkJwtToken()
             qCWarning(chiakiGui) << "No active subscription (Date_exp key missing)";
             settings->SetJwtToken("");
             settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
+            settings->SetSubscriptionExpiryDate("");
             emit subscriptionExpired("Нет активной подписки");
             return;
         }
@@ -3389,9 +3412,13 @@ void QmlBackend::checkJwtToken()
                                  << "Value:'" << dateExp << "' Trimmed:'" << dateExpTrimmed << "'";
             settings->SetJwtToken("");
             settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
+            settings->SetSubscriptionExpiryDate("");
             emit subscriptionExpired("Нет активной подписки");
             return;
         }
+
+        // Сохраняем expiry дату для локальной проверки при следующем входе без пароля.
+        settings->SetSubscriptionExpiryDate(dateExpTrimmed);
         
         // Обновляем Port и номер консоли (NP) из JWT для кастомных портов и статуса консоли (4cloud)
         int portVal = obj.value("Port").toInt(0);

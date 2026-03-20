@@ -406,6 +406,11 @@ class Settings : public QObject
 	QString GetLastLoadedChiakiConfigUrl() const	{ return settings.value("settings/last_loaded_chiaki_config_url", "").toString(); }
 	void SetLastLoadedChiakiConfigUrl(QString url)	{ settings.setValue("settings/last_loaded_chiaki_config_url", url); }
 
+		// Expiry date of subscription from decode-jwt (4cloud)
+		// Format: "dd.MM.yyyy HH:mm" (как приходит в Date_exp)
+		QString GetSubscriptionExpiryDate() const	{ return settings.value("settings/subscription_expiry_date", "").toString(); }
+		void SetSubscriptionExpiryDate(QString dateStr)	{ settings.setValue("settings/subscription_expiry_date", dateStr.trimmed()); }
+
 		// NPS4 from last loaded chiaki config (4cloud) — чтобы подгружать новый конфиг,
 		// даже если chiaki_url совпадает, но консоль/подписка поменялись.
 		QString GetLastLoadedNps4() const				{ return settings.value("settings/last_loaded_nps4", "").toString().trimmed(); }
