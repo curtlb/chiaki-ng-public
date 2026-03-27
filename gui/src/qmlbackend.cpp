@@ -2,6 +2,7 @@
 #include "qmlsettings.h"
 #include "qmlmainwindow.h"
 #include "streamsession.h"
+#include "macrorecorder.h"
 #include "controllermanager.h"
 #include "psnaccountid.h"
 #include "psntoken.h"
@@ -176,6 +177,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     qmlRegisterUncreatableType<QmlMainWindow>(uri, 1, 0, "ChiakiWindow", {});
     qmlRegisterUncreatableType<QmlSettings>(uri, 1, 0, "ChiakiSettings", {});
     qmlRegisterUncreatableType<StreamSession>(uri, 1, 0, "ChiakiSession", {});
+    qmlRegisterUncreatableType<MacroRecorder>(uri, 1, 0, "ChiakiMacroRecorder", QStringLiteral("Use session.macroRecorder"));
 
     QObject *frame_obj = new QObject();
     frame_thread = new QThread(frame_obj);

@@ -188,7 +188,8 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	ps5_rumble_intensity(0x00),
 	ps5_trigger_intensity(0x00),
 	rumble_haptics_connected(false),
-	rumble_haptics_on(false)
+	rumble_haptics_on(false),
+	macro_recorder(this)
 {
 	mic_buf.buf = nullptr;
 	connected = false;
@@ -585,7 +586,16 @@ void StreamSession::Start()
 
 void StreamSession::Stop()
 {
+	macro_recorder.cancelRecordingWithoutSave();
+	macro_recorder.stopPlayback();
 	chiaki_session_stop(&session);
+}
+
+void StreamSession::FinalizeAndSendControllerState(ChiakiControllerState *state)
+{
+	macro_recorder.mergePlaybackState(state);
+	macro_recorder.recordIfActive(state);
+	chiaki_session_set_controller_state(&session, state);
 }
 
 void StreamSession::GoToBed()
@@ -1035,7 +1045,7 @@ void StreamSession::DpadSendFeedbackState()
 			dpad_touch_stop_timer->start(NEW_DPAD_TOUCH_INTERVAL_MS);
 	}
 	chiaki_controller_state_or(&state, &state, &dpad_touch_state);
-	chiaki_session_set_controller_state(&session, &state);
+	FinalizeAndSendControllerState(&state);
 }
 
 void StreamSession::SendFeedbackState()
@@ -1107,7 +1117,7 @@ void StreamSession::SendFeedbackState()
 			dpad_touch_stop_timer->start(NEW_DPAD_TOUCH_INTERVAL_MS);
 	}
 	chiaki_controller_state_or(&state, &state, &dpad_touch_state);
-	chiaki_session_set_controller_state(&session, &state);
+	FinalizeAndSendControllerState(&state);
 }
 
 void StreamSession::InitAudio(unsigned int channels, unsigned int rate)

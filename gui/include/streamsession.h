@@ -31,6 +31,7 @@
 #include "sessionlog.h"
 #include "controllermanager.h"
 #include "settings.h"
+#include "macrorecorder.h"
 
 #include <QObject>
 #include <QImage>
@@ -149,6 +150,7 @@ class StreamSession : public QObject
 	Q_PROPERTY(double averagePacketLoss READ GetAveragePacketLoss NOTIFY AveragePacketLossChanged)
 	Q_PROPERTY(bool muted READ GetMuted WRITE SetMuted NOTIFY MutedChanged)
 	Q_PROPERTY(bool cantDisplay READ GetCantDisplay NOTIFY CantDisplayChanged)
+	Q_PROPERTY(MacroRecorder *macroRecorder READ GetMacroRecorder CONSTANT)
 
 	private:
 		SessionLog log;
@@ -258,7 +260,9 @@ class StreamSession : public QObject
 		MicBuf mic_buf;
 		QMap<Qt::Key, int> key_map;
 		QElapsedTimer connect_timer;
+		MacroRecorder macro_recorder;
 
+		void FinalizeAndSendControllerState(ChiakiControllerState *state);
 		void PushAudioFrame(int16_t *buf, size_t samples_count);
 		void PushHapticsFrame(uint8_t *buf, size_t buf_size);
 		void CantDisplayMessage(bool cant_display);
@@ -310,6 +314,7 @@ class StreamSession : public QObject
 		void SetMuted(bool enable)	{ if (enable != muted) ToggleMute(); }
 		void SetAudioVolume(int volume) { audio_volume = volume; }
 		bool GetCantDisplay()	{ return cant_display; }
+		MacroRecorder *GetMacroRecorder()	{ return &macro_recorder; }
 		ChiakiErrorCode ConnectPsnConnection(QString duid, bool ps5);
 		void CancelPsnConnection(bool stop_thread);
 

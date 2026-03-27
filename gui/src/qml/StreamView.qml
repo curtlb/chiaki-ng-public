@@ -66,7 +66,8 @@ Item {
                     var base = qsTr("L1+R1+L3+R3 (или ctrl+O) – меню трансляции") + "\n"
                         + qsTr("L1+R1+L2+R2 (или двойной клик ПКМ) – во весь экран") + "\n"
                         + qsTr("ALT+T – включить AI-переводчик") + "\n"
-                        + qsTr("ALT+Y – скрыть перевод");
+                        + qsTr("ALT+Y – скрыть перевод") + "\n"
+                        + qsTr("F10 – макрос запись вкл/выкл → папка chiaki/macros/ | F12 – стоп/слот12 | Ctrl+F10 – слот 10 | F1–F11 слоты");
                     if (Chiaki.settings.audioVideoDisabled === 0x01)
                         return qsTr("Audio Disabled in settings") + "\n" + base;
                     return base;
@@ -840,6 +841,43 @@ Item {
             if (Chiaki.settings.audioVideoDisabled & 0x02)
                 sessionLoading = false;
         }
+    }
+
+    // Горячие клавиши макросов (то же состояние геймпада, что уходит на консоль)
+    Item {
+        id: macroShortcuts
+        anchors.fill: parent
+
+        Shortcut {
+            sequence: "F10"
+            enabled: Chiaki.session && Chiaki.session.connected
+            onActivated: Chiaki.session.macroRecorder.toggleRecording()
+        }
+        Shortcut {
+            sequence: "F12"
+            enabled: Chiaki.session && Chiaki.session.connected
+            onActivated: {
+                if (Chiaki.session.macroRecorder.recording)
+                    Chiaki.session.macroRecorder.toggleRecording()
+                else
+                    Chiaki.session.macroRecorder.playSlot(12)
+            }
+        }
+        Shortcut {
+            sequence: "Ctrl+F10"
+            enabled: Chiaki.session && Chiaki.session.connected
+            onActivated: Chiaki.session.macroRecorder.playSlot(10)
+        }
+        Shortcut { sequence: "F1"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(1) }
+        Shortcut { sequence: "F2"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(2) }
+        Shortcut { sequence: "F3"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(3) }
+        Shortcut { sequence: "F4"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(4) }
+        Shortcut { sequence: "F5"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(5) }
+        Shortcut { sequence: "F6"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(6) }
+        Shortcut { sequence: "F7"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(7) }
+        Shortcut { sequence: "F8"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(8) }
+        Shortcut { sequence: "F9"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(9) }
+        Shortcut { sequence: "F11"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(11) }
     }
 
     // Translation Overlay - отображение переведенного текста
