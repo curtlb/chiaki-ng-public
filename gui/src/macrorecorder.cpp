@@ -21,6 +21,16 @@ QString MacroRecorder::macrosDirectory()
 	return MacrosDir();
 }
 
+QString MacroRecorder::slotFilePath(int slot, bool cycle)
+{
+	if(slot < 1 || slot > 12)
+		return {};
+	QDir d(MacrosDir());
+	if(cycle)
+		return d.filePath(QStringLiteral("slot_%1_cycle.json").arg(slot, 2, 10, QChar('0')));
+	return d.filePath(QStringLiteral("slot_%1.json").arg(slot, 2, 10, QChar('0')));
+}
+
 MacroRecorder::MacroRecorder(QObject *parent)
 	: QObject(parent)
 {
@@ -92,7 +102,15 @@ void MacroRecorder::mergePlaybackState(ChiakiControllerState *state)
 		play_index++;
 	*state = samples[play_index].state;
 	if(play_index >= samples.size() - 1 && t > samples.last().t_ms + 200)
-		QMetaObject::invokeMethod(this, &MacroRecorder::stopPlayback, Qt::QueuedConnection);
+	{
+		if(playback_loop)
+		{
+			play_timer.restart();
+			play_index = 0;
+		}
+		else
+			QMetaObject::invokeMethod(this, &MacroRecorder::stopPlayback, Qt::QueuedConnection);
+	}
 }
 
 void MacroRecorder::stopPlayback()
@@ -100,6 +118,8 @@ void MacroRecorder::stopPlayback()
 	if(!playing)
 		return;
 	playing = false;
+	playback_loop = false;
+	playback_slot = 0;
 	play_index = 0;
 	emit playingChanged();
 	emit playbackFinished();
@@ -109,9 +129,19 @@ void MacroRecorder::playSlot(int slot)
 {
 	if(slot < 1 || slot > 12)
 		return;
+
+	if(playing && playback_loop && playback_slot == slot)
+	{
+		stopPlayback();
+		return;
+	}
+
 	QDir d(MacrosDir());
 	d.mkpath(QStringLiteral("."));
-	QString path = d.filePath(QStringLiteral("slot_%1.json").arg(slot, 2, 10, QChar('0')));
+	const QString cycle_path = slotFilePath(slot, true);
+	const QString normal_path = slotFilePath(slot, false);
+	const bool has_cycle = QFile::exists(cycle_path);
+	const QString path = has_cycle ? cycle_path : normal_path;
 	if(!loadFromFile(path))
 		return;
 	if(recording)
@@ -119,6 +149,8 @@ void MacroRecorder::playSlot(int slot)
 		recording = false;
 		emit recordingChanged();
 	}
+	playback_loop = has_cycle;
+	playback_slot = slot;
 	playing = true;
 	play_index = 0;
 	play_timer.start();

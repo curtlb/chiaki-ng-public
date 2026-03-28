@@ -24,12 +24,15 @@ class MacroRecorder : public QObject
 	Q_OBJECT
 	Q_PROPERTY(bool recording READ isRecording NOTIFY recordingChanged)
 	Q_PROPERTY(bool playing READ isPlaying NOTIFY playingChanged)
+	/** true если идёт циклическое воспроизведение (файл slot_NN_cycle.json). */
+	Q_PROPERTY(bool playbackLoop READ isPlaybackLoop NOTIFY playingChanged)
 
 public:
 	explicit MacroRecorder(QObject *parent = nullptr);
 
 	bool isRecording() const { return recording; }
 	bool isPlaying() const { return playing; }
+	bool isPlaybackLoop() const { return playback_loop; }
 
 	void recordIfActive(const ChiakiControllerState *state);
 	/** Если playing — подставляет кадр из макроса в state. */
@@ -39,7 +42,7 @@ public:
 	/** Сброс записи без сохранения (например при обрыве сессии). */
 	void cancelRecordingWithoutSave();
 	Q_INVOKABLE void stopPlayback();
-	/** slot 1–12: файл %AppConfig%/chiaki/macros/slot_NN.json */
+	/** slot 1–12: slot_NN.json один раз; slot_NN_cycle.json — по кругу до повторного нажатия той же клавиши. */
 	Q_INVOKABLE void playSlot(int slot);
 	Q_INVOKABLE static QString macrosDirectory();
 
@@ -53,6 +56,7 @@ private:
 	void startRecording();
 	void stopRecordingSave(const QString &path);
 	bool loadFromFile(const QString &path);
+	static QString slotFilePath(int slot, bool cycle);
 
 	static QJsonObject stateToJson(const ChiakiControllerState &s);
 	static bool jsonToState(const QJsonObject &o, ChiakiControllerState *s);
@@ -61,6 +65,8 @@ private:
 
 	bool recording = false;
 	bool playing = false;
+	bool playback_loop = false;
+	int playback_slot = 0;
 	QElapsedTimer record_timer;
 	QElapsedTimer play_timer;
 	QVector<MacroSample> samples;

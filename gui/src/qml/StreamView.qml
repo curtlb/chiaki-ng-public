@@ -67,7 +67,7 @@ Item {
                         + qsTr("L1+R1+L2+R2 (или двойной клик ПКМ) – во весь экран") + "\n"
                         + qsTr("ALT+T – включить AI-переводчик") + "\n"
                         + qsTr("ALT+Y – скрыть перевод") + "\n"
-                        + qsTr("F10 – макрос запись вкл/выкл → папка chiaki/macros/ | F12 – стоп/слот12 | Ctrl+F10 – слот 10 | F1–F11 слоты");
+                        + qsTr("F10 – макрос запись | F12 – стоп записи или слот12 | Ctrl+F10 – слот10 | F1–F11 слоты; slot_NN_cycle.json — по кругу, та же клавиша — стоп");
                     if (Chiaki.settings.audioVideoDisabled === 0x01)
                         return qsTr("Audio Disabled in settings") + "\n" + base;
                     return base;
