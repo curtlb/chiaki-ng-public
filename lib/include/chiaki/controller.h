@@ -83,7 +83,7 @@ CHIAKI_EXPORT void chiaki_controller_state_stop_touch(ChiakiControllerState *sta
 
 CHIAKI_EXPORT void chiaki_controller_state_set_touch_pos(ChiakiControllerState *state, uint8_t id, uint16_t x, uint16_t y);
 
-CHIAKI_EXPORT bool chiaki_controller_state_equals(ChiakiControllerState *a, ChiakiControllerState *b);
+CHIAKI_EXPORT bool chiaki_controller_state_equals(const ChiakiControllerState *a, const ChiakiControllerState *b);
 
 /**
  * Union of two controller states.

@@ -72,7 +72,7 @@ CHIAKI_EXPORT void chiaki_controller_state_set_touch_pos(ChiakiControllerState *
 	}
 }
 
-CHIAKI_EXPORT bool chiaki_controller_state_equals(ChiakiControllerState *a, ChiakiControllerState *b)
+CHIAKI_EXPORT bool chiaki_controller_state_equals(const ChiakiControllerState *a, const ChiakiControllerState *b)
 {
 	if(!(a->buttons == b->buttons
 		&& a->l2_state == b->l2_state
