@@ -44,6 +44,8 @@ public:
 	Q_INVOKABLE void stopPlayback();
 	/** slot 1–12: slot_NN.json один раз; slot_NN_cycle.json — по кругу до повторного нажатия той же клавиши. */
 	Q_INVOKABLE void playSlot(int slot);
+	/** Один раз проиграть слот, затем сразу дозаписать в slot_NN.json (F10 — сохранить). */
+	Q_INVOKABLE void playSlotThenAppend(int slot);
 	Q_INVOKABLE static QString macrosDirectory();
 
 signals:
@@ -52,11 +54,15 @@ signals:
 	void playbackFinished();
 	void recordSaved(const QString &path);
 
+private slots:
+	void finishPlaybackOneShot();
+
 private:
 	void startRecording();
 	void stopRecordingSave(const QString &path);
 	bool loadFromFile(const QString &path);
 	static QString slotFilePath(int slot, bool cycle);
+	void playbackCue(bool endOfMacroSegment);
 
 	static QJsonObject stateToJson(const ChiakiControllerState &s);
 	static bool jsonToState(const QJsonObject &o, ChiakiControllerState *s);
@@ -67,6 +73,10 @@ private:
 	bool playing = false;
 	bool playback_loop = false;
 	int playback_slot = 0;
+	bool play_then_record_pending = false;
+	int pending_append_slot = 0;
+	QString append_record_path;
+	qint64 record_time_base = 0;
 	QElapsedTimer record_timer;
 	QElapsedTimer play_timer;
 	QVector<MacroSample> samples;

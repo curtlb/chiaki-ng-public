@@ -67,7 +67,7 @@ Item {
                         + qsTr("L1+R1+L2+R2 (или двойной клик ПКМ) – во весь экран") + "\n"
                         + qsTr("ALT+T – включить AI-переводчик") + "\n"
                         + qsTr("ALT+Y – скрыть перевод") + "\n"
-                        + qsTr("F10 – макрос запись | F12 – стоп записи или слот12 | Ctrl+F10 – слот10 | F1–F11 слоты; slot_NN_cycle.json — по кругу, та же клавиша — стоп");
+                        + qsTr("F2 — проигр. слот2 | Ctrl+F2 — проигр. слот2, затем дозапись в slot_02.json (F10 — сохранить) | F10 — запись/auto | F12 — стоп/слот12 | Ctrl+F1–F12 — проигр.+дозапись | slot_NN_cycle — цикл, повтор Fn — стоп | Звук: начало/конец проигрыша (Windows)");
                     if (Chiaki.settings.audioVideoDisabled === 0x01)
                         return qsTr("Audio Disabled in settings") + "\n" + base;
                     return base;
@@ -863,11 +863,18 @@ Item {
                     Chiaki.session.macroRecorder.playSlot(12)
             }
         }
-        Shortcut {
-            sequence: "Ctrl+F10"
-            enabled: Chiaki.session && Chiaki.session.connected
-            onActivated: Chiaki.session.macroRecorder.playSlot(10)
-        }
+        Shortcut { sequence: "Ctrl+F1"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(1) }
+        Shortcut { sequence: "Ctrl+F2"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(2) }
+        Shortcut { sequence: "Ctrl+F3"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(3) }
+        Shortcut { sequence: "Ctrl+F4"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(4) }
+        Shortcut { sequence: "Ctrl+F5"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(5) }
+        Shortcut { sequence: "Ctrl+F6"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(6) }
+        Shortcut { sequence: "Ctrl+F7"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(7) }
+        Shortcut { sequence: "Ctrl+F8"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(8) }
+        Shortcut { sequence: "Ctrl+F9"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(9) }
+        Shortcut { sequence: "Ctrl+F10"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(10) }
+        Shortcut { sequence: "Ctrl+F11"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(11) }
+        Shortcut { sequence: "Ctrl+F12"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlotThenAppend(12) }
         Shortcut { sequence: "F1"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(1) }
         Shortcut { sequence: "F2"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(2) }
         Shortcut { sequence: "F3"; enabled: Chiaki.session && Chiaki.session.connected; onActivated: Chiaki.session.macroRecorder.playSlot(3) }

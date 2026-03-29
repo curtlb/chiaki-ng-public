@@ -10,6 +10,10 @@
 #include <QMetaObject>
 #include <QFileInfo>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 static QString MacrosDir()
 {
 	QString base = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
@@ -36,10 +40,25 @@ MacroRecorder::MacroRecorder(QObject *parent)
 {
 }
 
+void MacroRecorder::playbackCue(bool end)
+{
+#ifdef Q_OS_WIN
+	if(end)
+		MessageBeep(MB_ICONASTERISK);
+	else
+		MessageBeep(0xFFFFFFFF);
+#else
+	Q_UNUSED(end);
+#endif
+}
+
 void MacroRecorder::startRecording()
 {
 	if(playing)
 		stopPlayback();
+	append_record_path.clear();
+	play_then_record_pending = false;
+	pending_append_slot = 0;
 	samples.clear();
 	has_last_recorded = false;
 	recording = true;
@@ -62,6 +81,7 @@ void MacroRecorder::stopRecordingSave(const QString &path)
 		return;
 	f.write(doc.toJson(QJsonDocument::Indented));
 	f.close();
+	append_record_path.clear();
 	emit recordSaved(path);
 }
 
@@ -69,10 +89,17 @@ void MacroRecorder::toggleRecording()
 {
 	if(recording)
 	{
-		QDir d(MacrosDir());
-		d.mkpath(QStringLiteral("."));
-		QString path = d.filePath(QStringLiteral("auto_%1.json").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
+		QString path;
+		if(append_record_path.isEmpty())
+		{
+			QDir d(MacrosDir());
+			d.mkpath(QStringLiteral("."));
+			path = d.filePath(QStringLiteral("auto_%1.json").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
+		}
+		else
+			path = append_record_path;
 		stopRecordingSave(path);
+		append_record_path.clear();
 	}
 	else
 		startRecording();
@@ -82,7 +109,7 @@ void MacroRecorder::recordIfActive(const ChiakiControllerState *state)
 {
 	if(!recording)
 		return;
-	qint64 t = record_timer.elapsed();
+	qint64 t = append_record_path.isEmpty() ? record_timer.elapsed() : (record_time_base + record_timer.elapsed());
 	if(has_last_recorded && chiaki_controller_state_equals(&last_recorded_state, state))
 		return;
 	last_recorded_state = *state;
@@ -109,8 +136,38 @@ void MacroRecorder::mergePlaybackState(ChiakiControllerState *state)
 			play_index = 0;
 		}
 		else
-			QMetaObject::invokeMethod(this, &MacroRecorder::stopPlayback, Qt::QueuedConnection);
+			QMetaObject::invokeMethod(this, &MacroRecorder::finishPlaybackOneShot, Qt::QueuedConnection);
 	}
+}
+
+void MacroRecorder::finishPlaybackOneShot()
+{
+	if(!playing || playback_loop)
+		return;
+	if(play_then_record_pending && !samples.isEmpty())
+	{
+		playbackCue(true);
+		playing = false;
+		playback_loop = false;
+		const int slot = pending_append_slot;
+		pending_append_slot = 0;
+		playback_slot = 0;
+		play_index = 0;
+		play_then_record_pending = false;
+		emit playingChanged();
+		emit playbackFinished();
+
+		append_record_path = slotFilePath(slot, false);
+		record_time_base = samples.last().t_ms + 1;
+		record_timer.restart();
+		recording = true;
+		has_last_recorded = false;
+		chiaki_controller_state_set_idle(&last_recorded_state);
+		emit recordingChanged();
+		return;
+	}
+	playbackCue(true);
+	stopPlayback();
 }
 
 void MacroRecorder::stopPlayback()
@@ -120,6 +177,8 @@ void MacroRecorder::stopPlayback()
 	playing = false;
 	playback_loop = false;
 	playback_slot = 0;
+	play_then_record_pending = false;
+	pending_append_slot = 0;
 	play_index = 0;
 	emit playingChanged();
 	emit playbackFinished();
@@ -129,6 +188,9 @@ void MacroRecorder::playSlot(int slot)
 {
 	if(slot < 1 || slot > 12)
 		return;
+
+	play_then_record_pending = false;
+	pending_append_slot = 0;
 
 	if(playing && playback_loop && playback_slot == slot)
 	{
@@ -155,6 +217,47 @@ void MacroRecorder::playSlot(int slot)
 	play_index = 0;
 	play_timer.start();
 	emit playingChanged();
+	playbackCue(false);
+}
+
+void MacroRecorder::playSlotThenAppend(int slot)
+{
+	if(slot < 1 || slot > 12)
+		return;
+
+	if(playing && playback_loop && playback_slot == slot)
+	{
+		stopPlayback();
+		return;
+	}
+
+	if(recording)
+		cancelRecordingWithoutSave();
+
+	QDir d(MacrosDir());
+	d.mkpath(QStringLiteral("."));
+	const QString normal_path = slotFilePath(slot, false);
+	const QString cycle_path = slotFilePath(slot, true);
+	QString load_path;
+	if(QFile::exists(normal_path))
+		load_path = normal_path;
+	else if(QFile::exists(cycle_path))
+		load_path = cycle_path;
+	else
+		return;
+	if(!loadFromFile(load_path))
+		return;
+
+	play_then_record_pending = true;
+	pending_append_slot = slot;
+	append_record_path.clear();
+	playback_loop = false;
+	playback_slot = slot;
+	playing = true;
+	play_index = 0;
+	play_timer.start();
+	emit playingChanged();
+	playbackCue(false);
 }
 
 bool MacroRecorder::loadFromFile(const QString &path)
@@ -287,6 +390,9 @@ void MacroRecorder::cancelRecordingWithoutSave()
 	if(!recording)
 		return;
 	recording = false;
+	append_record_path.clear();
+	play_then_record_pending = false;
+	pending_append_slot = 0;
 	samples.clear();
 	has_last_recorded = false;
 	emit recordingChanged();
