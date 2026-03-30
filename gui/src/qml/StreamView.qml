@@ -873,62 +873,26 @@ Item {
             }
         }
 
-        Column {
+        // Minimal, robust text overlay (debug-friendly)
+        Text {
+            id: macroOverlayText
             anchors {
-                fill: parent
+                left: parent.left
+                right: parent.right
+                verticalCenter: parent.verticalCenter
                 leftMargin: 10
                 rightMargin: 10
-                topMargin: 6
-                bottomMargin: 6
             }
-            spacing: 2
-
-            Row {
-                width: parent.width
-                spacing: 10
-
-                Text {
-                    width: parent.width
-                    text: {
-                        var mode = Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
-                        return mode + "  t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s")
-                    }
-                    font.pixelSize: 13
-                    font.bold: true
-                    color: "white"
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
-                    height: 16
-                }
-
-                Text {
-                    id: macroTimelineText
-                    visible: !Chiaki.session.macroRecorder.playbackLoop
-                    width: 0
-                    horizontalAlignment: Text.AlignLeft
-                    text: {
-                        return (remainingMs / 1000.0).toFixed(1) + qsTr(" s left")
-                    }
-                    font.pixelSize: 13
-                    color: "white"
-                }
+            text: {
+                var mode = Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
+                return "TEST  " + mode + "  t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s")
             }
-
-            Rectangle {
-                height: 8
-                width: parent.width
-                color: "#22000000"
-                radius: 4
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    width: parent.width * Math.max(0, Math.min(1, progress01))
-                    color: Material.accent
-                    radius: 4
-                }
-            }
+            color: "white"
+            font.pixelSize: 14
+            font.bold: true
+            elide: Text.ElideRight
+            horizontalAlignment: Text.AlignLeft
+            verticalAlignment: Text.AlignVCenter
         }
 
         Timer {
