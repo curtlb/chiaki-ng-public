@@ -887,20 +887,22 @@ Item {
                 spacing: 10
 
                 Label {
-                    width: 90
-                    text: Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
+                    width: parent.width
+                    text: {
+                        var mode = Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
+                        return mode + "  t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s")
+                    }
                     font.pixelSize: 13
                     color: "white"
                 }
 
                 Label {
                     id: macroTimelineText
-                    width: parent.width - 90
+                    visible: !Chiaki.session.macroRecorder.playbackLoop
+                    width: 0
                     horizontalAlignment: Text.AlignLeft
                     text: {
-                        if (Chiaki.session.macroRecorder.playbackLoop)
-                            return ""
-                        return "t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s  |  ") + (remainingMs / 1000.0).toFixed(1) + qsTr(" s left")
+                        return (remainingMs / 1000.0).toFixed(1) + qsTr(" s left")
                     }
                     font.pixelSize: 13
                     color: "white"
