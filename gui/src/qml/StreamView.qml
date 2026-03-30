@@ -851,13 +851,15 @@ Item {
             top: parent.top
             margins: 12
         }
-        width: 320
-        height: 44
+        width: 420
+        height: 70
         // Must be above TranslationOverlay (z: 1000)
         z: 2000
         radius: 8
-        color: "#66000000"
+        // DEBUG: make it extremely visible to confirm QML updates are loaded
+        color: "#AAFF0000"
         border.color: Material.accent
+        border.width: 2
         visible: Chiaki.session && Chiaki.session.connected && Chiaki.session.macroRecorder.playing
 
         property int durationMs: 0
@@ -876,6 +878,7 @@ Item {
         // Minimal, robust text overlay (debug-friendly)
         Text {
             id: macroOverlayText
+            z: 1
             anchors {
                 left: parent.left
                 right: parent.right
@@ -885,11 +888,12 @@ Item {
             }
             text: {
                 var mode = Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
-                return "TEST  " + mode + "  t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s")
+                return "MACRO OVERLAY LOADED  " + mode + "  t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s")
             }
             color: "white"
-            font.pixelSize: 14
+            font.pixelSize: 18
             font.bold: true
+            renderType: Text.NativeRendering
             elide: Text.ElideRight
             horizontalAlignment: Text.AlignLeft
             verticalAlignment: Text.AlignVCenter
