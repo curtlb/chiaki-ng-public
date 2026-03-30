@@ -853,7 +853,8 @@ Item {
         }
         width: 320
         height: 44
-        z: 500
+        // Must be above TranslationOverlay (z: 1000)
+        z: 2000
         radius: 8
         color: "#66000000"
         border.color: Material.accent
@@ -886,17 +887,21 @@ Item {
                 width: parent.width
                 spacing: 10
 
-                Label {
+                Text {
                     width: parent.width
                     text: {
                         var mode = Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
                         return mode + "  t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s")
                     }
                     font.pixelSize: 13
+                    font.bold: true
                     color: "white"
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                    height: 16
                 }
 
-                Label {
+                Text {
                     id: macroTimelineText
                     visible: !Chiaki.session.macroRecorder.playbackLoop
                     width: 0
