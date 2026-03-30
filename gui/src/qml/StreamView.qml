@@ -861,12 +861,14 @@ Item {
 
         property int durationMs: 0
         property int remainingMs: 0
+        property int elapsedMs: 0
         property real progress01: durationMs > 0 ? (durationMs - remainingMs) / durationMs : 0
 
         onVisibleChanged: {
             if (visible) {
                 durationMs = Chiaki.session.macroRecorder.playbackDurationMs()
                 remainingMs = Chiaki.session.macroRecorder.playbackRemainingMs()
+                elapsedMs = Chiaki.session.macroRecorder.playbackElapsedMs()
             }
         }
 
@@ -898,7 +900,7 @@ Item {
                     text: {
                         if (Chiaki.session.macroRecorder.playbackLoop)
                             return ""
-                        return (remainingMs / 1000.0).toFixed(1) + qsTr(" s left")
+                        return "t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s  |  ") + (remainingMs / 1000.0).toFixed(1) + qsTr(" s left")
                     }
                     font.pixelSize: 13
                     color: "white"
@@ -929,6 +931,7 @@ Item {
             onTriggered: {
                 durationMs = Chiaki.session.macroRecorder.playbackDurationMs()
                 remainingMs = Chiaki.session.macroRecorder.playbackRemainingMs()
+                elapsedMs = Chiaki.session.macroRecorder.playbackElapsedMs()
             }
         }
     }
