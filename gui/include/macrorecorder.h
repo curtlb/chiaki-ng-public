@@ -48,6 +48,13 @@ public:
 	Q_INVOKABLE void playSlotThenAppend(int slot);
 	Q_INVOKABLE static QString macrosDirectory();
 
+	/** Текущее время воспроизведения (ms) относительно начала сегмента. */
+	Q_INVOKABLE qint64 playbackElapsedMs() const;
+	/** Длительность сегмента воспроизведения (ms). Для cycle возвращает -1. */
+	Q_INVOKABLE qint64 playbackDurationMs() const;
+	/** Оставшееся время (ms) до окончания сегмента. Для cycle возвращает -1. */
+	Q_INVOKABLE qint64 playbackRemainingMs() const;
+
 signals:
 	void recordingChanged();
 	void playingChanged();

@@ -184,6 +184,32 @@ void MacroRecorder::stopPlayback()
 	emit playbackFinished();
 }
 
+qint64 MacroRecorder::playbackElapsedMs() const
+{
+	if(!playing)
+		return 0;
+	return play_timer.elapsed();
+}
+
+qint64 MacroRecorder::playbackDurationMs() const
+{
+	if(!playing || samples.isEmpty())
+		return 0;
+	if(playback_loop)
+		return -1;
+	// match mergePlaybackState() finish margin
+	return samples.last().t_ms + 200;
+}
+
+qint64 MacroRecorder::playbackRemainingMs() const
+{
+	const qint64 duration = playbackDurationMs();
+	if(duration < 0)
+		return -1;
+	const qint64 elapsed = playbackElapsedMs();
+	return qMax<qint64>(0, duration - elapsed);
+}
+
 void MacroRecorder::playSlot(int slot)
 {
 	if(slot < 1 || slot > 12)

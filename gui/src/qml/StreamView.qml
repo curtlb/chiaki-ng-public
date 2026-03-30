@@ -843,6 +843,96 @@ Item {
         }
     }
 
+    // Macro playback timeline overlay (shows remaining time)
+    Rectangle {
+        id: macroTimelineOverlay
+        anchors {
+            left: parent.left
+            top: parent.top
+            margins: 12
+        }
+        width: 320
+        height: 44
+        z: 500
+        radius: 8
+        color: "#66000000"
+        border.color: Material.accent
+        visible: Chiaki.session && Chiaki.session.connected && Chiaki.session.macroRecorder.playing
+
+        property int durationMs: 0
+        property int remainingMs: 0
+        property real progress01: durationMs > 0 ? (durationMs - remainingMs) / durationMs : 0
+
+        onVisibleChanged: {
+            if (visible) {
+                durationMs = Chiaki.session.macroRecorder.playbackDurationMs()
+                remainingMs = Chiaki.session.macroRecorder.playbackRemainingMs()
+            }
+        }
+
+        Column {
+            anchors {
+                fill: parent
+                leftMargin: 10
+                rightMargin: 10
+                topMargin: 6
+                bottomMargin: 6
+            }
+            spacing: 2
+
+            Row {
+                width: parent.width
+                spacing: 10
+
+                Label {
+                    width: 90
+                    text: Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
+                    font.pixelSize: 13
+                    color: "white"
+                }
+
+                Label {
+                    id: macroTimelineText
+                    width: parent.width - 90
+                    horizontalAlignment: Text.AlignLeft
+                    text: {
+                        if (Chiaki.session.macroRecorder.playbackLoop)
+                            return ""
+                        return (remainingMs / 1000.0).toFixed(1) + qsTr(" s left")
+                    }
+                    font.pixelSize: 13
+                    color: "white"
+                }
+            }
+
+            Rectangle {
+                height: 8
+                width: parent.width
+                color: "#22000000"
+                radius: 4
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: parent.width * Math.max(0, Math.min(1, progress01))
+                    color: Material.accent
+                    radius: 4
+                }
+            }
+        }
+
+        Timer {
+            interval: 50
+            repeat: true
+            running: macroTimelineOverlay.visible && !Chiaki.session.macroRecorder.playbackLoop
+            onTriggered: {
+                durationMs = Chiaki.session.macroRecorder.playbackDurationMs()
+                remainingMs = Chiaki.session.macroRecorder.playbackRemainingMs()
+            }
+        }
+    }
+
     // Горячие клавиши макросов (то же состояние геймпада, что уходит на консоль)
     Item {
         id: macroShortcuts
