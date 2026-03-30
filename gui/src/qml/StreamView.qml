@@ -856,8 +856,7 @@ Item {
         // Must be above TranslationOverlay (z: 1000)
         z: 2000
         radius: 8
-        // DEBUG: make it extremely visible to confirm QML updates are loaded
-        color: "#AAFF0000"
+        color: "#CC333333"
         border.color: Material.accent
         border.width: 2
         visible: Chiaki.session && Chiaki.session.connected && Chiaki.session.macroRecorder.playing
@@ -865,48 +864,62 @@ Item {
         property int durationMs: 0
         property int remainingMs: 0
         property int elapsedMs: 0
+        /** Копия playbackLoop — не читать macroRecorder внутри text {}, иначе биндинг может дать пустую строку */
+        property bool playbackLoopLocal: false
         property real progress01: durationMs > 0 ? (durationMs - remainingMs) / durationMs : 0
 
+        function macroOverlayRefresh() {
+            if (!Chiaki.session || !Chiaki.session.macroRecorder)
+                return
+            var mr = Chiaki.session.macroRecorder
+            playbackLoopLocal = mr.playbackLoop
+            durationMs = mr.playbackDurationMs()
+            remainingMs = mr.playbackRemainingMs()
+            elapsedMs = mr.playbackElapsedMs()
+        }
+
         onVisibleChanged: {
-            if (visible) {
-                durationMs = Chiaki.session.macroRecorder.playbackDurationMs()
-                remainingMs = Chiaki.session.macroRecorder.playbackRemainingMs()
-                elapsedMs = Chiaki.session.macroRecorder.playbackElapsedMs()
+            if (visible)
+                macroOverlayRefresh()
+        }
+
+        // Avoid fragile text bindings: draw via Canvas (reliable over video/GL)
+        Canvas {
+            id: macroOverlayCanvas
+            anchors.fill: parent
+            z: 2
+
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                ctx.font = "bold 16px sans-serif"
+                var mode = macroTimelineOverlay.playbackLoopLocal ? "LOOP" : "PLAY"
+                var line1 = mode + "  t=" + (macroTimelineOverlay.elapsedMs / 1000.0).toFixed(2) + " s"
+                var line2 = macroTimelineOverlay.playbackLoopLocal ? "" : ((macroTimelineOverlay.remainingMs / 1000.0).toFixed(1) + " s left")
+                var x = 10
+                var y = 28
+                ctx.fillStyle = "black"
+                ctx.fillText(line1, x + 1, y + 1)
+                if (line2.length)
+                    ctx.fillText(line2, x + 1, y + 1 + 20)
+                ctx.fillStyle = "white"
+                ctx.fillText(line1, x, y)
+                if (line2.length)
+                    ctx.fillText(line2, x, y + 20)
             }
         }
 
-        // Minimal, robust text overlay (debug-friendly)
-        Text {
-            id: macroOverlayText
-            z: 1
-            anchors {
-                left: parent.left
-                right: parent.right
-                verticalCenter: parent.verticalCenter
-                leftMargin: 10
-                rightMargin: 10
-            }
-            text: {
-                var mode = Chiaki.session.macroRecorder.playbackLoop ? qsTr("PLAY LOOP") : qsTr("PLAY")
-                return "MACRO OVERLAY LOADED  " + mode + "  t=" + (elapsedMs / 1000.0).toFixed(2) + qsTr(" s")
-            }
-            color: "white"
-            font.pixelSize: 18
-            font.bold: true
-            renderType: Text.NativeRendering
-            elide: Text.ElideRight
-            horizontalAlignment: Text.AlignLeft
-            verticalAlignment: Text.AlignVCenter
-        }
+        onElapsedMsChanged: macroOverlayCanvas.requestPaint()
+        onRemainingMsChanged: macroOverlayCanvas.requestPaint()
+        onPlaybackLoopLocalChanged: macroOverlayCanvas.requestPaint()
 
         Timer {
             interval: 50
             repeat: true
-            running: macroTimelineOverlay.visible && !Chiaki.session.macroRecorder.playbackLoop
+            running: macroTimelineOverlay.visible
             onTriggered: {
-                durationMs = Chiaki.session.macroRecorder.playbackDurationMs()
-                remainingMs = Chiaki.session.macroRecorder.playbackRemainingMs()
-                elapsedMs = Chiaki.session.macroRecorder.playbackElapsedMs()
+                macroTimelineOverlay.macroOverlayRefresh()
+                macroOverlayCanvas.requestPaint()
             }
         }
     }
