@@ -29,6 +29,8 @@
 #define SESSION_PORT					9295
 #define SESSION_PORT_OFFSET_FROM_BASE	3000
 
+#define SESSION_REQUEST_CONNECT_TIMEOUT_MS	60000
+#define SESSION_REQUEST_HTTP_TIMEOUT_MS		60000
 #define SESSION_EXPECT_TIMEOUT_MS		5000
 
 #define SESSION_EXPECT_CTRL_START_MS    10000
@@ -828,7 +830,7 @@ static ChiakiErrorCode session_thread_request_session(ChiakiSession *session, Ch
 				CHIAKI_LOGE(session->log, "Failed to set session socket to non-blocking: %s", chiaki_error_string(err));
 
 			chiaki_mutex_unlock(&session->state_mutex);
-			err = chiaki_stop_pipe_connect(&session->stop_pipe, session_sock, sa, ai->ai_addrlen, 5000);
+			err = chiaki_stop_pipe_connect(&session->stop_pipe, session_sock, sa, ai->ai_addrlen, SESSION_REQUEST_CONNECT_TIMEOUT_MS);
 			chiaki_mutex_lock(&session->state_mutex);
 			if(err == CHIAKI_ERR_CANCELED)
 			{
@@ -971,7 +973,7 @@ static ChiakiErrorCode session_thread_request_session(ChiakiSession *session, Ch
 	if(session->rudp)
 		err = chiaki_send_recv_http_header_psn(session->rudp, session->log, &remote_counter, send_buf, request_len, buf, sizeof(buf), &header_size, &received_size);
 	else
-		err = chiaki_recv_http_header(session_sock, buf, sizeof(buf), &header_size, &received_size, &session->stop_pipe, SESSION_EXPECT_TIMEOUT_MS);
+		err = chiaki_recv_http_header(session_sock, buf, sizeof(buf), &header_size, &received_size, &session->stop_pipe, SESSION_REQUEST_HTTP_TIMEOUT_MS);
 	ChiakiErrorCode mutex_err = chiaki_mutex_lock(&session->state_mutex);
 	assert(mutex_err == CHIAKI_ERR_SUCCESS);
 	if(err != CHIAKI_ERR_SUCCESS)
