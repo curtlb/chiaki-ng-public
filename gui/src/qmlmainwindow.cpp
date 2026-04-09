@@ -92,13 +92,13 @@ QmlMainWindow::QmlMainWindow(Settings *settings, bool exit_app_on_stream_exit)
     init(settings, exit_app_on_stream_exit);
 }
 
-QmlMainWindow::QmlMainWindow(const StreamSessionConnectInfo &connect_info)
+QmlMainWindow::QmlMainWindow(const StreamSessionConnectInfo &connect_info, bool exit_app_on_stream_exit)
     : QWindow()
     , settings(connect_info.settings)
 {
     direct_stream = true;
     emit directStreamChanged();
-    init(connect_info.settings);
+    init(connect_info.settings, exit_app_on_stream_exit);
     backend->createSession(connect_info);
 
     if (connect_info.fullscreen || connect_info.zoom || connect_info.stretch)
@@ -108,7 +108,8 @@ QmlMainWindow::QmlMainWindow(const StreamSessionConnectInfo &connect_info)
     else if (connect_info.stretch)
         setVideoMode(VideoMode::Stretch);
 
-    connect(session, &StreamSession::SessionQuit, qGuiApp, &QGuiApplication::quit);
+    if(exit_app_on_stream_exit)
+        connect(session, &StreamSession::SessionQuit, qGuiApp, &QGuiApplication::quit);
 }
 
 QmlMainWindow::~QmlMainWindow()

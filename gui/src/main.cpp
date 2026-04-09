@@ -31,6 +31,11 @@ int main(int argc, char *argv[]) { return real_main(argc, argv); }
 #include <QCommandLineParser>
 #include <QMap>
 #include <QSurfaceFormat>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QVector>
 
 Q_DECLARE_METATYPE(ChiakiLogLevel)
 Q_DECLARE_METATYPE(ChiakiRegistEventType)
@@ -129,6 +134,7 @@ int real_main(int argc, char *argv[])
 	QStringList cmds;
 	cmds.append("stream");
 	cmds.append("list");
+	cmds.append("farm");
 #ifdef CHIAKI_ENABLE_CLI
 	cmds.append(cli_commands.keys());
 #endif
@@ -137,6 +143,7 @@ int real_main(int argc, char *argv[])
 	parser.addPositionalArgument("nickname", "Needed for stream command to get credentials for connecting. "
 			"Use 'list' to get the nickname.");
 	parser.addPositionalArgument("host", "Address to connect to (when using the stream command).");
+	parser.addPositionalArgument("farm.json", "Path to farm config (when using the farm command).");
 
 	QCommandLineOption profile_option("profile", "", "profile", "Configuration profile");
 	parser.addOption(profile_option);
@@ -187,6 +194,143 @@ int real_main(int argc, char *argv[])
 		for(const auto &host : settings.GetRegisteredHosts())
 			printf("Host: %s \n", host.GetServerNickname().toLocal8Bit().constData());
 		return 0;
+	}
+	if(args[0] == "farm")
+	{
+		if(args.length() < 2)
+			parser.showHelp(1);
+
+		const QString farm_path = args[1];
+		QFile farm_file(farm_path);
+		if(!farm_file.open(QIODevice::ReadOnly))
+		{
+			fprintf(stderr, "Failed to open farm config: %s\n", qPrintable(farm_path));
+			return 1;
+		}
+		const QByteArray farm_bytes = farm_file.readAll();
+		QJsonParseError json_err;
+		const QJsonDocument doc = QJsonDocument::fromJson(farm_bytes, &json_err);
+		if(json_err.error != QJsonParseError::NoError || !doc.isObject())
+		{
+			fprintf(stderr, "Invalid farm json: %s (offset %d)\n", qPrintable(json_err.errorString()), (int)json_err.offset);
+			return 1;
+		}
+		const QJsonObject root = doc.object();
+		const QJsonArray consoles = root.value("consoles").toArray();
+		if(consoles.isEmpty())
+		{
+			fprintf(stderr, "Farm config has no consoles. Expected: {\"consoles\":[...]}.\n");
+			return 1;
+		}
+
+		QVector<Settings*> farm_settings;
+		farm_settings.reserve(consoles.size());
+		QVector<QmlMainWindow*> farm_windows;
+		farm_windows.reserve(consoles.size());
+
+		for(int i = 0; i < consoles.size(); i++)
+		{
+			if(!consoles[i].isObject())
+				continue;
+			const QJsonObject o = consoles[i].toObject();
+			const QString name = o.value("name").toString(QString("console-%1").arg(i));
+			const QString ini = o.value("ini").toString();
+			const QString nickname = o.value("nickname").toString();
+			const QString host = o.value("host").toString();
+			const int custom_port_base = o.value("customPortBase").toInt(0);
+			const QString resolution = o.value("resolution").toString();
+			const int fps = o.value("fps").toInt(0);
+
+			if(host.isEmpty())
+			{
+				fprintf(stderr, "[%d] Missing required field \"host\".\n", i);
+				continue;
+			}
+			if(ini.isEmpty())
+			{
+				fprintf(stderr, "[%d] Missing required field \"ini\".\n", i);
+				continue;
+			}
+			if(nickname.isEmpty())
+			{
+				fprintf(stderr, "[%d] Missing required field \"nickname\".\n", i);
+				continue;
+			}
+
+			// Isolated settings store per node to avoid collisions.
+			auto *node_settings = new Settings(QStringLiteral("farm-%1").arg(i), &app);
+			node_settings->ImportSettings(ini);
+
+			QByteArray morning;
+			QByteArray regist_key;
+			ChiakiTarget target = CHIAKI_TARGET_PS4_10;
+
+			bool found = false;
+			for(const auto &temphost : node_settings->GetRegisteredHosts())
+			{
+				if(temphost.GetServerNickname() == nickname)
+				{
+					found = true;
+					morning = temphost.GetRPKey();
+					regist_key = temphost.GetRPRegistKey();
+					target = temphost.GetTarget();
+					break;
+				}
+			}
+			if(!found)
+			{
+				fprintf(stderr, "[%d] Could not find registered host for nickname \"%s\" in ini \"%s\".\n",
+					i, qPrintable(nickname), qPrintable(ini));
+				return 1;
+			}
+
+			StreamSessionConnectInfo connect_info(
+				node_settings,
+				target,
+				host,
+				name,
+				regist_key,
+				morning,
+				QString(), // initial passcode
+				QString(), // duid (PSN) empty => direct
+				false,     // auto_regist
+				false, false, false);
+
+			if(custom_port_base > 0 && custom_port_base <= 65535)
+				connect_info.custom_port_base = (uint16_t)custom_port_base;
+
+			if(!resolution.isEmpty() && (fps == 30 || fps == 60))
+			{
+				ChiakiVideoResolutionPreset res_preset;
+				if(resolution == "360p")
+					res_preset = CHIAKI_VIDEO_RESOLUTION_PRESET_360p;
+				else if(resolution == "540p")
+					res_preset = CHIAKI_VIDEO_RESOLUTION_PRESET_540p;
+				else if(resolution == "720p")
+					res_preset = CHIAKI_VIDEO_RESOLUTION_PRESET_720p;
+				else if(resolution == "1080p")
+					res_preset = CHIAKI_VIDEO_RESOLUTION_PRESET_1080p;
+				else
+					res_preset = CHIAKI_VIDEO_RESOLUTION_PRESET_720p;
+
+				chiaki_connect_video_profile_preset(&connect_info.video_profile, res_preset,
+					fps == 60 ? CHIAKI_VIDEO_FPS_PRESET_60 : CHIAKI_VIDEO_FPS_PRESET_30);
+			}
+
+			auto *w = new QmlMainWindow(connect_info, false /* exit app on stream exit */);
+			w->setTitle(QString("chiaki-ng farm: %1").arg(name));
+			w->show();
+
+			farm_settings.push_back(node_settings);
+			farm_windows.push_back(w);
+		}
+
+		if(farm_windows.isEmpty())
+		{
+			fprintf(stderr, "Farm command: no windows created.\n");
+			return 1;
+		}
+		return app.exec();
 	}
 	if(args[0] == "stream")
 	{
@@ -315,7 +459,7 @@ int RunMain(QGuiApplication &app, Settings *settings, bool exit_app_on_stream_ex
 
 int RunStream(QGuiApplication &app, const StreamSessionConnectInfo &connect_info)
 {
-	QmlMainWindow main_window(connect_info);
+	QmlMainWindow main_window(connect_info, true);
 	main_window.show();
 	return app.exec();
 }

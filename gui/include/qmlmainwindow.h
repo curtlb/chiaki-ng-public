@@ -67,7 +67,7 @@ public:
     Q_ENUM(VideoPreset);
 
     QmlMainWindow(Settings *settings,  bool exit_app_on_stream_exit = false);
-    QmlMainWindow(const StreamSessionConnectInfo &connect_info);
+    QmlMainWindow(const StreamSessionConnectInfo &connect_info, bool exit_app_on_stream_exit = true);
     ~QmlMainWindow();
     void updateWindowType(WindowType type);
     void setSettings(Settings *new_settings);
