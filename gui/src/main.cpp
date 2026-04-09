@@ -32,6 +32,7 @@ int main(int argc, char *argv[]) { return real_main(argc, argv); }
 #include <QMap>
 #include <QSurfaceFormat>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -228,7 +229,9 @@ int real_main(int argc, char *argv[])
 			return 1;
 		}
 		const QJsonObject root = doc.object();
+		const QString farm_hw_decoder_global = root.value("hwDecoder").toString();
 		const QJsonArray consoles = root.value("consoles").toArray();
+		const QFileInfo farm_json_info(farm_path);
 		if(consoles.isEmpty())
 		{
 			const QString msg = "Farm config has no consoles. Expected: {\"consoles\":[...]}";
@@ -248,7 +251,7 @@ int real_main(int argc, char *argv[])
 				continue;
 			const QJsonObject o = consoles[i].toObject();
 			const QString name = o.value("name").toString(QString("console-%1").arg(i));
-			const QString ini = o.value("ini").toString();
+			QString ini = o.value("ini").toString();
 			const QString nickname = o.value("nickname").toString();
 			const QString host = o.value("host").toString();
 			const int custom_port_base = o.value("customPortBase").toInt(0);
@@ -276,6 +279,9 @@ int real_main(int argc, char *argv[])
 				QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 				continue;
 			}
+
+			if(!QFileInfo(ini).isAbsolute())
+				ini = farm_json_info.absolutePath() + QLatin1Char('/') + ini;
 
 			// Isolated settings store per node to avoid collisions.
 			auto *node_settings = new Settings(QStringLiteral("farm-%1").arg(i), &app);
@@ -341,6 +347,19 @@ int real_main(int argc, char *argv[])
 
 				chiaki_connect_video_profile_preset(&connect_info.video_profile, res_preset,
 					fps == 60 ? CHIAKI_VIDEO_FPS_PRESET_60 : CHIAKI_VIDEO_FPS_PRESET_30);
+			}
+
+			// Multiple parallel Vulkan hw-decode sessions often fail on some GPUs/drivers
+			// ("Failed to push frame: Invalid data..."). Override via farm.json hwDecoder.
+			QString farm_hw = o.value("hwDecoder").toString();
+			if(farm_hw.isEmpty())
+				farm_hw = farm_hw_decoder_global;
+			if(!farm_hw.isEmpty())
+			{
+				if(farm_hw == QLatin1String("software"))
+					connect_info.hw_decoder.clear();
+				else if(farm_hw != QLatin1String("auto"))
+					connect_info.hw_decoder = farm_hw;
 			}
 
 			auto *w = new QmlMainWindow(connect_info, false /* exit app on stream exit */);
