@@ -35,6 +35,7 @@ int main(int argc, char *argv[]) { return real_main(argc, argv); }
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMessageBox>
 #include <QVector>
 
 Q_DECLARE_METATYPE(ChiakiLogLevel)
@@ -100,7 +101,10 @@ int real_main(int argc, char *argv[])
 	ChiakiErrorCode err = chiaki_lib_init();
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
-		fprintf(stderr, "Chiaki lib init failed: %s\n", chiaki_error_string(err));
+		// Note: on Windows GUI builds stdout/stderr might be invisible, so show a dialog too.
+		const QString msg = QString("Chiaki lib init failed: %1").arg(chiaki_error_string(err));
+		fprintf(stderr, "%s\n", qPrintable(msg));
+		QMessageBox::critical(nullptr, "chiaki-ng", msg);
 		return 1;
 	}
 
@@ -108,15 +112,17 @@ int real_main(int argc, char *argv[])
 
 	if(SDL_Init(SDL_INIT_AUDIO) < 0)
 	{
-		fprintf(stderr, "SDL Audio init failed: %s\n", SDL_GetError());
+		const QString msg = QString("SDL Audio init failed: %1").arg(SDL_GetError());
+		fprintf(stderr, "%s\n", qPrintable(msg));
+		QMessageBox::critical(nullptr, "chiaki-ng", msg);
 		return 1;
 	}
 
 	QGuiApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+	QApplication app(argc, argv);
 #ifdef CHIAKI_HAVE_WEBENGINE
 	QtWebEngineQuick::initialize();
 #endif
-	QApplication app(argc, argv);
 
 	// Инициализируем систему отчетов об ошибках
 	CrashReporter::Initialize();
@@ -204,7 +210,9 @@ int real_main(int argc, char *argv[])
 		QFile farm_file(farm_path);
 		if(!farm_file.open(QIODevice::ReadOnly))
 		{
-			fprintf(stderr, "Failed to open farm config: %s\n", qPrintable(farm_path));
+			const QString msg = QString("Failed to open farm config: %1").arg(farm_path);
+			fprintf(stderr, "%s\n", qPrintable(msg));
+			QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 			return 1;
 		}
 		const QByteArray farm_bytes = farm_file.readAll();
@@ -212,14 +220,20 @@ int real_main(int argc, char *argv[])
 		const QJsonDocument doc = QJsonDocument::fromJson(farm_bytes, &json_err);
 		if(json_err.error != QJsonParseError::NoError || !doc.isObject())
 		{
-			fprintf(stderr, "Invalid farm json: %s (offset %d)\n", qPrintable(json_err.errorString()), (int)json_err.offset);
+			const QString msg = QString("Invalid farm json: %1 (offset %2)")
+				.arg(json_err.errorString())
+				.arg((int)json_err.offset);
+			fprintf(stderr, "%s\n", qPrintable(msg));
+			QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 			return 1;
 		}
 		const QJsonObject root = doc.object();
 		const QJsonArray consoles = root.value("consoles").toArray();
 		if(consoles.isEmpty())
 		{
-			fprintf(stderr, "Farm config has no consoles. Expected: {\"consoles\":[...]}.\n");
+			const QString msg = "Farm config has no consoles. Expected: {\"consoles\":[...]}";
+			fprintf(stderr, "%s\n", qPrintable(msg));
+			QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 			return 1;
 		}
 
@@ -243,17 +257,23 @@ int real_main(int argc, char *argv[])
 
 			if(host.isEmpty())
 			{
-				fprintf(stderr, "[%d] Missing required field \"host\".\n", i);
+				const QString msg = QString("[%1] Missing required field \"host\".").arg(i);
+				fprintf(stderr, "%s\n", qPrintable(msg));
+				QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 				continue;
 			}
 			if(ini.isEmpty())
 			{
-				fprintf(stderr, "[%d] Missing required field \"ini\".\n", i);
+				const QString msg = QString("[%1] Missing required field \"ini\".").arg(i);
+				fprintf(stderr, "%s\n", qPrintable(msg));
+				QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 				continue;
 			}
 			if(nickname.isEmpty())
 			{
-				fprintf(stderr, "[%d] Missing required field \"nickname\".\n", i);
+				const QString msg = QString("[%1] Missing required field \"nickname\".").arg(i);
+				fprintf(stderr, "%s\n", qPrintable(msg));
+				QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 				continue;
 			}
 
@@ -279,8 +299,10 @@ int real_main(int argc, char *argv[])
 			}
 			if(!found)
 			{
-				fprintf(stderr, "[%d] Could not find registered host for nickname \"%s\" in ini \"%s\".\n",
-					i, qPrintable(nickname), qPrintable(ini));
+				const QString msg = QString("[%1] Could not find registered host for nickname \"%2\" in ini \"%3\".")
+					.arg(i).arg(nickname).arg(ini);
+				fprintf(stderr, "%s\n", qPrintable(msg));
+				QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 				return 1;
 			}
 
@@ -327,7 +349,9 @@ int real_main(int argc, char *argv[])
 
 		if(farm_windows.isEmpty())
 		{
-			fprintf(stderr, "Farm command: no windows created.\n");
+			const QString msg = "Farm command: no windows created.";
+			fprintf(stderr, "%s\n", qPrintable(msg));
+			QMessageBox::critical(nullptr, "chiaki-ng farm", msg);
 			return 1;
 		}
 		return app.exec();
