@@ -318,6 +318,10 @@ int real_main(int argc, char *argv[])
 				false,     // auto_regist
 				false, false, false);
 
+			// Farm mode is primarily for "do the same actions everywhere".
+			// Force video+audio enabled unless the user later adds an explicit override.
+			connect_info.audio_video_disabled = CHIAKI_NONE_DISABLED;
+
 			if(custom_port_base > 0 && custom_port_base <= 65535)
 				connect_info.custom_port_base = (uint16_t)custom_port_base;
 
