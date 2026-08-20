@@ -27,7 +27,7 @@
 // DualShock4 touchpad is 1920 x 942
 #define PS4_TOUCHPAD_MAX_X 1920.0f
 #define PS4_TOUCHPAD_MAX_Y 942.0f
-// DualSense touchpad is 1919 x 1079
+// DualSense touchpad is 1919 x 1078
 #define PS5_TOUCHPAD_MAX_X 1919.0f
 #define PS5_TOUCHPAD_MAX_Y 1079.0f
 #define SESSION_RETRY_SECONDS 20
