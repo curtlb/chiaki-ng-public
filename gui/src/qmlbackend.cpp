@@ -1057,7 +1057,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
         if (!frame)
             return;
 
-        CropDecodedFrameToStreamSize(session, frame);
+        session->ApplyDisplayCrop(frame);
 
         static const QSet<int> zero_copy_formats = {
             AV_PIX_FMT_VULKAN,
@@ -1076,6 +1076,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
             av_frame_copy_props(sw_frame, frame);
             av_frame_unref(frame);
             frame = sw_frame;
+            session->ApplyDisplayCrop(frame);
         }
         QMetaObject::invokeMethod(window, std::bind(&QmlMainWindow::presentFrame, window, frame, frames_lost));
     });
