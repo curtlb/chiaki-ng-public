@@ -362,7 +362,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
             window->fullscreenTime();
 
         const auto &profile = session->GetChiakiSession()->connect_info.video_profile;
-        ResizeWindowForStream(window, settings, profile.width, profile.height);
+        ResizeWindowForStream(window, this->settings, profile.width, profile.height);
 
         sleep_inhibit->inhibit();
     });
