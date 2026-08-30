@@ -10,6 +10,7 @@ int main(int argc, char *argv[]) { return real_main(argc, argv); }
 #include <discoverymanager.h>
 #include <qmlmainwindow.h>
 #include <crashreporter.h>
+#include <cloudlog.h>
 #include <QApplication>
 #include <QtTypes>
 
@@ -499,6 +500,7 @@ int real_main(int argc, char *argv[])
 
 int RunMain(QGuiApplication &app, Settings *settings, bool exit_app_on_stream_exit)
 {
+	CloudLogInit();
 	QmlMainWindow main_window(settings, exit_app_on_stream_exit);
 	main_window.show();
 	return app.exec();

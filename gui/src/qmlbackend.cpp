@@ -215,6 +215,10 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
         cloud_catalog_backend->invalidateCache();
     });
     connect(settings, &Settings::NpssoTokenChanged, this, [this]() {
+        const QString token = settings->GetNpssoToken();
+        CloudLogMessage(QStringLiteral("Settings"),
+            token.isEmpty() ? QStringLiteral("NPSSO token cleared")
+                            : QStringLiteral("NPSSO token updated (length %1)").arg(token.length()));
         cloud_catalog_backend->invalidateCache();
     });
     connect(cloud_streaming_backend, &CloudStreamingBackend::sessionCreated, this,
@@ -463,6 +467,16 @@ CloudStreamingBackend *QmlBackend::cloudStreaming() const
 CloudCatalogBackend *QmlBackend::cloudCatalog() const
 {
     return cloud_catalog_backend;
+}
+
+QString QmlBackend::cloudLogPath() const
+{
+    return CloudLogFilePath();
+}
+
+QString QmlBackend::cloudLogPathAlt() const
+{
+    return CloudLogFilePathAlt();
 }
 
 bool QmlBackend::cloudSteamShortcutEnabled() const

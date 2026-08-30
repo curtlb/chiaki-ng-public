@@ -105,6 +105,8 @@ class QmlBackend : public QObject
     Q_PROPERTY(QString subscriptionTimeRemaining READ subscriptionTimeRemaining NOTIFY subscriptionTimeRemainingChanged)
     Q_PROPERTY(CloudStreamingBackend* cloudStreaming READ cloudStreaming CONSTANT)
     Q_PROPERTY(CloudCatalogBackend* cloudCatalog READ cloudCatalog CONSTANT)
+    Q_PROPERTY(QString cloudLogPath READ cloudLogPath CONSTANT)
+    Q_PROPERTY(QString cloudLogPathAlt READ cloudLogPathAlt CONSTANT)
     Q_PROPERTY(bool cloudSteamShortcutEnabled READ cloudSteamShortcutEnabled CONSTANT)
 
 public:
@@ -180,6 +182,8 @@ public:
 
     CloudStreamingBackend *cloudStreaming() const;
     CloudCatalogBackend *cloudCatalog() const;
+    QString cloudLogPath() const;
+    QString cloudLogPathAlt() const;
     bool cloudSteamShortcutEnabled() const;
 
     void finishAutoRegister(const ChiakiRegisteredHost &host);

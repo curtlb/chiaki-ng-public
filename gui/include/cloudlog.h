@@ -6,8 +6,11 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 
 QString CloudLogFilePath();
+QString CloudLogFilePathAlt();
+QStringList CloudLogAllPaths();
 void CloudLogInit();
 void CloudLogMessage(const char *tag, const char *message);
 void CloudLogMessage(const QString &tag, const QString &message);

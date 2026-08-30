@@ -2619,7 +2619,7 @@ DialogView {
                         wrapMode: Text.Wrap
                         opacity: 0.8
                         font.pixelSize: 12
-                        text: qsTr("Войдите на playstation.com, откройте страницу NPSSO и скопируйте токен. Токен сохраняется до ручной замены. Лог облака chiaki_cloud.log создаётся при запуске рядом с chiaki.exe")
+                        text: qsTr("Войдите на playstation.com, откройте страницу NPSSO и скопируйте токен. Токен сохраняется до ручной замены. Не создавайте chiaki_cloud.log вручную — файл появится сам при запуске.")
                     }
 
                     // Yandex Cloud Translation Settings

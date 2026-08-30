@@ -1389,6 +1389,23 @@ Pane {
                 }
             }
         }
+
+        Label {
+            Layout.fillWidth: true
+            Layout.leftMargin: 20
+            Layout.rightMargin: 20
+            Layout.bottomMargin: 8
+            opacity: 0.55
+            font.pixelSize: 11
+            color: "white"
+            wrapMode: Text.Wrap
+            text: {
+                let t = qsTr("Лог облака: %1").arg(Chiaki.cloudLogPath || qsTr("не найден"));
+                if (Chiaki.cloudLogPathAlt && Chiaki.cloudLogPathAlt.length > 0)
+                    t += "\n" + qsTr("Запасной лог: %1").arg(Chiaki.cloudLogPathAlt);
+                return t;
+            }
+        }
         
     }
     
