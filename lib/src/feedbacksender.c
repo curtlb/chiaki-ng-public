@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
 
 #include <chiaki/feedbacksender.h>
+#include <chiaki/time.h>
 
 #define FEEDBACK_STATE_TIMEOUT_MIN_MS 8 // minimum time to wait between sending 2 packets
 #define FEEDBACK_STATE_TIMEOUT_MAX_MS 200 // maximum time to wait between sending 2 packets
@@ -15,7 +16,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_init(ChiakiFeedbackSender *
 	feedback_sender->takion = takion;
 
 	chiaki_controller_state_set_idle(&feedback_sender->controller_state_prev);
+	chiaki_controller_state_set_idle(&feedback_sender->controller_state_raw);
 	chiaki_controller_state_set_idle(&feedback_sender->controller_state);
+
+	feedback_sender->ps_chord.enabled = false; // seeded from the session on stream start; opt-in only
+	feedback_sender->ps_chord.hold_ms = 2000;
+	feedback_sender->ps_chord.chord_start_ms = 0;
+	feedback_sender->ps_chord.pulse_until_ms = 0;
+	feedback_sender->ps_chord.fired = false;
+	feedback_sender->ps_chord.releasing = false;
+	feedback_sender->ps_chord_fired_cb = NULL;
+	feedback_sender->ps_chord_fired_user = NULL;
 
 	feedback_sender->state_seq_num = 0;
 
@@ -66,19 +77,85 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_controller_state(Chiaki
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
 
-	if(chiaki_controller_state_equals(&feedback_sender->controller_state, state))
+	// Dedupe against the RAW state: controller_state is post-chord-transform and
+	// may legitimately differ from what platforms push (suppression/synthesis).
+	if(chiaki_controller_state_equals(&feedback_sender->controller_state_raw, state))
 	{
 		chiaki_mutex_unlock(&feedback_sender->state_mutex);
 		return CHIAKI_ERR_SUCCESS;
 	}
 
-	feedback_sender->controller_state = *state;
+	feedback_sender->controller_state_raw = *state;
 	feedback_sender->controller_state_changed = true;
 
 	chiaki_mutex_unlock(&feedback_sender->state_mutex);
 	chiaki_cond_signal(&feedback_sender->state_cond);
 
 	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT void chiaki_feedback_sender_set_ps_chord(ChiakiFeedbackSender *feedback_sender, bool enabled, uint32_t hold_ms)
+{
+	if(chiaki_mutex_lock(&feedback_sender->state_mutex) != CHIAKI_ERR_SUCCESS)
+		return;
+	feedback_sender->ps_chord.enabled = enabled;
+	if(hold_ms)
+		feedback_sender->ps_chord.hold_ms = hold_ms;
+	feedback_sender->ps_chord.chord_start_ms = 0;
+	feedback_sender->ps_chord.pulse_until_ms = 0;
+	feedback_sender->ps_chord.fired = false;
+	feedback_sender->ps_chord.releasing = false;
+	chiaki_mutex_unlock(&feedback_sender->state_mutex);
+	chiaki_cond_signal(&feedback_sender->state_cond);
+}
+
+CHIAKI_EXPORT void chiaki_feedback_sender_set_ps_chord_fired_cb(ChiakiFeedbackSender *feedback_sender, void (*cb)(void *user), void *user)
+{
+	if(chiaki_mutex_lock(&feedback_sender->state_mutex) != CHIAKI_ERR_SUCCESS)
+		return;
+	feedback_sender->ps_chord_fired_cb = cb;
+	feedback_sender->ps_chord_fired_user = user;
+	chiaki_mutex_unlock(&feedback_sender->state_mutex);
+}
+
+CHIAKI_EXPORT void chiaki_ps_chord_apply(ChiakiPsChord *chord, ChiakiControllerState *state, uint64_t now_ms)
+{
+	if(!chord->enabled)
+		return;
+	const uint32_t both = CHIAKI_CONTROLLER_BUTTON_OPTIONS | CHIAKI_CONTROLLER_BUTTON_SHARE;
+	bool held = (state->buttons & both) == both;
+	if(held)
+	{
+		state->buttons &= ~both;
+		if(chord->chord_start_ms == 0 || chord->releasing)
+		{
+			chord->chord_start_ms = now_ms;
+			chord->releasing = false;
+		}
+		else if(!chord->fired && now_ms - chord->chord_start_ms >= chord->hold_ms)
+		{
+			chord->fired = true;
+			chord->pulse_until_ms = now_ms + CHIAKI_PS_CHORD_PULSE_MS;
+		}
+	}
+	else if(chord->chord_start_ms != 0 && (state->buttons & both))
+	{
+		state->buttons &= ~both;
+		chord->releasing = true;
+	}
+	else
+	{
+		chord->chord_start_ms = 0;
+		chord->fired = false;
+		chord->releasing = false;
+	}
+	if(chord->pulse_until_ms)
+	{
+		if(now_ms < chord->pulse_until_ms)
+			state->buttons |= CHIAKI_CONTROLLER_BUTTON_PS;
+		else
+			chord->pulse_until_ms = 0;
+	}
 }
 
 static bool controller_state_equals_for_feedback_state(ChiakiControllerState *a, ChiakiControllerState *b)
@@ -155,8 +232,6 @@ static void feedback_sender_send_history_packet(ChiakiFeedbackSender *feedback_s
 		return;
 	}
 
-	//CHIAKI_LOGD(feedback_sender->log, "Feedback History:");
-	//chiaki_log_hexdump(feedback_sender->log, CHIAKI_LOG_DEBUG, buf, buf_size);
 	chiaki_takion_send_feedback_history(feedback_sender->takion, feedback_sender->history_seq_num++, buf, buf_size);
 }
 
@@ -259,20 +334,19 @@ static void *feedback_sender_thread_func(void *user)
 		if(feedback_sender->should_stop)
 			break;
 
-		bool send_feedback_state = true;
-		bool send_feedback_history = false;
+		bool timeout_wake = !feedback_sender->controller_state_changed;
+		feedback_sender->controller_state_changed = false;
 
-		if(feedback_sender->controller_state_changed)
-		{
-			// TODO: FEEDBACK_STATE_TIMEOUT_MIN_MS
-			feedback_sender->controller_state_changed = false;
+		feedback_sender->controller_state = feedback_sender->controller_state_raw;
+		bool chord_fired_before = feedback_sender->ps_chord.fired;
+		chiaki_ps_chord_apply(&feedback_sender->ps_chord, &feedback_sender->controller_state,
+			chiaki_time_now_monotonic_ms());
+		bool chord_just_fired = !chord_fired_before && feedback_sender->ps_chord.fired;
 
-			// don't need to send feedback state if nothing relevant changed
-			if(controller_state_equals_for_feedback_state(&feedback_sender->controller_state, &feedback_sender->controller_state_prev))
-				send_feedback_state = false;
+		bool send_feedback_state = timeout_wake
+			|| !controller_state_equals_for_feedback_state(&feedback_sender->controller_state, &feedback_sender->controller_state_prev);
 
-			send_feedback_history = !controller_state_equals_for_feedback_history(&feedback_sender->controller_state, &feedback_sender->controller_state_prev);
-		} // else: timeout
+		bool send_feedback_history = !controller_state_equals_for_feedback_history(&feedback_sender->controller_state, &feedback_sender->controller_state_prev);
 
 		if(send_feedback_state)
 			feedback_sender_send_state(feedback_sender);
@@ -281,6 +355,17 @@ static void *feedback_sender_thread_func(void *user)
 			feedback_sender_send_history(feedback_sender);
 
 		feedback_sender->controller_state_prev = feedback_sender->controller_state;
+
+		if(chord_just_fired && feedback_sender->ps_chord_fired_cb)
+		{
+			void (*fired_cb)(void *user) = feedback_sender->ps_chord_fired_cb;
+			void *fired_user = feedback_sender->ps_chord_fired_user;
+			chiaki_mutex_unlock(&feedback_sender->state_mutex);
+			fired_cb(fired_user);
+			err = chiaki_mutex_lock(&feedback_sender->state_mutex);
+			if(err != CHIAKI_ERR_SUCCESS)
+				return NULL;
+		}
 	}
 
 	chiaki_mutex_unlock(&feedback_sender->state_mutex);
