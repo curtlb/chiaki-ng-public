@@ -72,6 +72,19 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_join(ChiakiThread *thread, void **re
 	return CHIAKI_ERR_SUCCESS;
 }
 
+CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_detach(ChiakiThread *thread)
+{
+#if _WIN32
+	CloseHandle(thread->thread);
+	thread->thread = NULL;
+#else
+	int r = pthread_detach(thread->thread);
+	if(r != 0)
+		return CHIAKI_ERR_THREAD;
+#endif
+	return CHIAKI_ERR_SUCCESS;
+}
+
 //#define CHIAKI_WINDOWS_THREAD_NAME
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_set_name(ChiakiThread *thread, const char *name)
