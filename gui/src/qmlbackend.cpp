@@ -215,7 +215,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
         cloud_catalog_backend->invalidateCache();
     });
     connect(settings, &Settings::NpssoTokenChanged, this, [this]() {
-        const QString token = settings->GetNpssoToken();
+        const QString token = this->settings->GetNpssoToken();
         CloudLogMessage(QStringLiteral("Settings"),
             token.isEmpty() ? QStringLiteral("NPSSO token cleared")
                             : QStringLiteral("NPSSO token updated (length %1)").arg(token.length()));
