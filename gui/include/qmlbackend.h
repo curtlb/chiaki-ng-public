@@ -97,6 +97,11 @@ class QmlBackend : public QObject
     Q_PROPERTY(bool controllerMappingInProgress READ controllerMappingInProgress NOTIFY controllerMappingInProgressChanged)
     Q_PROPERTY(bool controllerMappingAltered READ controllerMappingAltered NOTIFY controllerMappingAlteredChanged)
     Q_PROPERTY(bool enableAnalogStickMapping READ enableAnalogStickMapping WRITE setEnableAnalogStickMapping NOTIFY enableAnalogStickMappingChanged)
+    Q_PROPERTY(bool showPingTimeoutDialog READ showPingTimeoutDialog WRITE setShowPingTimeoutDialog NOTIFY showPingTimeoutDialogChanged)
+    Q_PROPERTY(bool showAuthorizationFailedDialog READ showAuthorizationFailedDialog WRITE setShowAuthorizationFailedDialog NOTIFY showAuthorizationFailedDialogChanged)
+    Q_PROPERTY(bool showPSPlusSubscriptionDialog READ showPSPlusSubscriptionDialog WRITE setShowPSPlusSubscriptionDialog NOTIFY showPSPlusSubscriptionDialogChanged)
+    Q_PROPERTY(bool showAccountPrivacySettingsDialog READ showAccountPrivacySettingsDialog WRITE setShowAccountPrivacySettingsDialog NOTIFY showAccountPrivacySettingsDialogChanged)
+    Q_PROPERTY(QString accountPrivacyUpgradeUrl READ accountPrivacyUpgradeUrl WRITE setAccountPrivacyUpgradeUrl NOTIFY accountPrivacyUpgradeUrlChanged)
     Q_PROPERTY(QString subscriptionTimeRemaining READ subscriptionTimeRemaining NOTIFY subscriptionTimeRemainingChanged)
     Q_PROPERTY(CloudStreamingBackend* cloudStreaming READ cloudStreaming CONSTANT)
     Q_PROPERTY(CloudCatalogBackend* cloudCatalog READ cloudCatalog CONSTANT)
@@ -157,6 +162,21 @@ public:
     bool enableAnalogStickMapping() const { return enable_analog_stick_mapping; }
     QString subscriptionTimeRemaining() const { return subscription_time_remaining; }
     void setEnableAnalogStickMapping(bool enabled);
+
+    bool showPingTimeoutDialog() const { return show_ping_timeout_dialog; }
+    void setShowPingTimeoutDialog(bool show);
+
+    bool showAuthorizationFailedDialog() const { return show_authorization_failed_dialog; }
+    void setShowAuthorizationFailedDialog(bool show);
+
+    bool showPSPlusSubscriptionDialog() const { return show_ps_plus_subscription_dialog; }
+    void setShowPSPlusSubscriptionDialog(bool show);
+
+    bool showAccountPrivacySettingsDialog() const { return show_account_privacy_settings_dialog; }
+    void setShowAccountPrivacySettingsDialog(bool show);
+
+    QString accountPrivacyUpgradeUrl() const { return account_privacy_upgrade_url; }
+    void setAccountPrivacyUpgradeUrl(const QString &url);
 
     CloudStreamingBackend *cloudStreaming() const;
     CloudCatalogBackend *cloudCatalog() const;
@@ -271,6 +291,11 @@ signals:
     void jwtTokenValid();
     void subscriptionExpired(const QString &message);
     void subscriptionTimeRemainingChanged();
+    void showPingTimeoutDialogChanged();
+    void showAuthorizationFailedDialogChanged();
+    void showPSPlusSubscriptionDialogChanged();
+    void showAccountPrivacySettingsDialogChanged();
+    void accountPrivacyUpgradeUrlChanged();
 
 private:
     struct DisplayServer {
@@ -349,6 +374,11 @@ private:
     QMap<QString, QString> controller_mapping_original_controller_mappings = {};
     bool controller_mapping_in_progress = false;
     bool enable_analog_stick_mapping = false;
+    bool show_ping_timeout_dialog = false;
+    bool show_authorization_failed_dialog = false;
+    bool show_ps_plus_subscription_dialog = false;
+    bool show_account_privacy_settings_dialog = false;
+    QString account_privacy_upgrade_url;
     bool resume_session = false;
     bool settings_allocd = false;
     HostMAC auto_connect_mac = {};

@@ -2492,14 +2492,45 @@ void Settings::SetCloudResolvedStoreCountry(const QString &country)
 	settings.setValue(QStringLiteral("settings/cloud_resolved_store_country"), country);
 }
 
+QString Settings::GetCloudResolvedStoreLang() const
+{
+	return settings.value(QStringLiteral("settings/cloud_resolved_store_lang"), QString()).toString();
+}
+
+void Settings::SetCloudResolvedStoreLang(const QString &lang)
+{
+	settings.setValue(QStringLiteral("settings/cloud_resolved_store_lang"), lang);
+}
+
 bool Settings::GetCloudCatalogNativeMode() const
 {
-	return settings.value(QStringLiteral("settings/cloud_catalog_native_mode"), true).toBool();
+	const QString key = QStringLiteral("settings/cloud_catalog_native_mode");
+	if (!settings.contains(key)) {
+		const bool native = GetCloudResolvedStoreCountry().isEmpty();
+		const_cast<Settings *>(this)->settings.setValue(key, native);
+		return native;
+	}
+	return settings.value(key, true).toBool();
 }
 
 void Settings::SetCloudCatalogNativeMode(bool native_mode)
 {
 	settings.setValue(QStringLiteral("settings/cloud_catalog_native_mode"), native_mode);
+}
+
+bool Settings::IsCloudCatalogIsForeign() const
+{
+	return !GetCloudCatalogNativeMode();
+}
+
+bool Settings::GetAccountAttributesCheckPassed() const
+{
+	return settings.value("settings/account_attributes_check_passed", false).toBool();
+}
+
+void Settings::SetAccountAttributesCheckPassed(bool passed)
+{
+	settings.setValue("settings/account_attributes_check_passed", passed);
 }
 
 QString Settings::GetCloudTagFilters() const

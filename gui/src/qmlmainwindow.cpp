@@ -551,7 +551,7 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
         }
         if(session)
         {
-            connect(session, &StreamSession::FullscreenComboPressed, this, [this]() {
+            connect(session, &StreamSession::PsChordFired, this, [this]() {
                 if (windowState() != Qt::WindowFullScreen)
                     fullscreenTime();
                 else

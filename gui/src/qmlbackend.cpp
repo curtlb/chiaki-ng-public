@@ -2151,6 +2151,51 @@ void QmlBackend::setEnableAnalogStickMapping(bool enabled)
     }
 }
 
+void QmlBackend::setShowPingTimeoutDialog(bool show)
+{
+    if(show_ping_timeout_dialog != show)
+    {
+        show_ping_timeout_dialog = show;
+        emit showPingTimeoutDialogChanged();
+    }
+}
+
+void QmlBackend::setShowAuthorizationFailedDialog(bool show)
+{
+    if(show_authorization_failed_dialog != show)
+    {
+        show_authorization_failed_dialog = show;
+        emit showAuthorizationFailedDialogChanged();
+    }
+}
+
+void QmlBackend::setShowPSPlusSubscriptionDialog(bool show)
+{
+    if(show_ps_plus_subscription_dialog != show)
+    {
+        show_ps_plus_subscription_dialog = show;
+        emit showPSPlusSubscriptionDialogChanged();
+    }
+}
+
+void QmlBackend::setShowAccountPrivacySettingsDialog(bool show)
+{
+    if(show_account_privacy_settings_dialog != show)
+    {
+        show_account_privacy_settings_dialog = show;
+        emit showAccountPrivacySettingsDialogChanged();
+    }
+}
+
+void QmlBackend::setAccountPrivacyUpgradeUrl(const QString &url)
+{
+    if(account_privacy_upgrade_url != url)
+    {
+        account_privacy_upgrade_url = url;
+        emit accountPrivacyUpgradeUrlChanged();
+    }
+}
+
 QVariantList QmlBackend::currentControllerMapping() const
 {
     QVariantList out;

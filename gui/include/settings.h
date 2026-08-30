@@ -421,8 +421,13 @@ class Settings : public QObject
 	void SetCloudCatalogFilter(QString filter);
 	QString GetCloudResolvedStoreCountry() const;
 	void SetCloudResolvedStoreCountry(const QString &country);
+	QString GetCloudResolvedStoreLang() const;
+	void SetCloudResolvedStoreLang(const QString &lang);
 	bool GetCloudCatalogNativeMode() const;
 	void SetCloudCatalogNativeMode(bool native_mode);
+	bool IsCloudCatalogIsForeign() const;
+	bool GetAccountAttributesCheckPassed() const;
+	void SetAccountAttributesCheckPassed(bool passed);
 	QString GetCloudTagFilters() const;
 	void SetCloudTagFilters(const QString &filtersJson);
 	int GetCloudSortState() const;
