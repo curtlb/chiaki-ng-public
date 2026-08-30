@@ -59,6 +59,8 @@ set(SOURCE_FILES
 	src/discoverymanager.cpp
 	include/streamsession.h
 	src/streamsession.cpp
+	include/gamelauncher.h
+	src/gamelauncher.cpp
 	include/macrorecorder.h
 	src/macrorecorder.cpp
 	include/sessionlog.h
