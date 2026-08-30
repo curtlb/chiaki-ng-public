@@ -84,6 +84,10 @@ class QmlSettings : public QObject
     Q_PROPERTY(int cloudSortState READ cloudSortState WRITE setCloudSortState NOTIFY cloudSortStateChanged)
     Q_PROPERTY(QString cloudTagFilters READ cloudTagFilters WRITE setCloudTagFilters NOTIFY cloudTagFiltersChanged)
     Q_PROPERTY(QString cloudFavorites READ cloudFavorites WRITE setCloudFavorites NOTIFY cloudFavoritesChanged)
+    Q_PROPERTY(int cloudResolutionPSCloud READ cloudResolutionPSCloud WRITE setCloudResolutionPSCloud NOTIFY cloudResolutionPSCloudChanged)
+    Q_PROPERTY(int cloudBitratePSCloud READ cloudBitratePSCloud WRITE setCloudBitratePSCloud NOTIFY cloudBitratePSCloudChanged)
+    Q_PROPERTY(int cloudResolutionPSNOW READ cloudResolutionPSNOW WRITE setCloudResolutionPSNOW NOTIFY cloudResolutionPSNOWChanged)
+    Q_PROPERTY(int cloudBitratePSNOW READ cloudBitratePSNOW WRITE setCloudBitratePSNOW NOTIFY cloudBitratePSNOWChanged)
     Q_PROPERTY(QString jwtToken READ jwtToken WRITE setJwtToken NOTIFY jwtTokenChanged)
     Q_PROPERTY(bool mouseTouchEnabled READ mouseTouchEnabled WRITE setMouseTouchEnabled NOTIFY mouseTouchEnabledChanged)
     Q_PROPERTY(bool keyboardEnabled READ keyboardEnabled WRITE setKeyboardEnabled NOTIFY keyboardEnabledChanged)
@@ -529,6 +533,18 @@ public:
     QString cloudFavorites() const;
     void setCloudFavorites(const QString &favorites);
 
+    int cloudResolutionPSCloud() const;
+    void setCloudResolutionPSCloud(int resolution);
+
+    int cloudBitratePSCloud() const;
+    void setCloudBitratePSCloud(int bitrate);
+
+    int cloudResolutionPSNOW() const;
+    void setCloudResolutionPSNOW(int resolution);
+
+    int cloudBitratePSNOW() const;
+    void setCloudBitratePSNOW(int bitrate);
+
     QString jwtToken() const;
     void setJwtToken(const QString &token);
 
@@ -669,6 +685,10 @@ signals:
     void cloudSortStateChanged();
     void cloudTagFiltersChanged();
     void cloudFavoritesChanged();
+    void cloudResolutionPSCloudChanged();
+    void cloudBitratePSCloudChanged();
+    void cloudResolutionPSNOWChanged();
+    void cloudBitratePSNOWChanged();
     void jwtTokenChanged();
     void yandexAuthSuccess(const QString &iamToken, const QString &folderId);
     void yandexAuthError(const QString &errorMessage);

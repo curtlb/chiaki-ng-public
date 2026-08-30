@@ -716,6 +716,50 @@ void QmlSettings::setCloudFavorites(const QString &favorites)
     emit cloudFavoritesChanged();
 }
 
+int QmlSettings::cloudResolutionPSCloud() const
+{
+    return settings->GetCloudResolutionPSCloud();
+}
+
+void QmlSettings::setCloudResolutionPSCloud(int resolution)
+{
+    settings->SetCloudResolutionPSCloud(resolution);
+    emit cloudResolutionPSCloudChanged();
+}
+
+int QmlSettings::cloudBitratePSCloud() const
+{
+    return static_cast<int>(settings->GetCloudBitratePSCloud());
+}
+
+void QmlSettings::setCloudBitratePSCloud(int bitrate)
+{
+    settings->SetCloudBitratePSCloud(static_cast<unsigned int>(bitrate));
+    emit cloudBitratePSCloudChanged();
+}
+
+int QmlSettings::cloudResolutionPSNOW() const
+{
+    return settings->GetCloudResolutionPSNOW();
+}
+
+void QmlSettings::setCloudResolutionPSNOW(int resolution)
+{
+    settings->SetCloudResolutionPSNOW(resolution);
+    emit cloudResolutionPSNOWChanged();
+}
+
+int QmlSettings::cloudBitratePSNOW() const
+{
+    return static_cast<int>(settings->GetCloudBitratePSNOW());
+}
+
+void QmlSettings::setCloudBitratePSNOW(int bitrate)
+{
+    settings->SetCloudBitratePSNOW(static_cast<unsigned int>(bitrate));
+    emit cloudBitratePSNOWChanged();
+}
+
 QString QmlSettings::jwtToken() const
 {
     return settings->GetJwtToken();

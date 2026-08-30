@@ -2622,6 +2622,110 @@ DialogView {
                         text: qsTr("Войдите на playstation.com, откройте страницу NPSSO и скопируйте токен. Токен сохраняется до ручной замены. Не создавайте chiaki_cloud.log вручную — файл появится сам при запуске.")
                     }
 
+                    Label {
+                        Layout.topMargin: 24
+                        text: qsTr("Графика облачного стриминга")
+                        font.bold: true
+                        font.pixelSize: 14
+                    }
+
+                    Label {
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
+                        font.pixelSize: 12
+                        text: qsTr("Разрешение и битрейт для облака отдельные от Remote Play. Декодер, Placebo и тип окна — из общих настроек. PS5 Cloud всегда H.265, PSNOW — H.264.")
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: qsTr("PS5 Cloud — разрешение:")
+                    }
+
+                    C.ComboBox {
+                        Layout.preferredWidth: 400
+                        model: ["720p", "1080p", "1440p", "2160p"]
+                        currentIndex: {
+                            let res = Chiaki.settings.cloudResolutionPSCloud;
+                            if (res === 720) return 0;
+                            if (res === 1440) return 2;
+                            if (res === 2160) return 3;
+                            return 1;
+                        }
+                        onActivated: index => {
+                            if (index === 0) Chiaki.settings.cloudResolutionPSCloud = 720;
+                            else if (index === 2) Chiaki.settings.cloudResolutionPSCloud = 1440;
+                            else if (index === 3) Chiaki.settings.cloudResolutionPSCloud = 2160;
+                            else Chiaki.settings.cloudResolutionPSCloud = 1080;
+                        }
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: qsTr("PS5 Cloud — битрейт:")
+                    }
+
+                    RowLayout {
+                        Layout.preferredWidth: 400
+                        C.Slider {
+                            id: cloudBitratePSCloudSlider
+                            Layout.fillWidth: true
+                            from: 2
+                            to: 100
+                            stepSize: 1
+                            value: Chiaki.settings.cloudBitratePSCloud / 1000
+                            onMoved: Chiaki.settings.cloudBitratePSCloud = value * 1000
+                        }
+                        Label {
+                            text: Math.round(cloudBitratePSCloudSlider.value) + " Mbps"
+                            Layout.preferredWidth: 70
+                        }
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: qsTr("PSNOW — разрешение:")
+                    }
+
+                    C.ComboBox {
+                        Layout.preferredWidth: 400
+                        model: ["720p", "1080p", "1440p", "2160p"]
+                        currentIndex: {
+                            let res = Chiaki.settings.cloudResolutionPSNOW;
+                            if (res === 720) return 0;
+                            if (res === 1440) return 2;
+                            if (res === 2160) return 3;
+                            return 1;
+                        }
+                        onActivated: index => {
+                            if (index === 0) Chiaki.settings.cloudResolutionPSNOW = 720;
+                            else if (index === 2) Chiaki.settings.cloudResolutionPSNOW = 1440;
+                            else if (index === 3) Chiaki.settings.cloudResolutionPSNOW = 2160;
+                            else Chiaki.settings.cloudResolutionPSNOW = 1080;
+                        }
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: qsTr("PSNOW — битрейт:")
+                    }
+
+                    RowLayout {
+                        Layout.preferredWidth: 400
+                        C.Slider {
+                            id: cloudBitratePSNOWSlider
+                            Layout.fillWidth: true
+                            from: 2
+                            to: 100
+                            stepSize: 1
+                            value: Chiaki.settings.cloudBitratePSNOW / 1000
+                            onMoved: Chiaki.settings.cloudBitratePSNOW = value * 1000
+                        }
+                        Label {
+                            text: Math.round(cloudBitratePSNOWSlider.value) + " Mbps"
+                            Layout.preferredWidth: 70
+                        }
+                    }
+
                     // Yandex Cloud Translation Settings
                     Label {
                         Layout.topMargin: 30

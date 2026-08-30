@@ -43,7 +43,56 @@
 #include <QStringDecoder>
 #endif
 
+#include <chiaki/streamconnection.h>
+
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
+
+static void CropDecodedFrameToStreamSize(StreamSession *session, AVFrame *frame)
+{
+	if(!session || !frame)
+		return;
+
+	unsigned int stream_w = 0, stream_h = 0;
+	ChiakiSession *chiaki_session = session->GetChiakiSession();
+	if(chiaki_session
+		&& chiaki_stream_connection_video_resolution(&chiaki_session->stream_connection, &stream_w, &stream_h)
+		&& stream_h > 0)
+	{
+		// negotiated stream resolution
+	}
+	else if(chiaki_session)
+	{
+		stream_w = chiaki_session->connect_info.video_profile.width;
+		stream_h = chiaki_session->connect_info.video_profile.height;
+	}
+
+	if(stream_h > 0 && frame->height > (int)stream_h)
+		frame->crop_bottom = frame->height - (int)stream_h;
+	if(stream_w > 0 && frame->width > (int)stream_w)
+		frame->crop_right = frame->width - (int)stream_w;
+}
+
+static void ResizeWindowForStream(QmlMainWindow *window, Settings *settings, unsigned int width, unsigned int height)
+{
+	if(!window || window->windowState() == Qt::WindowFullScreen)
+		return;
+
+	if(settings->GetWindowType() == WindowType::CustomResolution)
+	{
+		window->resize(settings->GetCustomResolutionWidth(), settings->GetCustomResolutionHeight());
+		window->setMaximumSize(QSize(settings->GetCustomResolutionWidth(), settings->GetCustomResolutionHeight()));
+	}
+	else if(settings->GetWindowType() == WindowType::AdjustableResolution)
+	{
+		window->normalTime();
+		if(!settings->GetStreamGeometry().isEmpty())
+			window->setGeometry(settings->GetStreamGeometry());
+	}
+	else
+	{
+		window->resize((int)width, (int)height);
+	}
+}
 
 // Парсит ответ status_console.php (тело ответа). Не смотрим на HTTP код. Пробуем UTF-8 и Windows-1251.
 static QString parseFourcloudStatusBody(const QByteArray &body)
@@ -250,6 +299,8 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
             if (!frame)
                 return;
 
+            CropDecodedFrameToStreamSize(session, frame);
+
             static const QSet<int> zero_copy_formats = {
                 AV_PIX_FMT_VULKAN,
 #ifdef Q_OS_LINUX
@@ -309,6 +360,9 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
             window->setVideoMode(QmlMainWindow::VideoMode::Stretch);
         if (fullscreen || zoom || stretch)
             window->fullscreenTime();
+
+        const auto &profile = session->GetChiakiSession()->connect_info.video_profile;
+        ResizeWindowForStream(window, settings, profile.width, profile.height);
 
         sleep_inhibit->inhibit();
     });
@@ -1028,6 +1082,8 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
         if (!frame)
             return;
 
+        CropDecodedFrameToStreamSize(session, frame);
+
         static const QSet<int> zero_copy_formats = {
             AV_PIX_FMT_VULKAN,
 #ifdef Q_OS_LINUX
@@ -1107,19 +1163,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
 
     if (window->windowState() != Qt::WindowFullScreen)
     {
-        if(settings->GetWindowType() == WindowType::CustomResolution)
-        {
-            window->resize(settings->GetCustomResolutionWidth(), settings->GetCustomResolutionHeight());
-            window->setMaximumSize(QSize(settings->GetCustomResolutionWidth(), settings->GetCustomResolutionHeight()));
-        }
-        else if(settings->GetWindowType() == WindowType::AdjustableResolution)
-        {
-            window->normalTime();
-            if(!settings->GetStreamGeometry().isEmpty())
-                window->setGeometry(settings->GetStreamGeometry());
-        }
-        else
-            window->resize(connect_info.video_profile.width, connect_info.video_profile.height);
+        ResizeWindowForStream(window, settings, connect_info.video_profile.width, connect_info.video_profile.height);
     }
 
     chiaki_log_mutex.lock();
