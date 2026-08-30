@@ -168,6 +168,8 @@ class StreamSession : public QObject
 	Q_PROPERTY(bool cantDisplay READ GetCantDisplay NOTIFY CantDisplayChanged)
 	Q_PROPERTY(QString loadingMessage READ GetLoadingMessage WRITE SetLoadingMessage NOTIFY LoadingMessageChanged)
 	Q_PROPERTY(bool isCloudStreaming READ IsCloudStreaming CONSTANT)
+	Q_PROPERTY(bool isCloudPsCloud READ IsCloudPsCloud CONSTANT)
+	Q_PROPERTY(unsigned int cloudBitrateKbps READ GetCloudBitrateKbps WRITE SetCloudBitrateKbps NOTIFY CloudBitrateKbpsChanged)
 	Q_PROPERTY(bool fullscreen READ GetFullscreen CONSTANT)
 	Q_PROPERTY(bool zoom READ GetZoom CONSTANT)
 	Q_PROPERTY(bool stretch READ GetStretch CONSTANT)
@@ -294,6 +296,7 @@ class StreamSession : public QObject
 		QByteArray cloud_handshake_key_storage;
 		QByteArray cloud_session_id_storage;
 		QByteArray host_storage; // For cloud mode when we modify host string
+		Settings *settings = nullptr;
 
 		void PushAudioFrame(int16_t *buf, size_t samples_count);
 		void PushHapticsFrame(uint8_t *buf, size_t buf_size);
@@ -378,6 +381,9 @@ class StreamSession : public QObject
 			}
 		}
 		bool IsCloudStreaming() { return chiaki_service_type_is_cloud(service_type); }
+		bool IsCloudPsCloud() const { return service_type == CHIAKI_SERVICE_TYPE_PSCLOUD; }
+		unsigned int GetCloudBitrateKbps() const;
+		void SetCloudBitrateKbps(unsigned int kbps);
 		bool GetFullscreen() { return fullscreen; }
 		bool GetZoom() { return zoom; }
 		bool GetStretch() { return stretch; }
@@ -417,6 +423,7 @@ class StreamSession : public QObject
 		void NicknameReceived(QString nickname);
 		void ConnectedChanged();
 		void MeasuredBitrateChanged();
+		void CloudBitrateKbpsChanged();
 		void AveragePacketLossChanged();
 		void MeasuredFpsChanged();
 		void MeasuredRttChanged();

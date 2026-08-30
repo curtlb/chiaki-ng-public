@@ -193,6 +193,36 @@ void StreamSession::ApplyDisplayCrop(AVFrame *frame, unsigned int display_w, uns
 		? frame->width - (int)display_w : 0;
 }
 
+unsigned int StreamSession::GetCloudBitrateKbps() const
+{
+	return session.connect_info.video_profile.bitrate;
+}
+
+void StreamSession::SetCloudBitrateKbps(unsigned int kbps)
+{
+	if(!chiaki_service_type_is_cloud(service_type))
+		return;
+
+	if(kbps < 2000)
+		kbps = 2000;
+	if(kbps > 100000)
+		kbps = 100000;
+
+	if(session.connect_info.video_profile.bitrate == kbps)
+		return;
+
+	session.connect_info.video_profile.bitrate = kbps;
+	if(settings)
+	{
+		if(service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+			settings->SetCloudBitratePSCloud(kbps);
+		else if(service_type == CHIAKI_SERVICE_TYPE_PSNOW)
+			settings->SetCloudBitratePSNOW(kbps);
+	}
+	CHIAKI_LOGI(GetChiakiLog(), "Cloud bitrate set to %u kbps", kbps);
+	emit CloudBitrateKbpsChanged();
+}
+
 StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObject *parent)
 	: QObject(parent),
 	log(this, connect_info.log_level_mask, connect_info.log_file),
@@ -305,6 +335,7 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	host = connect_info.host;
 	title_id = connect_info.title_id;
 	service_type = connect_info.service_type;
+	settings = connect_info.settings;
 	fullscreen = connect_info.fullscreen;
 	zoom = connect_info.zoom;
 	stretch = connect_info.stretch;

@@ -373,7 +373,7 @@ Item {
                 value: Chiaki.settings.audioVolume
                 onMoved: Chiaki.settings.audioVolume = value
                 KeyNavigation.left: closeButton
-                KeyNavigation.right: muteButton
+                KeyNavigation.right: Chiaki.session && Chiaki.session.isCloudStreaming ? cloudBitrateSlider : muteButton
                 Keys.onEscapePressed: menuView.close()
                 Label {
                     anchors {
@@ -384,6 +384,40 @@ Item {
                     text: {
                         ((parent.value / 128.0) * 100).toFixed(0) + qsTr("% Volume")
                     }
+                }
+            }
+
+            ToolSeparator {
+                Layout.leftMargin: -10
+                Layout.rightMargin: -10
+                visible: Chiaki.session && Chiaki.session.isCloudStreaming
+            }
+
+            Slider {
+                id: cloudBitrateSlider
+                visible: Chiaki.session && Chiaki.session.isCloudStreaming
+                Layout.rightMargin: 20
+                orientation: Qt.Vertical
+                from: 2
+                to: 100
+                Layout.preferredHeight: 100
+                padding: 10
+                stepSize: 1
+                value: Chiaki.session ? Chiaki.session.cloudBitrateKbps / 1000 : 20
+                onMoved: {
+                    if (Chiaki.session)
+                        Chiaki.session.cloudBitrateKbps = value * 1000
+                }
+                KeyNavigation.left: volumeSlider
+                KeyNavigation.right: muteButton
+                Keys.onEscapePressed: menuView.close()
+                Label {
+                    anchors {
+                        top: parent.bottom
+                        horizontalCenter: parent.horizontalCenter
+                    }
+                    horizontalAlignment: Text.AlignHCenter
+                    text: Math.round(parent.value) + qsTr(" Mbps") + "\n" + qsTr("Cloud")
                 }
             }
 
@@ -401,7 +435,7 @@ Item {
                 enabled: Chiaki.session && Chiaki.session.connected
                 checked: Chiaki.session && !Chiaki.session.muted
                 onToggled: Chiaki.session.muted = !Chiaki.session.muted
-                KeyNavigation.left: volumeSlider
+                KeyNavigation.left: Chiaki.session && Chiaki.session.isCloudStreaming ? cloudBitrateSlider : volumeSlider
                 KeyNavigation.right: zoomButton
                 Keys.onReturnPressed: toggled()
                 Keys.onEscapePressed: menuView.close()
