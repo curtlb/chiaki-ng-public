@@ -5,9 +5,12 @@
 #include <chiaki/log.h>
 
 #include <QByteArray>
+#include <QString>
 
 QString CloudLogFilePath();
+void CloudLogInit();
 void CloudLogMessage(const char *tag, const char *message);
+void CloudLogMessage(const QString &tag, const QString &message);
 void CloudLogWrite(const char *tag, ChiakiLogLevel level, const char *message);
 
 class CloudChiakiLog

@@ -243,7 +243,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
     {
         const QString startMsg = QStringLiteral("fetch start locale=%1 npsso=%2")
             .arg(QString::fromUtf8(locale), npsso.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"));
-        CloudLogMessage("Catalog", startMsg.toUtf8().constData());
+        CloudLogMessage(QStringLiteral("Catalog"), startMsg);
     }
 
     std::thread([self, reqId, gen, npsso, locale, cacheDir]() mutable {
@@ -301,9 +301,9 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                 return;
             }
 
-            CloudLogMessage("Catalog", success
-                ? "fetch finished: success"
-                : QString("fetch finished: %1").arg(message).toUtf8().constData());
+            CloudLogMessage(QStringLiteral("Catalog"),
+                success ? QStringLiteral("fetch finished: success")
+                        : QStringLiteral("fetch finished: %1").arg(message));
 
             // Persist the locale the lib actually settled on (region detection now lives
             // entirely in libchiaki: it re-bases the locale on the account's Kamaji-session

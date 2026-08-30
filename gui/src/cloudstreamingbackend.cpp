@@ -45,9 +45,9 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
 {
     // Get NPSSO token from settings
     QString npssoToken = settings->GetNpssoToken();
-    CloudLogMessage("Session", QString("startCompleteCloudSession service=%1 game=%2 npsso=%3")
-        .arg(serviceType, gameIdentifier, npssoToken.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"))
-        .toUtf8().constData());
+    CloudLogMessage(QStringLiteral("Session"),
+        QStringLiteral("startCompleteCloudSession service=%1 game=%2 npsso=%3")
+            .arg(serviceType, gameIdentifier, npssoToken.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present")));
 
     if (npssoToken.isEmpty()) {
         qWarning() << "NPSSO token is empty - cloud play may not work";
@@ -212,9 +212,10 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
                                          handshakeKey, launchSpec, sessionId, wrap, mtuIn, mtuOut, rttUs, errMsg, dcPings]() mutable {
             if (!self)
                 return; // backend destroyed while the worker ran
-            CloudLogMessage("Session", success
-                ? "provisioning finished: success"
-                : QString("provisioning finished: %1").arg(errMsg.isEmpty() ? QStringLiteral("failed") : errMsg).toUtf8().constData());
+            CloudLogMessage(QStringLiteral("Session"),
+                success ? QStringLiteral("provisioning finished: success")
+                        : QStringLiteral("provisioning finished: %1")
+                              .arg(errMsg.isEmpty() ? QStringLiteral("failed") : errMsg));
             const QJSValue callback = self->pending_callbacks.take(reqId);
             // Persist the merged datacenter list so Settings shows the measured RTTs
             // (done whether or not allocation succeeded -- the old code saved during the ping).

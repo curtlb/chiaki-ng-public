@@ -8,6 +8,7 @@
 #include "psntoken.h"
 #include "systemdinhibit.h"
 #include "crashreporter.h"
+#include "cloudlog.h"
 #include "chiaki/remote/holepunch.h"
 #ifdef Q_OS_MACOS
 #include "macWakeSleep.h"
@@ -208,6 +209,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
 
     cloud_streaming_backend = new CloudStreamingBackend(settings, this);
     cloud_catalog_backend = new CloudCatalogBackend(settings, this);
+    CloudLogInit();
 
     connect(settings_qml, &QmlSettings::cloudStoreLocaleChanged, this, [this]() {
         cloud_catalog_backend->invalidateCache();
