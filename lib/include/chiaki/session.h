@@ -322,6 +322,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_keyboard_reject(ChiakiSession *sess
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_keyboard_accept(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_go_home(ChiakiSession *session);
 
+/**
+ * Request a live target bitrate change during an active stream (kbps).
+ * No-op when the stream is not connected yet.
+ */
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_target_bitrate_kbps(ChiakiSession *session, unsigned int kbps);
+
 /*
  * ============================== WARNING ====================================
  * The `static inline` setters below dereference ChiakiSession fields, so they

@@ -81,6 +81,7 @@ static void stream_connection_takion_data_expect_streaminfo(ChiakiStreamConnecti
 static ChiakiErrorCode stream_connection_send_streaminfo_ack(ChiakiStreamConnection *stream_connection);
 static void stream_connection_takion_av(ChiakiStreamConnection *stream_connection, ChiakiTakionAVPacket *packet);
 static ChiakiErrorCode stream_connection_send_heartbeat(ChiakiStreamConnection *stream_connection);
+static ChiakiErrorCode stream_connection_send_bandwidth_request(ChiakiStreamConnection *stream_connection, unsigned int kbps);
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnection *stream_connection, ChiakiSession *session, double packet_loss_max)
 {
@@ -93,6 +94,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnecti
 	stream_connection->measured_rtt_ms = 0.0;
 	stream_connection->measured_loss = 0;
 	stream_connection->connection_quality_last_us = 0;
+	stream_connection->client_target_bitrate_kbps = 0;
+	stream_connection->last_server_target_bitrate_kbps = 0;
 
 	stream_connection->ecdh_secret = NULL;
 	stream_connection->gkcrypt_remote = NULL;
@@ -815,6 +818,15 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
 			: (q.rtt > 0.0 ? q.rtt : stream_connection->measured_rtt_ms);
 		stream_connection->measured_loss = q.loss;
 
+		stream_connection->last_server_target_bitrate_kbps = q.target_bitrate;
+		if(stream_connection->client_target_bitrate_kbps > 0 && q.target_bitrate > 0)
+		{
+			unsigned int want = stream_connection->client_target_bitrate_kbps;
+			unsigned int diff = q.target_bitrate > want ? q.target_bitrate - want : want - q.target_bitrate;
+			if(diff > want / 10)
+				stream_connection_send_bandwidth_request(stream_connection, want);
+		}
+
 		chiaki_stream_stats_reset(&stream_connection->video_receiver->frame_processor.stream_stats);
 		break;
 	}
@@ -1426,6 +1438,103 @@ static ChiakiErrorCode stream_connection_send_heartbeat(ChiakiStreamConnection *
 	}
 
 	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 1, buf, stream.bytes_written, NULL);
+}
+
+static ChiakiErrorCode stream_connection_send_protobuf_message(ChiakiStreamConnection *stream_connection, tkproto_TakionMessage *msg)
+{
+	uint8_t buf[256];
+	pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+	bool pbr = pb_encode(&stream, tkproto_TakionMessage_fields, msg);
+	if(!pbr)
+	{
+		CHIAKI_LOGE(stream_connection->log, "StreamConnection protobuf encoding failed");
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 1, buf, stream.bytes_written, NULL);
+}
+
+static ChiakiErrorCode stream_connection_send_bandwidth_request(ChiakiStreamConnection *stream_connection, unsigned int kbps)
+{
+	if(!stream_connection->gkcrypt_remote)
+		return CHIAKI_ERR_INVALID_STATE;
+
+	ChiakiSession *session = stream_connection->session;
+	ChiakiErrorCode err;
+
+	// CONNECTIONQUALITY: tell the server our desired downstream target (kbps).
+	tkproto_TakionMessage cq = { 0 };
+	cq.type = tkproto_TakionMessage_PayloadType_CONNECTIONQUALITY;
+	cq.has_connection_quality_payload = true;
+	cq.connection_quality_payload.has_target_bitrate = true;
+	cq.connection_quality_payload.target_bitrate = kbps;
+	cq.connection_quality_payload.has_upstream_bitrate = true;
+	cq.connection_quality_payload.upstream_bitrate = kbps;
+	err = stream_connection_send_protobuf_message(stream_connection, &cq);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	// INFO: encoder bandwidth parameters (all fields required by the schema).
+	tkproto_TakionMessage info = { 0 };
+	info.type = tkproto_TakionMessage_PayloadType_INFO;
+	info.has_info_payload = true;
+	uint32_t min_bitrate = kbps / 4;
+	if(min_bitrate < 500)
+		min_bitrate = 500;
+	info.info_payload.effective_bw = kbps;
+	info.info_payload.bitrate = kbps;
+	info.info_payload.min_bitrate = min_bitrate;
+	info.info_payload.target_bitrate = kbps;
+	info.info_payload.corrupt_frame_freq = 0;
+	info.info_payload.mtu = session->mtu_in ? session->mtu_in : 1454;
+	info.info_payload.fps = session->connect_info.video_profile.max_fps
+		? session->connect_info.video_profile.max_fps : 60;
+	info.info_payload.monitor_interval = 1000;
+	info.info_payload.ext_overhead = 0;
+	info.info_payload.int_overhead = 0;
+	info.info_payload.timeout_interval = 5000;
+	info.info_payload.min_resume_quality = 0;
+	info.info_payload.min_fps = 30;
+	err = stream_connection_send_protobuf_message(stream_connection, &info);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	// DEBUG/BITRATE: optional relative/absolute hint used by some Gaikai builds.
+	tkproto_TakionMessage dbg = { 0 };
+	dbg.type = tkproto_TakionMessage_PayloadType_DEBUG;
+	dbg.has_debug_payload = true;
+	dbg.debug_payload.type = tkproto_DebugOption_Type_BITRATE;
+	dbg.debug_payload.has_bitrate = true;
+	dbg.debug_payload.bitrate.has_bitrate_change = true;
+	dbg.debug_payload.bitrate.bitrate_change = (float)kbps / 1000.0f;
+	err = stream_connection_send_protobuf_message(stream_connection, &dbg);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	CHIAKI_LOGI(stream_connection->log, "StreamConnection requested live bitrate %u kbps (server was %u kbps)",
+		kbps, stream_connection->last_server_target_bitrate_kbps);
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_set_target_bitrate_kbps(ChiakiStreamConnection *stream_connection, unsigned int kbps)
+{
+	if(kbps < 500)
+		kbps = 500;
+	if(kbps > 100000)
+		kbps = 100000;
+
+	ChiakiErrorCode err = chiaki_mutex_lock(&stream_connection->state_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+
+	stream_connection->client_target_bitrate_kbps = kbps;
+	stream_connection->session->connect_info.video_profile.bitrate = kbps;
+	bool live = stream_connection->gkcrypt_remote != NULL;
+	chiaki_mutex_unlock(&stream_connection->state_mutex);
+
+	if(!live)
+		return CHIAKI_ERR_SUCCESS;
+
+	return stream_connection_send_bandwidth_request(stream_connection, kbps);
 }
 
 CHIAKI_EXPORT ChiakiErrorCode stream_connection_send_corrupt_frame(ChiakiStreamConnection *stream_connection, ChiakiSeqNum16 start, ChiakiSeqNum16 end)

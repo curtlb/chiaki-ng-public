@@ -91,6 +91,10 @@ typedef struct chiaki_stream_connection_t
 	double measured_rtt_ms;
 	uint64_t measured_loss;
 	uint64_t connection_quality_last_us; // internal: timestamp of last CONNECTIONQUALITY, for FPS timing
+
+	/** Client-requested target bitrate (kbps). 0 = no live override. */
+	unsigned int client_target_bitrate_kbps;
+	uint32_t last_server_target_bitrate_kbps;
 } ChiakiStreamConnection;
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnection *stream_connection, ChiakiSession *session, double packet_loss_max);
@@ -122,6 +126,13 @@ CHIAKI_EXPORT bool chiaki_stream_connection_video_resolution(ChiakiStreamConnect
  * Returns 0 if no video receiver is active (yet or anymore).
  */
 CHIAKI_EXPORT uint64_t chiaki_stream_connection_video_frames_lost(ChiakiStreamConnection *stream_connection);
+
+/**
+ * Request a new encoder target bitrate while the stream is active (kbps).
+ * Sends Takion bandwidth-hint messages to the streaming server. The server may
+ * ignore the request; check CONNECTIONQUALITY target_bitrate in the overlay/logs.
+ */
+CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_set_target_bitrate_kbps(ChiakiStreamConnection *stream_connection, unsigned int kbps);
 
 #ifdef __cplusplus
 }

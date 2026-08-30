@@ -2,10 +2,21 @@
 
 #include <chiaki/audioreceiver.h>
 #include <chiaki/session.h>
+#include <chiaki/log.h>
+#include "pscloud_audio_reassembler.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static void chiaki_audio_receiver_frame(ChiakiAudioReceiver *audio_receiver, ChiakiSeqNum16 frame_index, bool is_haptics, uint8_t *buf, size_t buf_size);
+
+static void pscloud_audio_reassembler_frame_cb(ChiakiSeqNum16 frame_index, uint8_t *buf, size_t buf_size, bool is_haptics, void *user)
+{
+	ChiakiAudioReceiver *audio_receiver = (ChiakiAudioReceiver *)user;
+	chiaki_audio_receiver_frame(audio_receiver, frame_index, is_haptics, buf, buf_size);
+	if(audio_receiver->packet_stats)
+		chiaki_packet_stats_push_seq(audio_receiver->packet_stats, frame_index);
+}
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_receiver_init(ChiakiAudioReceiver *audio_receiver, ChiakiSession *session, ChiakiPacketStats *packet_stats)
 {
@@ -14,11 +25,35 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_receiver_init(ChiakiAudioReceiver *au
 	audio_receiver->packet_stats = packet_stats;
 
 	audio_receiver->frame_index_prev = 0;
+	audio_receiver->frame_index_prev_valid = false;
 	audio_receiver->frame_index_startup = true;
+	audio_receiver->pscloud_audio_reassembler = NULL;
 
 	ChiakiErrorCode err = chiaki_mutex_init(&audio_receiver->mutex, false);
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
+
+	if(session && session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+	{
+		CHIAKI_LOGI(session->log, "Audio Receiver: PSCLOUD session — initializing unitized audio reassembler");
+		ChiakiPSCLOUDAudioReassembler *reassembler = malloc(sizeof(ChiakiPSCLOUDAudioReassembler));
+		if(!reassembler)
+			return CHIAKI_ERR_MEMORY;
+
+		err = chiaki_pscloud_audio_reassembler_init(reassembler, session->log);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			free(reassembler);
+			return err;
+		}
+
+		audio_receiver->pscloud_audio_reassembler = reassembler;
+	}
+	else if(session)
+	{
+		CHIAKI_LOGI(session->log, "Audio Receiver: standard decoder for %s",
+			chiaki_service_type_string(session->service_type));
+	}
 
 	return CHIAKI_ERR_SUCCESS;
 }
@@ -28,6 +63,15 @@ CHIAKI_EXPORT void chiaki_audio_receiver_fini(ChiakiAudioReceiver *audio_receive
 #ifdef CHIAKI_LIB_ENABLE_OPUS
 	opus_decoder_destroy(audio_receiver->opus_decoder);
 #endif
+
+	if(audio_receiver->pscloud_audio_reassembler)
+	{
+		ChiakiPSCLOUDAudioReassembler *reassembler = (ChiakiPSCLOUDAudioReassembler *)audio_receiver->pscloud_audio_reassembler;
+		chiaki_pscloud_audio_reassembler_fini(reassembler);
+		free(reassembler);
+		audio_receiver->pscloud_audio_reassembler = NULL;
+	}
+
 	chiaki_mutex_fini(&audio_receiver->mutex);
 }
 
@@ -56,7 +100,18 @@ CHIAKI_EXPORT void chiaki_audio_receiver_av_packet(ChiakiAudioReceiver *audio_re
 		return;
 	}
 
-	// this is mostly observation-based, so may not necessarily cover everything yet.
+	bool is_pscloud = audio_receiver->session
+		&& audio_receiver->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD;
+
+	if(is_pscloud && audio_receiver->pscloud_audio_reassembler)
+	{
+		ChiakiPSCLOUDAudioReassembler *reassembler = (ChiakiPSCLOUDAudioReassembler *)audio_receiver->pscloud_audio_reassembler;
+		ChiakiErrorCode err = chiaki_pscloud_audio_reassembler_put_packet(
+			reassembler, packet, pscloud_audio_reassembler_frame_cb, audio_receiver);
+		if(err != CHIAKI_ERR_SUCCESS && err != CHIAKI_ERR_FEC_FAILED)
+			CHIAKI_LOGW(audio_receiver->log, "PSCLOUD audio reassembler error: %s", chiaki_error_string(err));
+		return;
+	}
 
 	uint8_t source_units_count = chiaki_takion_av_packet_audio_source_units_count(packet);
 	uint8_t fec_units_count = chiaki_takion_av_packet_audio_fec_units_count(packet);
@@ -92,10 +147,8 @@ CHIAKI_EXPORT void chiaki_audio_receiver_av_packet(ChiakiAudioReceiver *audio_re
 			frame_index = packet->frame_index + i;
 		else
 		{
-			// fec
 			size_t fec_index = i - source_units_count;
 
-			// first packets will contain the same frame multiple times, ignore those
 			if(audio_receiver->frame_index_startup && packet->frame_index + fec_index < fec_units_count + 1)
 				continue;
 
@@ -113,8 +166,9 @@ static void chiaki_audio_receiver_frame(ChiakiAudioReceiver *audio_receiver, Chi
 {
 	chiaki_mutex_lock(&audio_receiver->mutex);
 
-	if(!chiaki_seq_num_16_gt(frame_index, audio_receiver->frame_index_prev))
+	if(audio_receiver->frame_index_prev_valid && !chiaki_seq_num_16_gt(frame_index, audio_receiver->frame_index_prev))
 		goto beach;
+	audio_receiver->frame_index_prev_valid = true;
 	audio_receiver->frame_index_prev = frame_index;
 
 	if(is_haptics && audio_receiver->session->haptics_sink.frame_cb)

@@ -1399,3 +1399,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_go_home(ChiakiSession *session)
 	err = ctrl_message_go_home(&session->ctrl);
 	return err;
 }
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_target_bitrate_kbps(ChiakiSession *session, unsigned int kbps)
+{
+	return chiaki_stream_connection_set_target_bitrate_kbps(&session->stream_connection, kbps);
+}
