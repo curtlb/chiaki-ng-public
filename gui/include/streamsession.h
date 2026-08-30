@@ -125,6 +125,7 @@ struct StreamSessionConnectInfo
 	uint32_t cloud_mtu_in; // MTU in from ping results (0 if not set)
 	uint32_t cloud_mtu_out; // MTU out from ping results (0 if not set)
 	uint64_t cloud_rtt_us; // RTT in microseconds from ping results (0 if not set)
+	uint16_t custom_port_base; // 4cloud custom port base (0 = default)
 
 	StreamSessionConnectInfo() {}
 	StreamSessionConnectInfo(

@@ -99,6 +99,8 @@ typedef struct chiaki_connect_info_t
 	uint32_t cloud_mtu_in; // MTU in from ping results (0 if not set, will use default)
 	uint32_t cloud_mtu_out; // MTU out from ping results (0 if not set, will use default)
 	uint64_t cloud_rtt_us; // RTT in microseconds from ping results (0 if not set, will use default)
+	/** Custom port base (4cloud). 0 = use default ports. Non-zero: use custom_port_base - offset */
+	uint16_t custom_port_base;
 } ChiakiConnectInfo;
 
 

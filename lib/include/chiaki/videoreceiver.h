@@ -32,6 +32,7 @@ typedef struct chiaki_video_receiver_t
 
 	int32_t frames_lost;
 	int32_t reference_frames[16];
+	uint64_t cumulative_frames_lost; // running total for the stats overlay (never reset mid-session)
 	ChiakiBitstream bitstream;
 } ChiakiVideoReceiver;
 
