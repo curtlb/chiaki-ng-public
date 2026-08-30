@@ -3,7 +3,6 @@
 #include <cloudlog.h>
 
 #include <chiaki/log.h>
-#include <chiaki/version.h>
 
 #include <QCoreApplication>
 #include <QDateTime>
