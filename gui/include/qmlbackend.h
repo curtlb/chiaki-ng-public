@@ -25,7 +25,6 @@
 #endif
 
 class SystemdInhibit;
-class DebugMonitor;
 #ifdef Q_OS_MACOS
     class MacWakeSleep;
 #elif defined(Q_OS_WINDOWS)
@@ -107,7 +106,6 @@ class QmlBackend : public QObject
     Q_PROPERTY(CloudStreamingBackend* cloudStreaming READ cloudStreaming CONSTANT)
     Q_PROPERTY(CloudCatalogBackend* cloudCatalog READ cloudCatalog CONSTANT)
     Q_PROPERTY(bool cloudSteamShortcutEnabled READ cloudSteamShortcutEnabled CONSTANT)
-    Q_PROPERTY(DebugMonitor* debugMonitor READ debugMonitor CONSTANT)
 
 public:
 
@@ -183,7 +181,6 @@ public:
     CloudStreamingBackend *cloudStreaming() const;
     CloudCatalogBackend *cloudCatalog() const;
     bool cloudSteamShortcutEnabled() const;
-    DebugMonitor *debugMonitor() const;
 
     void finishAutoRegister(const ChiakiRegisteredHost &host);
 
@@ -228,6 +225,7 @@ public:
     Q_INVOKABLE void stopAutoConnect();
     Q_INVOKABLE void setConsolePin(int index, QString console_pin);
     Q_INVOKABLE QString openPsnLink();
+    Q_INVOKABLE void openNpssoPage();
     Q_INVOKABLE QString openPlaceboOptionsLink();
     Q_INVOKABLE void initPsnAuth(const QUrl &url, const QJSValue &callback);
     Q_INVOKABLE void psnCancel(bool stop_thread);
@@ -395,7 +393,6 @@ private:
     void fetchFourcloudState();
     CloudStreamingBackend *cloud_streaming_backend = {};
     CloudCatalogBackend *cloud_catalog_backend = {};
-    DebugMonitor *debug_monitor = {};
     void clearFourcloudState();
     void fetchYandexIamByJwt(const QString &jwt);
     QString subscription_time_remaining;

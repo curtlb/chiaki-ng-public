@@ -2561,6 +2561,67 @@ DialogView {
                         visible: Chiaki.settings.psnRefreshToken && Chiaki.settings.psnAuthToken && Chiaki.settings.psnAuthTokenExpiry && Chiaki.settings.psnAccountId
                     }
 
+                    Label {
+                        Layout.topMargin: 30
+                        text: qsTr("Облако (Cloud Play)")
+                        font.bold: true
+                        font.pixelSize: 16
+                    }
+
+                    Label {
+                        text: qsTr("NPSSO токен (для облачного каталога и стриминга)")
+                        wrapMode: Text.Wrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        C.TextField {
+                            id: npssoTokenField
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 500
+                            echoMode: Chiaki.settings.streamerMode ? TextInput.Password : TextInput.Normal
+                            placeholderText: qsTr("Вставьте NPSSO токен")
+                            text: Chiaki.settings.psnNpssoToken
+                            onTextChanged: {
+                                let inputText = text.trim();
+                                let token = inputText;
+                                if (inputText.startsWith("{") && inputText.includes("npsso")) {
+                                    try {
+                                        let json = JSON.parse(inputText);
+                                        if (json.npsso)
+                                            token = json.npsso;
+                                    } catch (e) {}
+                                }
+                                if (token !== Chiaki.settings.psnNpssoToken)
+                                    Chiaki.settings.psnNpssoToken = token;
+                            }
+                        }
+
+                        C.Button {
+                            text: qsTr("Открыть NPSSO")
+                            Material.roundedScale: Material.SmallScale
+                            onClicked: Chiaki.openNpssoPage()
+                        }
+
+                        C.Button {
+                            text: qsTr("Очистить")
+                            Material.roundedScale: Material.SmallScale
+                            onClicked: {
+                                Chiaki.settings.psnNpssoToken = "";
+                                npssoTokenField.text = "";
+                            }
+                        }
+                    }
+
+                    Label {
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
+                        font.pixelSize: 12
+                        text: qsTr("Войдите на playstation.com, откройте страницу NPSSO и скопируйте токен. Токен сохраняется до ручной замены. Лог облака: chiaki_cloud.log рядом с chiaki.exe")
+                    }
+
                     // Yandex Cloud Translation Settings
                     Label {
                         Layout.topMargin: 30

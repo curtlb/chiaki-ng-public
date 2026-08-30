@@ -4,8 +4,7 @@
 #ifdef CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
 #include "steamtools.h"
 #endif
-#include <debugmonitor.h>
-#include <sessionlog.h>
+#include <cloudlog.h>
 #include <chiaki/cloudcatalog.h>
 #include <chiaki/log.h>
 #include <thread>
@@ -208,7 +207,7 @@ QString CloudCatalogBackend::getNpSsoToken()
 
 void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
 {
-    DebugMonitor::post(QStringLiteral("CloudCatalog"), QStringLiteral("Info"), QStringLiteral("fetchUnifiedCatalog requested"));
+    CloudLogMessage("Catalog", "fetchUnifiedCatalog requested");
     // Single source of truth: libchiaki owns the entire fetch/merge/cross-reference/
     // assemble pipeline and every cache file under cacheDirectory. This client does ZERO
     // catalog derivation -- it forwards npsso/locale/cache_dir and hands the returned
@@ -241,20 +240,17 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
     const QByteArray locale =
         (settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-US")).toUtf8();
     const QByteArray cacheDir = cacheDirectory.toUtf8();
-    DebugMonitor::post(QStringLiteral("CloudCatalog"), QStringLiteral("Info"),
-        QStringLiteral("worker start locale=%1 npsso=%2 cache=%3")
-            .arg(QString::fromUtf8(locale))
-            .arg(npsso.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"))
-            .arg(QString::fromUtf8(cacheDir)));
+    {
+        const QString startMsg = QStringLiteral("fetch start locale=%1 npsso=%2")
+            .arg(QString::fromUtf8(locale), npsso.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"));
+        CloudLogMessage("Catalog", startMsg.toUtf8().constData());
+    }
 
     std::thread([self, reqId, gen, npsso, locale, cacheDir]() mutable {
-        const QString log_path = CreateCloudLogFilename();
-        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path,
-                               QStringLiteral("CloudCatalog"));
+        CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, "Catalog");
         ChiakiLog *log = file_log.GetChiakiLog();
-        if(!log_path.isEmpty())
-            CHIAKI_LOGI(log, "[CloudCatalog] unified fetch started (locale=%s, npsso=%s)",
-                locale.constData(), npsso.isEmpty() ? "missing" : "present");
+        CHIAKI_LOGI(log, "unified fetch started (locale=%s, npsso=%s)",
+            locale.constData(), npsso.isEmpty() ? "missing" : "present");
 
         ChiakiCloudCatalogConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -278,7 +274,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
         QCoreApplication *app = QCoreApplication::instance();
         if (!app)
             return; // user quit mid-fetch: the app object is gone, nothing to deliver to
-        QMetaObject::invokeMethod(app, [self, reqId, gen, success, message, json, log_path]() mutable {
+        QMetaObject::invokeMethod(app, [self, reqId, gen, success, message, json]() mutable {
             if (!self)
                 return; // backend destroyed while the worker ran
             const QJSValue cb = self->pending_callbacks.take(reqId);
@@ -297,8 +293,6 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                 chiaki_cloudcatalog_invalidate_cache(staleCacheDir.constData());
                 qInfo() << "[CACHE] Discarding stale unified fetch (generation"
                         << gen << "!=" << self->catalogGeneration << "); refetching";
-                if (!log_path.isEmpty())
-                    qInfo() << "[CloudCatalog] Log file:" << log_path;
                 if (cb.isCallable())
                     self->fetchUnifiedCatalog(cb);
                 for (QJSValue &pcb : parked)
@@ -307,9 +301,9 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                 return;
             }
 
-            if (!log_path.isEmpty())
-                qInfo() << "[CloudCatalog] Fetch finished:" << (success ? "ok" : "failed")
-                        << message << "— log:" << log_path;
+            CloudLogMessage("Catalog", success
+                ? "fetch finished: success"
+                : QString("fetch finished: %1").arg(message).toUtf8().constData());
 
             // Persist the locale the lib actually settled on (region detection now lives
             // entirely in libchiaki: it re-bases the locale on the account's Kamaji-session

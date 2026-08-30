@@ -8,7 +8,6 @@
 #include "psntoken.h"
 #include "systemdinhibit.h"
 #include "crashreporter.h"
-#include "debugmonitor.h"
 #include "chiaki/remote/holepunch.h"
 #ifdef Q_OS_MACOS
 #include "macWakeSleep.h"
@@ -98,54 +97,11 @@ static QMutex chiaki_log_mutex;
 static ChiakiLog *chiaki_log_ctx = nullptr;
 static QtMessageHandler qt_msg_handler = nullptr;
 
-static QString inferDebugProcess(const QString &msg)
-{
-    if(msg.contains(QStringLiteral("[CloudCatalog]"), Qt::CaseInsensitive)
-        || msg.contains(QStringLiteral("[UNIFIED]"), Qt::CaseInsensitive)
-        || msg.contains(QStringLiteral("[CLOUDCATALOG]"), Qt::CaseInsensitive))
-        return QStringLiteral("CloudCatalog");
-    if(msg.contains(QStringLiteral("[CloudSession]"), Qt::CaseInsensitive)
-        || msg.contains(QStringLiteral("Cloud provisioning"), Qt::CaseInsensitive)
-        || msg.contains(QStringLiteral("Cloud streaming"), Qt::CaseInsensitive))
-        return QStringLiteral("CloudSession");
-    if(msg.contains(QStringLiteral("[4cloud"), Qt::CaseInsensitive))
-        return QStringLiteral("4Cloud");
-    if(msg.contains(QStringLiteral("Discovery"), Qt::CaseInsensitive))
-        return QStringLiteral("Discovery");
-    if(msg.contains(QStringLiteral("PSN"), Qt::CaseInsensitive))
-        return QStringLiteral("PSN");
-    if(msg.contains(QStringLiteral("Takion"), Qt::CaseInsensitive)
-        || msg.contains(QStringLiteral("StreamConnection"), Qt::CaseInsensitive)
-        || msg.contains(QStringLiteral("Senkusha"), Qt::CaseInsensitive))
-        return QStringLiteral("Stream");
-    return QStringLiteral("Qt");
-}
-
-static QString qtLevelName(QtMsgType type)
-{
-    switch(type)
-    {
-    case QtDebugMsg:
-        return QStringLiteral("Debug");
-    case QtInfoMsg:
-        return QStringLiteral("Info");
-    case QtWarningMsg:
-        return QStringLiteral("Warning");
-    case QtCriticalMsg:
-    case QtFatalMsg:
-        return QStringLiteral("Error");
-    }
-    return QStringLiteral("Info");
-}
-
 static void msg_handler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
-    DebugMonitor::post(inferDebugProcess(msg), qtLevelName(type), msg);
-
     QMutexLocker lock(&chiaki_log_mutex);
     if (!chiaki_log_ctx) {
-        if (qt_msg_handler)
-            qt_msg_handler(type, context, msg);
+        qt_msg_handler(type, context, msg);
         return;
     }
     ChiakiLogLevel chiaki_level;
@@ -218,7 +174,6 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
 
     const char *uri = "org.streetpea.chiaking";
     qmlRegisterSingletonInstance(uri, 1, 0, "Chiaki", this);
-    qmlRegisterUncreatableType<DebugMonitor>(uri, 1, 0, "DebugMonitor", {});
     qmlRegisterUncreatableType<QmlMainWindow>(uri, 1, 0, "ChiakiWindow", {});
     qmlRegisterUncreatableType<QmlSettings>(uri, 1, 0, "ChiakiSettings", {});
     qmlRegisterUncreatableType<StreamSession>(uri, 1, 0, "ChiakiSession", {});
@@ -254,11 +209,6 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     cloud_streaming_backend = new CloudStreamingBackend(settings, this);
     cloud_catalog_backend = new CloudCatalogBackend(settings, this);
 
-    debug_monitor = DebugMonitor::instance();
-    debug_monitor->setParent(this);
-    debug_monitor->logStartupInfo();
-    DebugMonitor::post(QStringLiteral("System"), QStringLiteral("Info"),
-        QStringLiteral("Debug monitor ready — open via toolbar bug icon or F12"));
     connect(settings_qml, &QmlSettings::cloudStoreLocaleChanged, this, [this]() {
         cloud_catalog_backend->invalidateCache();
     });
@@ -511,11 +461,6 @@ CloudStreamingBackend *QmlBackend::cloudStreaming() const
 CloudCatalogBackend *QmlBackend::cloudCatalog() const
 {
     return cloud_catalog_backend;
-}
-
-DebugMonitor *QmlBackend::debugMonitor() const
-{
-    return debug_monitor;
 }
 
 bool QmlBackend::cloudSteamShortcutEnabled() const
@@ -2726,6 +2671,11 @@ QString QmlBackend::openPsnLink()
         qCWarning(chiakiGui) << "Could not launch browser.";
         return QString(url.toEncoded());
     }
+}
+
+void QmlBackend::openNpssoPage()
+{
+    QDesktopServices::openUrl(QUrl(QStringLiteral("https://ca.account.sony.com/api/v1/ssocookie")));
 }
 
 QString QmlBackend::openPlaceboOptionsLink()

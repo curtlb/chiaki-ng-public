@@ -180,17 +180,6 @@ Pane {
             }
 
             Button {
-                id: debugButton
-                Layout.fillHeight: true
-                Layout.preferredWidth: 100
-                flat: true
-                text: "DBG"
-                focusPolicy: Qt.NoFocus
-                onClicked: root.showDebugMonitorDialog()
-                Material.roundedScale: Material.SmallScale
-            }
-
-            Button {
                 id: settingsButton
                 Layout.fillHeight: true
                 Layout.preferredWidth: 100

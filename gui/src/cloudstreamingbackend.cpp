@@ -3,8 +3,7 @@
 #include "cloudstreamingbackend.h"
 #include "streamsession.h"
 #include "exception.h"
-#include "sessionlog.h"
-#include "debugmonitor.h"
+#include "cloudlog.h"
 #include "chiaki/remote/holepunch.h"
 #include "chiaki/session.h"
 #include "chiaki/cloudsession.h"
@@ -46,9 +45,9 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
 {
     // Get NPSSO token from settings
     QString npssoToken = settings->GetNpssoToken();
-    DebugMonitor::post(QStringLiteral("CloudSession"), QStringLiteral("Info"),
-        QStringLiteral("startCompleteCloudSession service=%1 game=%2 npsso=%3")
-            .arg(serviceType, gameIdentifier, npssoToken.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present")));
+    CloudLogMessage("Session", QString("startCompleteCloudSession service=%1 game=%2 npsso=%3")
+        .arg(serviceType, gameIdentifier, npssoToken.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"))
+        .toUtf8().constData());
 
     if (npssoToken.isEmpty()) {
         qWarning() << "NPSSO token is empty - cloud play may not work";
@@ -164,13 +163,10 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
 
     std::thread([self, reqId, svc, gameId, npsso, storeCountry, storeLang, gameLang,
                  forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat]() mutable {
-        const QString log_path = CreateCloudLogFilename();
-        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path,
-                               QStringLiteral("CloudSession"));
+        CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, "Session");
         ChiakiLog *log = file_log.GetChiakiLog();
-        if(!log_path.isEmpty())
-            CHIAKI_LOGI(log, "[CloudSession] provisioning started (service=%s, game=%s, npsso=%s)",
-                svc.constData(), gameId.constData(), npsso.isEmpty() ? "missing" : "present");
+        CHIAKI_LOGI(log, "provisioning started (service=%s, game=%s, npsso=%s)",
+            svc.constData(), gameId.constData(), npsso.isEmpty() ? "missing" : "present");
 
         ChiakiCloudProvisionConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -213,12 +209,12 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
         if (!app)
             return; // user quit mid-provision: the app object is gone, nothing to deliver to
         QMetaObject::invokeMethod(app, [self, reqId, success, attrPassed, serviceTypeStr, serverIp, serverPort,
-                                         handshakeKey, launchSpec, sessionId, wrap, mtuIn, mtuOut, rttUs, errMsg, dcPings, log_path]() mutable {
+                                         handshakeKey, launchSpec, sessionId, wrap, mtuIn, mtuOut, rttUs, errMsg, dcPings]() mutable {
             if (!self)
                 return; // backend destroyed while the worker ran
-            if (!log_path.isEmpty())
-                qInfo() << "[CloudSession] Provisioning finished:" << (success ? "ok" : "failed")
-                        << (errMsg.isEmpty() ? QString() : errMsg) << "— log:" << log_path;
+            CloudLogMessage("Session", success
+                ? "provisioning finished: success"
+                : QString("provisioning finished: %1").arg(errMsg.isEmpty() ? QStringLiteral("failed") : errMsg).toUtf8().constData());
             const QJSValue callback = self->pending_callbacks.take(reqId);
             // Persist the merged datacenter list so Settings shows the measured RTTs
             // (done whether or not allocation succeeded -- the old code saved during the ping).
