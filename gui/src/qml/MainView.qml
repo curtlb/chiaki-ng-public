@@ -491,6 +491,14 @@ Pane {
         }
         active: mainTabBar.currentIndex === 1
         source: "CloudPlayView.qml"
+        onStatusChanged: {
+            if (status === Loader.Error) {
+                console.error("CloudPlayView failed to load")
+                Chiaki.error(qsTr("Cloud UI Error"), qsTr("Failed to load Cloud tab QML"))
+            } else if (status === Loader.Ready) {
+                console.log("CloudPlayView loaded successfully")
+            }
+        }
         onLoaded: {
             if (item) {
                 item.mainTabBar = mainTabBar
@@ -498,6 +506,18 @@ Pane {
                 item.showConfirmDialogFunc = root.showConfirmDialog
             }
         }
+    }
+
+    Label {
+        visible: mainTabBar.currentIndex === 1 && cloudPlayLoader.status === Loader.Error
+        anchors.centerIn: cloudPlayLoader
+        width: parent.width * 0.8
+        wrapMode: Text.Wrap
+        horizontalAlignment: Text.AlignHCenter
+        color: "#F44336"
+        font.pixelSize: 16
+        text: qsTr("Не удалось загрузить вкладку «Облако». Проверьте, что QRCodeDialog.qml и GameShortcutDialog.qml включены в сборку.")
+        z: 10
     }
 
     RoundButton {

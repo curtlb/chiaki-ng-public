@@ -212,6 +212,7 @@ Pane {
     }
 
     function loadUnifiedCatalog() {
+        console.log("[CloudPlayView] loadUnifiedCatalog()");
         let npssoToken = Chiaki.settings.psnNpssoToken;
         if (!npssoToken || npssoToken.trim().length === 0) {
             authErrorMessage = qsTr("NPSSO token is required for cloud games. Please login and enter a valid NPSSO token. You also need a valid PS Plus subscription.");
