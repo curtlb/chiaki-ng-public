@@ -65,6 +65,8 @@ set(SOURCE_FILES
 	src/macrorecorder.cpp
 	include/sessionlog.h
 	src/sessionlog.cpp
+	include/debugmonitor.h
+	src/debugmonitor.cpp
 	include/settings.h
 	src/settings.cpp
 	include/host.h

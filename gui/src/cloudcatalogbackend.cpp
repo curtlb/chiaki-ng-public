@@ -4,6 +4,7 @@
 #ifdef CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
 #include "steamtools.h"
 #endif
+#include <debugmonitor.h>
 #include <sessionlog.h>
 #include <chiaki/cloudcatalog.h>
 #include <chiaki/log.h>
@@ -207,6 +208,7 @@ QString CloudCatalogBackend::getNpSsoToken()
 
 void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
 {
+    DebugMonitor::post(QStringLiteral("CloudCatalog"), QStringLiteral("Info"), QStringLiteral("fetchUnifiedCatalog requested"));
     // Single source of truth: libchiaki owns the entire fetch/merge/cross-reference/
     // assemble pipeline and every cache file under cacheDirectory. This client does ZERO
     // catalog derivation -- it forwards npsso/locale/cache_dir and hands the returned
@@ -239,10 +241,16 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
     const QByteArray locale =
         (settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-US")).toUtf8();
     const QByteArray cacheDir = cacheDirectory.toUtf8();
+    DebugMonitor::post(QStringLiteral("CloudCatalog"), QStringLiteral("Info"),
+        QStringLiteral("worker start locale=%1 npsso=%2 cache=%3")
+            .arg(QString::fromUtf8(locale))
+            .arg(npsso.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"))
+            .arg(QString::fromUtf8(cacheDir)));
 
     std::thread([self, reqId, gen, npsso, locale, cacheDir]() mutable {
         const QString log_path = CreateCloudLogFilename();
-        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path);
+        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path,
+                               QStringLiteral("CloudCatalog"));
         ChiakiLog *log = file_log.GetChiakiLog();
         if(!log_path.isEmpty())
             CHIAKI_LOGI(log, "[CloudCatalog] unified fetch started (locale=%s, npsso=%s)",

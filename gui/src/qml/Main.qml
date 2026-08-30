@@ -160,6 +160,10 @@ Item {
         stack.push(settingsDialogComponent);
     }
 
+    function showDebugMonitorDialog() {
+        stack.push(debugMonitorDialogComponent);
+    }
+
     function showDisplaySettingsDialog() {
         stack.push(displaySettingsDialogComponent);
     }
@@ -208,6 +212,11 @@ Item {
 
     function showControllerMappingDialog() {
         stack.push(controllerMappingDialogComponent)
+    }
+
+    Shortcut {
+        sequence: "F12"
+        onActivated: root.showDebugMonitorDialog()
     }
 
     Component.onCompleted: {
@@ -490,6 +499,11 @@ Item {
     Component {
         id: registDialogComponent
         RegistDialog { }
+    }
+
+    Component {
+        id: debugMonitorDialogComponent
+        DebugMonitorDialog { }
     }
 
     Component {

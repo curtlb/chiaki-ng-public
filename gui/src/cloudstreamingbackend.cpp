@@ -4,6 +4,7 @@
 #include "streamsession.h"
 #include "exception.h"
 #include "sessionlog.h"
+#include "debugmonitor.h"
 #include "chiaki/remote/holepunch.h"
 #include "chiaki/session.h"
 #include "chiaki/cloudsession.h"
@@ -43,12 +44,12 @@ CloudStreamingBackend::CloudStreamingBackend(Settings *settings, QObject *parent
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback)
 {
-    qInfo() << "=== Starting Complete Cloud Streaming Session ===";
-    qInfo() << "Service Type:" << serviceType;
-    qInfo() << "Game Identifier:" << gameIdentifier;
-
     // Get NPSSO token from settings
     QString npssoToken = settings->GetNpssoToken();
+    DebugMonitor::post(QStringLiteral("CloudSession"), QStringLiteral("Info"),
+        QStringLiteral("startCompleteCloudSession service=%1 game=%2 npsso=%3")
+            .arg(serviceType, gameIdentifier, npssoToken.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present")));
+
     if (npssoToken.isEmpty()) {
         qWarning() << "NPSSO token is empty - cloud play may not work";
     } else {
@@ -164,7 +165,8 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     std::thread([self, reqId, svc, gameId, npsso, storeCountry, storeLang, gameLang,
                  forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat]() mutable {
         const QString log_path = CreateCloudLogFilename();
-        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path);
+        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path,
+                               QStringLiteral("CloudSession"));
         ChiakiLog *log = file_log.GetChiakiLog();
         if(!log_path.isEmpty())
             CHIAKI_LOGI(log, "[CloudSession] provisioning started (service=%s, game=%s, npsso=%s)",

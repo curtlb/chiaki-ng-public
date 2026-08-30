@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
 
 #include <sessionlog.h>
+#include <debugmonitor.h>
 #include <chiaki/log.h>
 
 #include <QStandardPaths>
@@ -50,6 +51,7 @@ SessionLog::~SessionLog()
 void SessionLog::Log(ChiakiLogLevel level, const char *msg)
 {
 	chiaki_log_cb_print(level, msg, nullptr);
+	DebugMonitor::postChiaki(QStringLiteral("Stream"), level, msg);
 
 	if(file)
 	{
@@ -156,8 +158,9 @@ static void FileLogCb(ChiakiLogLevel level, const char *msg, void *user)
 	ChiakiFileLogPrivate::Log(log, level, msg);
 }
 
-ChiakiFileLog::ChiakiFileLog(uint32_t level_mask, const QString &filename)
+ChiakiFileLog::ChiakiFileLog(uint32_t level_mask, const QString &filename, const QString &process)
 	: file(nullptr)
+	, process_name(process.isEmpty() ? QStringLiteral("System") : process)
 {
 	chiaki_log_init(&log, level_mask, FileLogCb, this);
 
@@ -193,6 +196,7 @@ QString ChiakiFileLog::Filename() const
 void ChiakiFileLog::Log(ChiakiLogLevel level, const char *msg)
 {
 	chiaki_log_cb_print(level, msg, nullptr);
+	DebugMonitor::postChiaki(process_name, level, msg);
 
 	if(!file)
 		return;

@@ -44,11 +44,12 @@ class ChiakiFileLog
 		ChiakiLog log;
 		QFile *file;
 		QMutex file_mutex;
+		QString process_name;
 
 		void Log(ChiakiLogLevel level, const char *msg);
 
 	public:
-		ChiakiFileLog(uint32_t level_mask, const QString &filename);
+		ChiakiFileLog(uint32_t level_mask, const QString &filename, const QString &process = QStringLiteral("System"));
 		~ChiakiFileLog();
 
 		ChiakiLog *GetChiakiLog()	{ return &log; }

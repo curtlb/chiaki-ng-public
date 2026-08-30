@@ -180,6 +180,19 @@ Pane {
             }
 
             Button {
+                id: debugButton
+                Layout.fillHeight: true
+                Layout.preferredWidth: 100
+                flat: true
+                text: "DBG"
+                focusPolicy: Qt.NoFocus
+                onClicked: root.showDebugMonitorDialog()
+                Material.roundedScale: Material.SmallScale
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Debug monitor (F12)")
+            }
+
+            Button {
                 id: settingsButton
                 Layout.fillHeight: true
                 Layout.preferredWidth: 100
