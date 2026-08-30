@@ -34,16 +34,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          
-      # Кэш MSYS2 установленных пакетов
-      - name: Cache MSYS2 packages
-        uses: actions/cache@v4
-        with:
-          path: D:\a\_temp\msys64
-          key: msys2-packages-${{ runner.os }}-${{ hashFiles('.github/workflows/build-msys2-fast.yml') }}
-          restore-keys: |
-            msys2-packages-${{ runner.os }}-
-            
+
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -210,7 +201,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0  # Уже заархивировано
-          
+
       - name: Build summary
         run: |
           echo "## ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
