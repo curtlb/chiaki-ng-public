@@ -218,6 +218,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
 
     const char *uri = "org.streetpea.chiaking";
     qmlRegisterSingletonInstance(uri, 1, 0, "Chiaki", this);
+    qmlRegisterUncreatableType<DebugMonitor>(uri, 1, 0, "DebugMonitor", {});
     qmlRegisterUncreatableType<QmlMainWindow>(uri, 1, 0, "ChiakiWindow", {});
     qmlRegisterUncreatableType<QmlSettings>(uri, 1, 0, "ChiakiSettings", {});
     qmlRegisterUncreatableType<StreamSession>(uri, 1, 0, "ChiakiSession", {});
@@ -254,6 +255,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     cloud_catalog_backend = new CloudCatalogBackend(settings, this);
 
     debug_monitor = DebugMonitor::instance();
+    debug_monitor->setParent(this);
     debug_monitor->logStartupInfo();
     DebugMonitor::post(QStringLiteral("System"), QStringLiteral("Info"),
         QStringLiteral("Debug monitor ready — open via toolbar bug icon or F12"));

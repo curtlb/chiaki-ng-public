@@ -22,6 +22,9 @@ public:
 	static void post(const QString &process, const QString &level, const QString &message);
 	static void postChiaki(const QString &process, ChiakiLogLevel level, const char *message);
 
+public slots:
+	void appendEntry(const QString &process, const QString &level, const QString &message);
+
 	QVariantList entries() const;
 	QStringList processes() const;
 	int entryCount() const;

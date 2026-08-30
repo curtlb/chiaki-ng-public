@@ -8,10 +8,14 @@
 #include <QStandardPaths>
 #include <QGuiApplication>
 #include <QClipboard>
+#include <QThread>
+#include <QCoreApplication>
 
 DebugMonitor *DebugMonitor::instance()
 {
-	static DebugMonitor *inst = new DebugMonitor();
+	static DebugMonitor *inst = nullptr;
+	if(!inst)
+		inst = new DebugMonitor(qApp);
 	return inst;
 }
 
@@ -22,8 +26,19 @@ DebugMonitor::DebugMonitor(QObject *parent)
 
 void DebugMonitor::post(const QString &process, const QString &level, const QString &message)
 {
-	if(DebugMonitor *mon = instance())
+	DebugMonitor *mon = instance();
+	if(!mon)
+		return;
+	if(QThread::currentThread() == mon->thread())
 		mon->append(process, level, message);
+	else
+		QMetaObject::invokeMethod(mon, "appendEntry", Qt::QueuedConnection,
+			Q_ARG(QString, process), Q_ARG(QString, level), Q_ARG(QString, message));
+}
+
+void DebugMonitor::appendEntry(const QString &process, const QString &level, const QString &message)
+{
+	append(process, level, message);
 }
 
 void DebugMonitor::postChiaki(const QString &process, ChiakiLogLevel level, const char *message)

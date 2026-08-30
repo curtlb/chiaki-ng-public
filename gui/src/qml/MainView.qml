@@ -188,8 +188,6 @@ Pane {
                 focusPolicy: Qt.NoFocus
                 onClicked: root.showDebugMonitorDialog()
                 Material.roundedScale: Material.SmallScale
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Debug monitor (F12)")
             }
 
             Button {
