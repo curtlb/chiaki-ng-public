@@ -393,9 +393,10 @@ Item {
             root.showPSNTokenDialog(true);
         }
 
-        function onError(title, text) {
+        function onError(title, text, durationMs) {
             errorTitleLabel.text = title;
             errorTextLabel.text = text;
+            errorHideTimer.interval = durationMs !== undefined ? durationMs : 2000;
             errorHideTimer.start();
         }
 

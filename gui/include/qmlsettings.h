@@ -77,6 +77,13 @@ class QmlSettings : public QObject
     Q_PROPERTY(QString psnAuthToken READ psnAuthToken WRITE setPsnAuthToken NOTIFY psnAuthTokenChanged)
     Q_PROPERTY(QString psnAuthTokenExpiry READ psnAuthTokenExpiry WRITE setPsnAuthTokenExpiry NOTIFY psnAuthTokenExpiryChanged)
     Q_PROPERTY(QString psnAccountId READ psnAccountId WRITE setPsnAccountId NOTIFY psnAccountIdChanged)
+    Q_PROPERTY(QString psnNpssoToken READ psnNpssoToken WRITE setPsnNpssoToken NOTIFY psnNpssoTokenChanged)
+    Q_PROPERTY(QString cloudStoreLocale READ cloudStoreLocale WRITE setCloudStoreLocale NOTIFY cloudStoreLocaleChanged)
+    Q_PROPERTY(QString cloudResolvedStoreCountry READ cloudResolvedStoreCountry WRITE setCloudResolvedStoreCountry NOTIFY cloudResolvedStoreCountryChanged)
+    Q_PROPERTY(bool cloudCatalogNativeMode READ cloudCatalogNativeMode WRITE setCloudCatalogNativeMode NOTIFY cloudCatalogNativeModeChanged)
+    Q_PROPERTY(int cloudSortState READ cloudSortState WRITE setCloudSortState NOTIFY cloudSortStateChanged)
+    Q_PROPERTY(QString cloudTagFilters READ cloudTagFilters WRITE setCloudTagFilters NOTIFY cloudTagFiltersChanged)
+    Q_PROPERTY(QString cloudFavorites READ cloudFavorites WRITE setCloudFavorites NOTIFY cloudFavoritesChanged)
     Q_PROPERTY(QString jwtToken READ jwtToken WRITE setJwtToken NOTIFY jwtTokenChanged)
     Q_PROPERTY(bool mouseTouchEnabled READ mouseTouchEnabled WRITE setMouseTouchEnabled NOTIFY mouseTouchEnabledChanged)
     Q_PROPERTY(bool keyboardEnabled READ keyboardEnabled WRITE setKeyboardEnabled NOTIFY keyboardEnabledChanged)
@@ -501,6 +508,27 @@ public:
     QString psnAccountId() const;
     void setPsnAccountId(const QString &account_id);
 
+    QString psnNpssoToken() const;
+    void setPsnNpssoToken(const QString &npsso_token);
+
+    QString cloudStoreLocale() const;
+    void setCloudStoreLocale(const QString &locale);
+
+    QString cloudResolvedStoreCountry() const;
+    void setCloudResolvedStoreCountry(const QString &country);
+
+    bool cloudCatalogNativeMode() const;
+    void setCloudCatalogNativeMode(bool native_mode);
+
+    int cloudSortState() const;
+    void setCloudSortState(int sortState);
+
+    QString cloudTagFilters() const;
+    void setCloudTagFilters(const QString &filtersJson);
+
+    QString cloudFavorites() const;
+    void setCloudFavorites(const QString &favorites);
+
     QString jwtToken() const;
     void setJwtToken(const QString &token);
 
@@ -634,6 +662,13 @@ signals:
     void psnRefreshTokenChanged();
     void psnAuthTokenExpiryChanged();
     void psnAccountIdChanged();
+    void psnNpssoTokenChanged();
+    void cloudStoreLocaleChanged();
+    void cloudResolvedStoreCountryChanged();
+    void cloudCatalogNativeModeChanged();
+    void cloudSortStateChanged();
+    void cloudTagFiltersChanged();
+    void cloudFavoritesChanged();
     void jwtTokenChanged();
     void yandexAuthSuccess(const QString &iamToken, const QString &folderId);
     void yandexAuthError(const QString &errorMessage);

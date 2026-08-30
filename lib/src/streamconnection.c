@@ -8,6 +8,7 @@
 #include <chiaki/base64.h>
 #include <chiaki/audio.h>
 #include <chiaki/video.h>
+#include <chiaki/time.h>
 
 #include <string.h>
 #include <inttypes.h>
@@ -29,11 +30,20 @@
 
 
 #define STREAM_CONNECTION_PORT 9296
-#define STREAM_CONNECTION_PORT_OFFSET_FROM_BASE 2000
 
 #define EXPECT_TIMEOUT_MS 5000
 
 #define HEARTBEAT_INTERVAL_MS 1000
+
+// Smoothing factor for the live stats-overlay metrics (RTT and FPS). The server
+// reports CONNECTIONQUALITY roughly once per second, and the raw per-second RTT
+// sample is very jittery (seen swinging ~10..256 ms second-to-second), so the
+// HUD would flash alarming one-off spikes. We feed each new sample through an
+// exponential moving average: value = a*sample + (1-a)*value. a=0.3 keeps a
+// memory of ~6 samples (~6 s at 1 Hz) while still reacting to real degradation.
+// Cost is a single multiply-add per (periodic) message, so it adds nothing per
+// frame and nothing at all when the overlay is toggled off.
+#define STREAM_STATS_EMA_ALPHA 0.3
 
 
 typedef enum {
@@ -44,6 +54,16 @@ typedef enum {
 } StreamConnectionState;
 
 void chiaki_session_send_event(ChiakiSession *session, ChiakiEvent *event);
+
+// Bridges a feedback-sender PS-chord fire to a client event. Invoked on the
+// feedback-sender thread with its state_mutex released; @a user is the session.
+static void stream_connection_ps_chord_fired(void *user)
+{
+	ChiakiSession *session = user;
+	ChiakiEvent event = { 0 };
+	event.type = CHIAKI_EVENT_PS_CHORD;
+	chiaki_session_send_event(session, &event);
+}
 
 static void stream_connection_takion_cb(ChiakiTakionEvent *event, void *user);
 static void stream_connection_takion_data(ChiakiStreamConnection *stream_connection, ChiakiTakionMessageDataType data_type, uint8_t *buf, size_t buf_size);
@@ -67,6 +87,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnecti
 	stream_connection->session = session;
 	stream_connection->log = session->log;
 	stream_connection->packet_loss_max = packet_loss_max;
+
+	stream_connection->measured_bitrate = 0.0;
+	stream_connection->measured_fps = 0.0;
+	stream_connection->measured_rtt_ms = 0.0;
+	stream_connection->measured_loss = 0;
+	stream_connection->connection_quality_last_us = 0;
 
 	stream_connection->ecdh_secret = NULL;
 	stream_connection->gkcrypt_remote = NULL;
@@ -159,16 +185,35 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 		if(!takion_info.sa)
 			return CHIAKI_ERR_MEMORY;
 		memcpy(takion_info.sa, session->connect_info.host_addrinfo_selected->ai_addr, takion_info.sa_len);
-		uint16_t stream_port = session->connect_info.custom_port_base
-			? (session->connect_info.custom_port_base - STREAM_CONNECTION_PORT_OFFSET_FROM_BASE) : STREAM_CONNECTION_PORT;
-		err = set_port(takion_info.sa, htons(stream_port));
+		// Cloud streaming: use API-provided port, Remote play: use default port
+		const bool is_cloud = chiaki_service_type_is_cloud(session->service_type);
+		uint16_t port = (is_cloud && session->cloud_port > 0) ? session->cloud_port : STREAM_CONNECTION_PORT;
+		CHIAKI_LOGI(session->log, "Setting Takion connection port=%u (service_type=%s, cloud_port=%u)", 
+			port, chiaki_service_type_string(session->service_type), session->cloud_port);
+		err = set_port(takion_info.sa, htons(port));
 		assert(err == CHIAKI_ERR_SUCCESS);
 	}
 	takion_info.ip_dontfrag = session->dontfrag;
 
-	takion_info.enable_crypt = true;
+	// Cloud Play and Remote Play should behave identically (except PSN wrapper)
+	takion_info.enable_crypt = true; // Both use encryption
 	takion_info.enable_dualsense = session->connect_info.enable_dualsense;
-	takion_info.protocol_version = chiaki_target_is_ps5(session->target) ? 12 : 9;
+	// Cloud streaming: PSNOW uses v9, PSCLOUD uses v12.
+	// Remote play: PS5 stream Takion uses v12, PS4 uses v9 (matches chiaki-ng streamconnection).
+	if(chiaki_service_type_is_cloud(session->service_type))
+		takion_info.protocol_version = (session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD) ? 12 : 9;
+	else
+		takion_info.protocol_version = chiaki_target_is_ps5(session->target) ? 12 : 9;
+	takion_info.service_type = session->service_type;
+	takion_info.psn_wrapper_type = chiaki_service_type_is_cloud(session->service_type) ? session->cloud_psn_wrapper_type : 0;
+	takion_info.is_ping_handshake = false; // This is normal streaming, not a ping handshake
+	
+	if(chiaki_service_type_is_cloud(session->service_type))
+		CHIAKI_LOGI(session->log, "Cloud Play PSN wrapper type: 0x%02x (from private IP last octet)", session->cloud_psn_wrapper_type);
+	
+	CHIAKI_LOGI(session->log, "Takion config: enable_crypt=%d, protocol_version=%u, protocol=%s",
+		takion_info.enable_crypt, takion_info.protocol_version,
+		chiaki_service_type_is_cloud(session->service_type) ? "Cloud Play" : "Remote Play");
 
 	takion_info.cb = stream_connection_takion_cb;
 	takion_info.cb_user = stream_connection;
@@ -300,6 +345,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 		goto disconnect;
 	}
 	stream_connection->feedback_sender_active = true;
+	chiaki_feedback_sender_set_ps_chord_fired_cb(&stream_connection->feedback_sender, stream_connection_ps_chord_fired, session);
+	chiaki_feedback_sender_set_ps_chord(&stream_connection->feedback_sender, session->ps_chord_enabled, session->ps_chord_hold_ms);
 	chiaki_feedback_sender_set_controller_state(&stream_connection->feedback_sender, &session->controller_state);
 	chiaki_mutex_unlock(&stream_connection->feedback_sender_mutex);
 
@@ -395,6 +442,34 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_stop(ChiakiStreamConnecti
 	ChiakiErrorCode unlock_err = chiaki_mutex_unlock(&stream_connection->state_mutex);
 	err = chiaki_cond_signal(&stream_connection->state_cond);
 	return err == CHIAKI_ERR_SUCCESS ? unlock_err : err;
+}
+
+CHIAKI_EXPORT bool chiaki_stream_connection_video_resolution(ChiakiStreamConnection *stream_connection,
+		unsigned int *width, unsigned int *height)
+{
+	bool ok = false;
+	chiaki_mutex_lock(&stream_connection->state_mutex);
+	ChiakiVideoReceiver *vr = stream_connection->video_receiver;
+	if(vr)
+	{
+		int pc = vr->profile_cur; // snapshot: written by the takion thread on adaptive switch
+		if(pc >= 0 && (size_t)pc < vr->profiles_count)
+		{
+			*width = vr->profiles[pc].width;
+			*height = vr->profiles[pc].height;
+			ok = true;
+		}
+	}
+	chiaki_mutex_unlock(&stream_connection->state_mutex);
+	return ok;
+}
+
+CHIAKI_EXPORT uint64_t chiaki_stream_connection_video_frames_lost(ChiakiStreamConnection *stream_connection)
+{
+	chiaki_mutex_lock(&stream_connection->state_mutex);
+	uint64_t v = stream_connection->video_receiver ? stream_connection->video_receiver->cumulative_frames_lost : 0;
+	chiaki_mutex_unlock(&stream_connection->state_mutex);
+	return v;
 }
 
 static void stream_connection_takion_cb(ChiakiTakionEvent *event, void *user)
@@ -562,6 +637,7 @@ static void stream_connection_takion_data_pad_info(ChiakiStreamConnection *strea
 				led_changed = true;
 				memcpy(stream_connection->led_state, buf + 9, 3);
 			}
+			break;
 		}
 		case 0x11:
 		{
@@ -705,6 +781,40 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
 			 q.disable_upstream_audio, q.rtt, q.loss);
 		stream_connection->measured_bitrate = chiaki_stream_stats_bitrate(&stream_connection->video_receiver->frame_processor.stream_stats, stream_connection->session->connect_info.video_profile.max_fps) / 1000000.0;
 		CHIAKI_LOGV(stream_connection->log, "StreamConnection measured bitrate: %.4f MBit/s", stream_connection->measured_bitrate);
+
+		// Real FPS over wall-clock since the previous CONNECTIONQUALITY message.
+		// frames is the count accumulated since the last reset (i.e. over this same
+		// window), so frames / elapsed_seconds is the actual delivered framerate.
+		// The instantaneous value is smoothed with the same EMA as RTT below so the
+		// overlay does not flicker. Cost is a single subtraction/divide/multiply-add
+		// per (periodic) message, so the stats overlay adds nothing per-frame.
+		{
+			uint64_t now_us = chiaki_time_now_monotonic_us();
+			uint64_t frames = stream_connection->video_receiver->frame_processor.stream_stats.frames;
+			uint64_t last_us = stream_connection->connection_quality_last_us;
+			if(last_us != 0 && now_us > last_us)
+			{
+				double elapsed_s = (double)(now_us - last_us) / 1000000.0;
+				if(elapsed_s > 0.0)
+				{
+					double fps_sample = (double)frames / elapsed_s;
+					stream_connection->measured_fps = stream_connection->measured_fps > 0.0
+						? STREAM_STATS_EMA_ALPHA * fps_sample + (1.0 - STREAM_STATS_EMA_ALPHA) * stream_connection->measured_fps
+						: fps_sample;
+				}
+			}
+			stream_connection->connection_quality_last_us = now_us;
+		}
+
+		// Live RTT/loss reported by the server. The protobuf rtt is already in
+		// milliseconds. The raw per-second sample is very jittery, so smooth it
+		// with an EMA (seeding directly on the first non-zero reading) for a stable
+		// overlay value. measured_loss is the server's cumulative lost-packet count.
+		stream_connection->measured_rtt_ms = (stream_connection->measured_rtt_ms > 0.0 && q.rtt > 0.0)
+			? STREAM_STATS_EMA_ALPHA * q.rtt + (1.0 - STREAM_STATS_EMA_ALPHA) * stream_connection->measured_rtt_ms
+			: (q.rtt > 0.0 ? q.rtt : stream_connection->measured_rtt_ms);
+		stream_connection->measured_loss = q.loss;
+
 		chiaki_stream_stats_reset(&stream_connection->video_receiver->frame_processor.stream_stats);
 		break;
 	}
@@ -791,11 +901,14 @@ static void stream_connection_takion_data_expect_bang(ChiakiStreamConnection *st
 		return;
 	}
 
-	CHIAKI_LOGI(stream_connection->log, "BANG received");
+	CHIAKI_LOGI(stream_connection->log, "BANG received: server_version=%u, token=%u, encrypted_key_accepted=%d, version_accepted=%d",
+		msg.bang_payload.server_version, msg.bang_payload.token,
+		msg.bang_payload.encrypted_key_accepted, msg.bang_payload.version_accepted);
 
 	if(!msg.bang_payload.version_accepted)
 	{
-		CHIAKI_LOGE(stream_connection->log, "StreamConnection bang remote didn't accept version");
+		CHIAKI_LOGE(stream_connection->log, "StreamConnection bang remote didn't accept version (sent client_version=%u, server reports server_version=%u)",
+			stream_connection->takion.version, msg.bang_payload.server_version);
 		goto error;
 	}
 
@@ -899,6 +1012,15 @@ static bool pb_decode_resolution(pb_istream_t *stream, const pb_field_t *field, 
 	profile->height = resolution.height;
 	profile->header_sz = header_buf.size;
 	profile->header = header_buf_padded;
+	
+	// Log the full profile header for Cloud Play debugging
+	if(chiaki_service_type_is_cloud(ctx->stream_connection->session->service_type))
+	{
+		CHIAKI_LOGI(ctx->stream_connection->session->log, "Cloud Play profile %zu (%ux%u) header (%zu bytes):", 
+			ctx->video_profiles_count - 1, profile->width, profile->height, profile->header_sz);
+		chiaki_log_hexdump(ctx->stream_connection->session->log, CHIAKI_LOG_INFO, profile->header, profile->header_sz);
+	}
+	
 	return true;
 }
 
@@ -997,50 +1119,67 @@ static bool chiaki_pb_encode_zero_encrypted_key(pb_ostream_t *stream, const pb_f
 static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream_connection)
 {
 	ChiakiSession *session = stream_connection->session;
+	ChiakiErrorCode err;
+	const char *launch_spec_b64_ptr;
 
+	// Cloud streaming: use API-provided launch spec directly
+	if(chiaki_service_type_is_cloud(session->service_type))
+	{
+		if(!session->cloud_launch_spec)
+			return CHIAKI_ERR_INVALID_DATA;
+		
+		// Use API-provided launch spec as-is (full compound format)
+		launch_spec_b64_ptr = session->cloud_launch_spec;
+	}
+	// Declare launch spec buffers at function scope so they stay alive through pb_encode
 	ChiakiLaunchSpec launch_spec;
-	launch_spec.target = session->target;
-	launch_spec.mtu = session->mtu_in;
-	launch_spec.rtt = session->rtt_us / 1000;
-	launch_spec.handshake_key = session->handshake_key;
-
-	launch_spec.width = session->connect_info.video_profile.width;
-	launch_spec.height = session->connect_info.video_profile.height;
-	launch_spec.max_fps = session->connect_info.video_profile.max_fps;
-	launch_spec.codec = session->connect_info.video_profile.codec;
-	launch_spec.bw_kbps_sent = session->connect_info.video_profile.bitrate;
-
 	union
 	{
 		char json[LAUNCH_SPEC_JSON_BUF_SIZE];
 		char b64[LAUNCH_SPEC_JSON_BUF_SIZE * 2];
 	} launch_spec_buf;
-	int launch_spec_json_size = chiaki_launchspec_format(launch_spec_buf.json, sizeof(launch_spec_buf.json), &launch_spec);
-	if(launch_spec_json_size < 0)
-	{
-		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to format LaunchSpec json");
-		return CHIAKI_ERR_UNKNOWN;
-	}
-	launch_spec_json_size += 1; // we also want the trailing 0
 
-	CHIAKI_LOGV(stream_connection->log, "LaunchSpec: %s", launch_spec_buf.json);
-
-	uint8_t launch_spec_json_enc[LAUNCH_SPEC_JSON_BUF_SIZE];
-	memset(launch_spec_json_enc, 0, (size_t)launch_spec_json_size);
-	ChiakiErrorCode err = chiaki_rpcrypt_encrypt(&session->rpcrypt, 0, launch_spec_json_enc, launch_spec_json_enc,
-			(size_t)launch_spec_json_size);
-	if(err != CHIAKI_ERR_SUCCESS)
+	if(!chiaki_service_type_is_cloud(session->service_type))
 	{
-		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to encrypt LaunchSpec");
-		return err;
-	}
+		// Remote Play: generate and encrypt launch spec
+		launch_spec.target = session->target;
+		launch_spec.mtu = session->mtu_in;
+		launch_spec.rtt = session->rtt_us / 1000;
+		launch_spec.handshake_key = session->handshake_key;
+		launch_spec.width = session->connect_info.video_profile.width;
+		launch_spec.height = session->connect_info.video_profile.height;
+		launch_spec.max_fps = session->connect_info.video_profile.max_fps;
+		launch_spec.codec = session->connect_info.video_profile.codec;
+		launch_spec.bw_kbps_sent = session->connect_info.video_profile.bitrate;
 
-	xor_bytes(launch_spec_json_enc, (uint8_t *)launch_spec_buf.json, (size_t)launch_spec_json_size);
-	err = chiaki_base64_encode(launch_spec_json_enc, (size_t)launch_spec_json_size, launch_spec_buf.b64, sizeof(launch_spec_buf.b64));
-	if(err != CHIAKI_ERR_SUCCESS)
-	{
-		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to encode LaunchSpec as base64");
-		return err;
+		int launch_spec_json_size = chiaki_launchspec_format(launch_spec_buf.json, sizeof(launch_spec_buf.json), &launch_spec);
+		if(launch_spec_json_size < 0)
+		{
+			CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to format LaunchSpec json");
+			return CHIAKI_ERR_UNKNOWN;
+		}
+		launch_spec_json_size += 1;
+
+		CHIAKI_LOGV(stream_connection->log, "LaunchSpec: %s", launch_spec_buf.json);
+		uint8_t launch_spec_json_enc[LAUNCH_SPEC_JSON_BUF_SIZE];
+		memset(launch_spec_json_enc, 0, (size_t)launch_spec_json_size);
+		err = chiaki_rpcrypt_encrypt(&session->rpcrypt, 0, launch_spec_json_enc, launch_spec_json_enc,
+				(size_t)launch_spec_json_size);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to encrypt LaunchSpec");
+			return err;
+		}
+
+		xor_bytes(launch_spec_json_enc, (uint8_t *)launch_spec_buf.json, (size_t)launch_spec_json_size);
+
+		err = chiaki_base64_encode(launch_spec_json_enc, (size_t)launch_spec_json_size, launch_spec_buf.b64, sizeof(launch_spec_buf.b64));
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to encode LaunchSpec as base64");
+			return err;
+		}
+		launch_spec_b64_ptr = launch_spec_buf.b64;
 	}
 
 	uint8_t ecdh_pub_key[128];
@@ -1056,7 +1195,7 @@ static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream
 		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to get ECDH key and sig");
 		return err;
 	}
-
+	
 	tkproto_TakionMessage msg;
 	memset(&msg, 0, sizeof(msg));
 
@@ -1065,7 +1204,7 @@ static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream
 	msg.big_payload.client_version = stream_connection->takion.version;
 	msg.big_payload.session_key.arg = session->session_id;
 	msg.big_payload.session_key.funcs.encode = chiaki_pb_encode_string;
-	msg.big_payload.launch_spec.arg = launch_spec_buf.b64;
+	msg.big_payload.launch_spec.arg = launch_spec_b64_ptr;
 	msg.big_payload.launch_spec.funcs.encode = chiaki_pb_encode_string;
 	msg.big_payload.encrypted_key.funcs.encode = chiaki_pb_encode_zero_encrypted_key;
 	msg.big_payload.ecdh_pub_key.arg = &ecdh_pub_key_buf;
@@ -1073,8 +1212,20 @@ static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream
 	msg.big_payload.ecdh_sig.arg = &ecdh_sig_buf;
 	msg.big_payload.ecdh_sig.funcs.encode = chiaki_pb_encode_buf;
 
-	uint8_t buf[2048];
+	// Cloud play needs larger buffer for API-provided launch spec (~5000+ bytes)
+	// Increased to 32768 to handle very large launch specs with protobuf overhead
+	uint8_t buf[32768];
 	size_t buf_size;
+
+	// Validate cloud launch spec is not empty
+	if(chiaki_service_type_is_cloud(session->service_type))
+	{
+		if(strlen(launch_spec_b64_ptr) == 0)
+		{
+			CHIAKI_LOGE(stream_connection->log, "StreamConnection cloud launch spec is empty");
+			return CHIAKI_ERR_INVALID_DATA;
+		}
+	}
 
 	pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
 	bool pbr = pb_encode(&stream, tkproto_TakionMessage_fields, &msg);
@@ -1086,21 +1237,25 @@ static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream
 
 	int32_t total_size = stream.bytes_written;
 	uint32_t mtu = (session->mtu_in < session->mtu_out) ? session->mtu_in : session->mtu_out;
-	// Take into account overhead of network
-	mtu -= 50;
+	// Cloud play: 28 bytes overhead, 30/29 chunk overhead (PSN wrapper adds 4 bytes)
+	// Remote play: 50 bytes overhead, 26/25 chunk overhead
+	uint32_t net_overhead = chiaki_service_type_is_cloud(session->service_type) ? 28 : 50;
+	uint32_t first_chunk_overhead = chiaki_service_type_is_cloud(session->service_type) ? 30 : 26;
+	uint32_t cont_chunk_overhead = chiaki_service_type_is_cloud(session->service_type) ? 29 : 25;
+	mtu -= net_overhead;
 	uint32_t buf_pos = 0;
 	bool first = true;
-	while((mtu < total_size + 26) || (mtu < total_size + 25 && !first))
+	while((mtu < total_size + first_chunk_overhead) || (mtu < total_size + cont_chunk_overhead && !first))
 	{
 		if(first)
 		{
-			buf_size = mtu - 26;
+			buf_size = mtu - first_chunk_overhead;
 			err = chiaki_takion_send_message_data(&stream_connection->takion, 0, 1, buf + buf_pos, buf_size, NULL);
 			first = false;
 		}
 		else
 		{
-			buf_size = mtu - 25;
+			buf_size = mtu - cont_chunk_overhead;
 			err = chiaki_takion_send_message_data_cont(&stream_connection->takion, 0, 1, buf + buf_pos, buf_size, NULL);
 		}
 		buf_pos += buf_size;
@@ -1235,11 +1390,22 @@ static ChiakiErrorCode stream_connection_send_disconnect(ChiakiStreamConnection 
 static void stream_connection_takion_av(ChiakiStreamConnection *stream_connection, ChiakiTakionAVPacket *packet)
 {
 	chiaki_gkcrypt_decrypt(stream_connection->gkcrypt_remote, packet->key_pos + CHIAKI_GKCRYPT_BLOCK_SIZE, packet->data, packet->data_size);
+	
+	// Normalize codec 3 (Cloud Play codec identifier)
+	// For Cloud Play, codec 3 is used, but we need to map it to the actual codec
+	// Use the session's configured codec (H265 for PSCLOUD, H264 for PSNOW)
+	// instead of hardcoding H.264
+	if(packet->codec == 3)
+	{
+		// Use the codec from the session's video profile (set based on service type)
+		packet->codec = stream_connection->session->connect_info.video_profile.codec;
+		// CHIAKI_LOGV(stream_connection->log, "Normalized Cloud Play codec 3 to codec %d (from session profile)", packet->codec);
+	}
 
 	if(packet->is_video)
 		chiaki_video_receiver_av_packet(stream_connection->video_receiver, packet);
 	else if(packet->is_haptics)
-	    chiaki_audio_receiver_av_packet(stream_connection->haptics_receiver, packet);
+		chiaki_audio_receiver_av_packet(stream_connection->haptics_receiver, packet);
 	else
 		chiaki_audio_receiver_av_packet(stream_connection->audio_receiver, packet);
 }

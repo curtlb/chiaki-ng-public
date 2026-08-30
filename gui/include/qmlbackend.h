@@ -5,6 +5,8 @@
 #include "qmlmainwindow.h"
 #include "qmlcontroller.h"
 #include "qmlsettings.h"
+#include "cloudstreamingbackend.h"
+#include "cloudcatalogbackend.h"
 
 #include <QObject>
 #include <QThread>
@@ -96,6 +98,9 @@ class QmlBackend : public QObject
     Q_PROPERTY(bool controllerMappingAltered READ controllerMappingAltered NOTIFY controllerMappingAlteredChanged)
     Q_PROPERTY(bool enableAnalogStickMapping READ enableAnalogStickMapping WRITE setEnableAnalogStickMapping NOTIFY enableAnalogStickMappingChanged)
     Q_PROPERTY(QString subscriptionTimeRemaining READ subscriptionTimeRemaining NOTIFY subscriptionTimeRemainingChanged)
+    Q_PROPERTY(CloudStreamingBackend* cloudStreaming READ cloudStreaming CONSTANT)
+    Q_PROPERTY(CloudCatalogBackend* cloudCatalog READ cloudCatalog CONSTANT)
+    Q_PROPERTY(bool cloudSteamShortcutEnabled READ cloudSteamShortcutEnabled CONSTANT)
 
 public:
 
@@ -152,6 +157,10 @@ public:
     bool enableAnalogStickMapping() const { return enable_analog_stick_mapping; }
     QString subscriptionTimeRemaining() const { return subscription_time_remaining; }
     void setEnableAnalogStickMapping(bool enabled);
+
+    CloudStreamingBackend *cloudStreaming() const;
+    CloudCatalogBackend *cloudCatalog() const;
+    bool cloudSteamShortcutEnabled() const;
 
     void finishAutoRegister(const ChiakiRegisteredHost &host);
 
@@ -246,6 +255,7 @@ signals:
     void windowTypeUpdated(WindowType type);
 
     void error(const QString &title, const QString &text);
+    void error(const QString &title, const QString &text, int durationMs);
     void sessionError(const QString &title, const QString &text);
     void sessionPinDialogRequested();
     void sessionStopDialogRequested();
@@ -350,6 +360,8 @@ private:
     bool fourcloud_state_retrying = false;  // повторная проверка после первого "оффлайн"
     QTimer *fourcloud_state_timer = nullptr;
     void fetchFourcloudState();
+    CloudStreamingBackend *cloud_streaming_backend = {};
+    CloudCatalogBackend *cloud_catalog_backend = {};
     void clearFourcloudState();
     void fetchYandexIamByJwt(const QString &jwt);
     QString subscription_time_remaining;

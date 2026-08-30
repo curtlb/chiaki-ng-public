@@ -2287,3 +2287,247 @@ QMap<Qt::Key, int> Settings::GetControllerMappingForDecoding()
 	}
 	return result;
 }
+
+// --- PS Plus Cloud Streaming settings ---
+
+int Settings::GetCloudResolutionPSCloud() const
+{
+	return settings.value("settings/cloud_resolution_pscloud", settings.value("settings/cloud_resolution", 1080).toInt()).toInt();
+}
+
+void Settings::SetCloudResolutionPSCloud(int resolution)
+{
+	settings.setValue("settings/cloud_resolution_pscloud", resolution);
+}
+
+QString Settings::GetCloudStoreLocale() const
+{
+	const QString key = QStringLiteral("settings/cloud_store_locale");
+	QString value = settings.value(key).toString();
+	if(value.isEmpty())
+		value = settings.value(QStringLiteral("settings/cloud_language_pscloud"), QStringLiteral("en-US")).toString();
+	return value.isEmpty() ? QStringLiteral("en-US") : value;
+}
+
+void Settings::SetCloudStoreLocale(const QString &locale)
+{
+	settings.setValue(QStringLiteral("settings/cloud_store_locale"), locale);
+}
+
+QString Settings::GetCloudGameLanguage() const
+{
+	return settings.value(QStringLiteral("settings/cloud_game_language"), QString()).toString();
+}
+
+void Settings::SetCloudGameLanguage(const QString &language)
+{
+	settings.setValue(QStringLiteral("settings/cloud_game_language"), language);
+}
+
+QString Settings::GetCloudDatacenterPSCloud() const
+{
+	return settings.value("settings/cloud_datacenter_pscloud", settings.value("settings/cloud_datacenter", "Auto").toString()).toString();
+}
+
+void Settings::SetCloudDatacenterPSCloud(const QString &datacenter)
+{
+	settings.setValue("settings/cloud_datacenter_pscloud", datacenter);
+}
+
+QString Settings::GetCloudDatacentersJsonPSCloud() const
+{
+	return settings.value("settings/cloud_datacenters_json_pscloud", settings.value("settings/cloud_datacenters_json", "[]").toString()).toString();
+}
+
+void Settings::SetCloudDatacentersJsonPSCloud(const QString &json)
+{
+	settings.setValue("settings/cloud_datacenters_json_pscloud", json);
+	emit CloudDatacentersJsonPSCloudChanged();
+}
+
+static unsigned int ClampCloudBitrateKbps(unsigned int bitrate_kbps)
+{
+	if(bitrate_kbps < 2000)
+		return 2000;
+	if(bitrate_kbps > 200000)
+		return 200000;
+	return bitrate_kbps;
+}
+
+unsigned int Settings::GetCloudBitratePSCloud() const
+{
+	const unsigned int legacy = settings.value("settings/cloud_bitrate", 20000).toUInt();
+	return ClampCloudBitrateKbps(settings.value("settings/cloud_bitrate_pscloud", legacy).toUInt());
+}
+
+void Settings::SetCloudBitratePSCloud(unsigned int bitrate_kbps)
+{
+	settings.setValue("settings/cloud_bitrate_pscloud", ClampCloudBitrateKbps(bitrate_kbps));
+}
+
+unsigned int Settings::GetCloudBitratePSNOW() const
+{
+	const unsigned int legacy = settings.value("settings/cloud_bitrate", 20000).toUInt();
+	return ClampCloudBitrateKbps(settings.value("settings/cloud_bitrate_psnow", legacy).toUInt());
+}
+
+void Settings::SetCloudBitratePSNOW(unsigned int bitrate_kbps)
+{
+	settings.setValue("settings/cloud_bitrate_psnow", ClampCloudBitrateKbps(bitrate_kbps));
+}
+
+int Settings::GetCloudResolutionPSNOW() const
+{
+	return settings.value("settings/cloud_resolution_psnow", settings.value("settings/cloud_resolution", 1080).toInt()).toInt();
+}
+
+void Settings::SetCloudResolutionPSNOW(int resolution)
+{
+	settings.setValue("settings/cloud_resolution_psnow", resolution);
+}
+
+ChiakiConnectVideoProfile Settings::GetCloudVideoProfile(const QString &serviceType) const
+{
+	const bool pscloud = serviceType.compare("pscloud", Qt::CaseInsensitive) == 0;
+	const int resolution = pscloud ? GetCloudResolutionPSCloud() : GetCloudResolutionPSNOW();
+	const unsigned int cloud_bitrate = pscloud ? GetCloudBitratePSCloud() : GetCloudBitratePSNOW();
+
+	ChiakiConnectVideoProfile profile = {};
+	switch(resolution)
+	{
+	case 720:
+		profile.width = 1280;
+		profile.height = 720;
+		break;
+	case 1440:
+		profile.width = 2560;
+		profile.height = 1440;
+		break;
+	case 2160:
+		profile.width = 3840;
+		profile.height = 2160;
+		break;
+	default:
+		profile.width = 1920;
+		profile.height = 1080;
+		break;
+	}
+	profile.bitrate = cloud_bitrate;
+	profile.max_fps = 60;
+	profile.codec = pscloud ? CHIAKI_CODEC_H265 : CHIAKI_CODEC_H264;
+	return profile;
+}
+
+QString Settings::GetCloudDatacenterPSNOW() const
+{
+	return settings.value("settings/cloud_datacenter_psnow", settings.value("settings/cloud_datacenter", "Auto").toString()).toString();
+}
+
+void Settings::SetCloudDatacenterPSNOW(const QString &datacenter)
+{
+	settings.setValue("settings/cloud_datacenter_psnow", datacenter);
+}
+
+QString Settings::GetCloudDatacentersJsonPSNOW() const
+{
+	return settings.value("settings/cloud_datacenters_json_psnow", settings.value("settings/cloud_datacenters_json", "[]").toString()).toString();
+}
+
+void Settings::SetCloudDatacentersJsonPSNOW(const QString &json)
+{
+	settings.setValue("settings/cloud_datacenters_json_psnow", json);
+	emit CloudDatacentersJsonPSNOWChanged();
+}
+
+QString Settings::GetNpssoToken() const
+{
+	return settings.value("settings/psn_npsso_token").toString();
+}
+
+void Settings::SetNpssoToken(QString npsso_token)
+{
+	if(settings.value("settings/psn_npsso_token").toString() == npsso_token)
+		return;
+	settings.setValue("settings/psn_npsso_token", npsso_token);
+	emit NpssoTokenChanged();
+}
+
+QString Settings::GetLastSelectedCloudSection() const
+{
+	return settings.value("settings/last_selected_cloud_section", "catalog").toString();
+}
+
+void Settings::SetLastSelectedCloudSection(QString section)
+{
+	settings.setValue("settings/last_selected_cloud_section", section);
+}
+
+QString Settings::GetCloudLibraryFilter() const
+{
+	return settings.value("settings/cloud_library_filter", "all").toString();
+}
+
+void Settings::SetCloudLibraryFilter(QString filter)
+{
+	settings.setValue("settings/cloud_library_filter", filter);
+}
+
+QString Settings::GetCloudCatalogFilter() const
+{
+	return settings.value("settings/cloud_catalog_filter", "all").toString();
+}
+
+void Settings::SetCloudCatalogFilter(QString filter)
+{
+	settings.setValue("settings/cloud_catalog_filter", filter);
+}
+
+QString Settings::GetCloudResolvedStoreCountry() const
+{
+	return settings.value(QStringLiteral("settings/cloud_resolved_store_country"), QString()).toString();
+}
+
+void Settings::SetCloudResolvedStoreCountry(const QString &country)
+{
+	settings.setValue(QStringLiteral("settings/cloud_resolved_store_country"), country);
+}
+
+bool Settings::GetCloudCatalogNativeMode() const
+{
+	return settings.value(QStringLiteral("settings/cloud_catalog_native_mode"), true).toBool();
+}
+
+void Settings::SetCloudCatalogNativeMode(bool native_mode)
+{
+	settings.setValue(QStringLiteral("settings/cloud_catalog_native_mode"), native_mode);
+}
+
+QString Settings::GetCloudTagFilters() const
+{
+	return settings.value("settings/cloud_tag_filters", "[]").toString();
+}
+
+void Settings::SetCloudTagFilters(const QString &filtersJson)
+{
+	settings.setValue("settings/cloud_tag_filters", filtersJson);
+}
+
+int Settings::GetCloudSortState() const
+{
+	return settings.value("settings/cloud_sort_state", 0).toInt();
+}
+
+void Settings::SetCloudSortState(int sortState)
+{
+	settings.setValue("settings/cloud_sort_state", sortState);
+}
+
+QString Settings::GetCloudFavorites() const
+{
+	return settings.value("settings/cloud_favorites", "[]").toString();
+}
+
+void Settings::SetCloudFavorites(QString favorites)
+{
+	settings.setValue("settings/cloud_favorites", favorites);
+}

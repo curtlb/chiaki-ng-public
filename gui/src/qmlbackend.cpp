@@ -205,6 +205,107 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     connect(settings, &Settings::HiddenHostsUpdated, this, &QmlBackend::hiddenHostsChanged);
     connect(settings, &Settings::ManualHostsUpdated, this, &QmlBackend::hostsChanged);
     connect(settings, &Settings::CurrentProfileChanged, this, &QmlBackend::profileChanged);
+
+    cloud_streaming_backend = new CloudStreamingBackend(settings, this);
+    cloud_catalog_backend = new CloudCatalogBackend(settings, this);
+    connect(settings_qml, &QmlSettings::cloudStoreLocaleChanged, this, [this]() {
+        cloud_catalog_backend->invalidateCache();
+    });
+    connect(settings, &Settings::NpssoTokenChanged, this, [this]() {
+        cloud_catalog_backend->invalidateCache();
+    });
+    connect(cloud_streaming_backend, &CloudStreamingBackend::sessionCreated, this,
+            [this, window](StreamSession *session_to_register) {
+        qInfo() << "QmlBackend: Registering cloud streaming session";
+
+        if (session) {
+            qWarning() << "QmlBackend: Closing existing session before registering new cloud session";
+            chiaki_log_mutex.lock();
+            chiaki_log_ctx = nullptr;
+            chiaki_log_mutex.unlock();
+            session->deleteLater();
+        }
+
+        session = session_to_register;
+
+        chiaki_log_mutex.lock();
+        chiaki_log_ctx = session->GetChiakiLog();
+        chiaki_log_mutex.unlock();
+
+        connect(session, &StreamSession::FfmpegFrameAvailable, frame_thread->parent(), [this, window]() {
+            ChiakiFfmpegDecoder *decoder = session->GetFfmpegDecoder();
+            if (!decoder) {
+                qCCritical(chiakiGui) << "Session has no FFmpeg decoder";
+                return;
+            }
+            int32_t frames_lost;
+            AVFrame *frame = chiaki_ffmpeg_decoder_pull_frame(decoder, &frames_lost);
+            if (!frame)
+                return;
+
+            static const QSet<int> zero_copy_formats = {
+                AV_PIX_FMT_VULKAN,
+#ifdef Q_OS_LINUX
+                AV_PIX_FMT_VAAPI,
+#endif
+            };
+            if (frame->hw_frames_ctx && (!zero_copy_formats.contains(frame->format) || disable_zero_copy)) {
+                AVFrame *sw_frame = av_frame_alloc();
+                if (av_hwframe_transfer_data(sw_frame, frame, 0) < 0) {
+                    qCWarning(chiakiGui) << "Failed to transfer frame from hardware";
+                    av_frame_unref(frame);
+                    av_frame_free(&sw_frame);
+                    return;
+                }
+                av_frame_copy_props(sw_frame, frame);
+                av_frame_unref(frame);
+                frame = sw_frame;
+            }
+            QMetaObject::invokeMethod(window, std::bind(&QmlMainWindow::presentFrame, window, frame, frames_lost));
+        });
+
+        connect(session, &StreamSession::SessionQuit, this, [this](ChiakiQuitReason reason, const QString &reason_str) {
+            if (chiaki_quit_reason_is_error(reason)) {
+                QString m = tr("Chiaki Session has quit") + ":\n" + chiaki_quit_reason_string(reason);
+                if (!reason_str.isEmpty())
+                    m += "\n" + tr("Reason") + ": \"" + reason_str + "\"";
+                emit sessionError(tr("Session has quit"), m);
+            }
+
+            chiaki_log_mutex.lock();
+            chiaki_log_ctx = nullptr;
+            chiaki_log_mutex.unlock();
+
+            session->deleteLater();
+            session = nullptr;
+            emit sessionChanged(session);
+            startSubscriptionExpiryTimer();
+            ensureFourcloudPolling();
+
+            sleep_inhibit->release();
+            setDiscoveryEnabled(true);
+        });
+
+        connect(session, &StreamSession::ConnectedChanged, this, [this]() {
+            if (session->IsConnected())
+                setDiscoveryEnabled(false);
+        });
+
+        emit sessionChanged(session);
+
+        bool fullscreen = session->GetFullscreen();
+        bool zoom = session->GetZoom();
+        bool stretch = session->GetStretch();
+        if (zoom)
+            window->setVideoMode(QmlMainWindow::VideoMode::Zoom);
+        else if (stretch)
+            window->setVideoMode(QmlMainWindow::VideoMode::Stretch);
+        if (fullscreen || zoom || stretch)
+            window->fullscreenTime();
+
+        sleep_inhibit->inhibit();
+    });
+
     connect(&discovery_manager, &DiscoveryManager::HostsUpdated, this, &QmlBackend::updateDiscoveryHosts);
     discovery_manager.SetSettings(settings);
     setDiscoveryEnabled(false);
@@ -351,6 +452,30 @@ QmlSettings *QmlBackend::qmlSettings() const
     return settings_qml;
 }
 
+CloudStreamingBackend *QmlBackend::cloudStreaming() const
+{
+    return cloud_streaming_backend;
+}
+
+CloudCatalogBackend *QmlBackend::cloudCatalog() const
+{
+    return cloud_catalog_backend;
+}
+
+bool QmlBackend::cloudSteamShortcutEnabled() const
+{
+#if CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
+    static const bool steam_installed = [] {
+        auto noop = [](const QString &) {};
+        SteamTools steam(noop, noop, QString());
+        return steam.steamExists();
+    }();
+    return steam_installed;
+#else
+    return false;
+#endif
+}
+
 StreamSession *QmlBackend::qmlSession() const
 {
     return session;
@@ -440,6 +565,13 @@ void QmlBackend::profileChanged()
     settings_qml->setSettings(settings);
     discovery_manager.SetSettings(settings);
     window->setSettings(settings);
+    if(cloud_catalog_backend)
+    {
+        cloud_catalog_backend->setSettings(settings);
+        cloud_catalog_backend->invalidateCache();
+    }
+    if(cloud_streaming_backend)
+        cloud_streaming_backend->setSettings(settings);
     setDiscoveryEnabled(true);
 
     auto_connect_mac = settings->GetAutoConnectHost().GetServerMAC();

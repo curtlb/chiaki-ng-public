@@ -194,11 +194,23 @@ Pane {
         }
     }
 
+    TabBar {
+        id: mainTabBar
+        anchors {
+            top: toolBar.bottom
+            left: parent.left
+            right: parent.right
+        }
+        TabButton { text: qsTr("Remote Play") }
+        TabButton { text: qsTr("Облако") }
+    }
+
     ListView {
         id: hostsView
         keyNavigationWraps: true
+        visible: mainTabBar.currentIndex === 0
         anchors {
-            top: toolBar.bottom
+            top: mainTabBar.bottom
             left: parent.left
             right: parent.right
             bottom: parent.bottom
@@ -469,7 +481,27 @@ Pane {
         }
     }     
 
+    Loader {
+        id: cloudPlayLoader
+        anchors {
+            top: mainTabBar.bottom
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
+        active: mainTabBar.currentIndex === 1
+        source: "CloudPlayView.qml"
+        onLoaded: {
+            if (item) {
+                item.mainTabBar = mainTabBar
+                item.settingsButton = settingsButton
+                item.showConfirmDialogFunc = root.showConfirmDialog
+            }
+        }
+    }
+
     RoundButton {
+        visible: mainTabBar.currentIndex === 0
         anchors {
             left: parent.left
             bottom: parent.bottom
@@ -487,6 +519,7 @@ Pane {
     }
 
     Label {
+        visible: mainTabBar.currentIndex === 0
         anchors {
             right: parent.right
             bottom: parent.bottom
@@ -497,6 +530,7 @@ Pane {
 
     Image {
         id: logoImage
+        visible: mainTabBar.currentIndex === 0
         anchors.centerIn: parent
         source: "qrc:/icons/chiaking-logo-white.svg"
         sourceSize: Qt.size(Math.min(parent.width, parent.height) / 2, Math.min(parent.width, parent.height) / 2)

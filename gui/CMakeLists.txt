@@ -74,6 +74,10 @@ set(SOURCE_FILES
 	src/psnaccountid.cpp
 	include/psntoken.h
 	src/psntoken.cpp
+	include/cloudstreamingbackend.h
+	src/cloudstreamingbackend.cpp
+	include/cloudcatalogbackend.h
+	src/cloudcatalogbackend.cpp
 	include/jsonrequester.h
 	src/jsonrequester.cpp
 	src/qml/qml.qrc

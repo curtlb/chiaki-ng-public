@@ -639,6 +639,83 @@ void QmlSettings::setPsnAccountId(const QString &account_id)
     emit psnAccountIdChanged();
 }
 
+QString QmlSettings::psnNpssoToken() const
+{
+    return settings->GetNpssoToken();
+}
+
+void QmlSettings::setPsnNpssoToken(const QString &npsso_token)
+{
+    settings->SetNpssoToken(npsso_token);
+    emit psnNpssoTokenChanged();
+}
+
+QString QmlSettings::cloudStoreLocale() const
+{
+    return settings->GetCloudStoreLocale();
+}
+
+void QmlSettings::setCloudStoreLocale(const QString &locale)
+{
+    settings->SetCloudStoreLocale(locale);
+    emit cloudStoreLocaleChanged();
+}
+
+QString QmlSettings::cloudResolvedStoreCountry() const
+{
+    return settings->GetCloudResolvedStoreCountry();
+}
+
+void QmlSettings::setCloudResolvedStoreCountry(const QString &country)
+{
+    settings->SetCloudResolvedStoreCountry(country);
+    emit cloudResolvedStoreCountryChanged();
+}
+
+bool QmlSettings::cloudCatalogNativeMode() const
+{
+    return settings->GetCloudCatalogNativeMode();
+}
+
+void QmlSettings::setCloudCatalogNativeMode(bool native_mode)
+{
+    settings->SetCloudCatalogNativeMode(native_mode);
+    emit cloudCatalogNativeModeChanged();
+}
+
+int QmlSettings::cloudSortState() const
+{
+    return settings->GetCloudSortState();
+}
+
+void QmlSettings::setCloudSortState(int sortState)
+{
+    settings->SetCloudSortState(sortState);
+    emit cloudSortStateChanged();
+}
+
+QString QmlSettings::cloudTagFilters() const
+{
+    return settings->GetCloudTagFilters();
+}
+
+void QmlSettings::setCloudTagFilters(const QString &filtersJson)
+{
+    settings->SetCloudTagFilters(filtersJson);
+    emit cloudTagFiltersChanged();
+}
+
+QString QmlSettings::cloudFavorites() const
+{
+    return settings->GetCloudFavorites();
+}
+
+void QmlSettings::setCloudFavorites(const QString &favorites)
+{
+    settings->SetCloudFavorites(favorites);
+    emit cloudFavoritesChanged();
+}
+
 QString QmlSettings::jwtToken() const
 {
     return settings->GetJwtToken();

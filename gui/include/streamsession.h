@@ -31,7 +31,6 @@
 #include "sessionlog.h"
 #include "controllermanager.h"
 #include "settings.h"
-#include "macrorecorder.h"
 
 #include <QObject>
 #include <QImage>
@@ -39,6 +38,7 @@
 #include <QTimer>
 #include <QQueue>
 #include <QElapsedTimer>
+#include <QPointer>
 #if CHIAKI_GUI_ENABLE_SPEEX
 #include <QQueue>
 #include <speex/speex_echo.h>
@@ -47,6 +47,7 @@
 
 class QKeyEvent;
 class Settings;
+class GameLauncher;
 
 class ChiakiException: public Exception
 {
@@ -113,8 +114,17 @@ struct StreamSessionConnectInfo
 	uint dpad_touch_shortcut2;
 	uint dpad_touch_shortcut3;
 	uint dpad_touch_shortcut4;
-	/** Custom port base from JWT (4cloud). 0 = use default ports */
-	uint16_t custom_port_base = 0;
+	QString game_name;
+	QString title_id;
+	// Streaming service type (REMOTE_PLAY/PSNOW/PSCLOUD)
+	ChiakiServiceType service_type;
+	QString cloud_launch_spec;
+	QString cloud_handshake_key;
+	QString cloud_session_id;
+	uint8_t cloud_psn_wrapper_type;
+	uint32_t cloud_mtu_in; // MTU in from ping results (0 if not set)
+	uint32_t cloud_mtu_out; // MTU out from ping results (0 if not set)
+	uint64_t cloud_rtt_us; // RTT in microseconds from ping results (0 if not set)
 
 	StreamSessionConnectInfo() {}
 	StreamSessionConnectInfo(
@@ -142,15 +152,24 @@ struct MicBuf
 class StreamSession : public QObject
 {
 	friend class StreamSessionPrivate;
+	friend class GameLauncher;
 
 	Q_OBJECT
 	Q_PROPERTY(QString host READ GetHost CONSTANT)
+	Q_PROPERTY(QString titleId READ GetTitleId CONSTANT)
 	Q_PROPERTY(bool connected READ GetConnected NOTIFY ConnectedChanged)
 	Q_PROPERTY(double measuredBitrate READ GetMeasuredBitrate NOTIFY MeasuredBitrateChanged)
 	Q_PROPERTY(double averagePacketLoss READ GetAveragePacketLoss NOTIFY AveragePacketLossChanged)
+	Q_PROPERTY(double measuredFps READ GetMeasuredFps NOTIFY MeasuredFpsChanged)
+	Q_PROPERTY(double measuredRtt READ GetMeasuredRtt NOTIFY MeasuredRttChanged)
+	Q_PROPERTY(QString resolution READ GetResolution NOTIFY ResolutionChanged)
 	Q_PROPERTY(bool muted READ GetMuted WRITE SetMuted NOTIFY MutedChanged)
 	Q_PROPERTY(bool cantDisplay READ GetCantDisplay NOTIFY CantDisplayChanged)
-	Q_PROPERTY(MacroRecorder *macroRecorder READ GetMacroRecorder CONSTANT)
+	Q_PROPERTY(QString loadingMessage READ GetLoadingMessage WRITE SetLoadingMessage NOTIFY LoadingMessageChanged)
+	Q_PROPERTY(bool isCloudStreaming READ IsCloudStreaming CONSTANT)
+	Q_PROPERTY(bool fullscreen READ GetFullscreen CONSTANT)
+	Q_PROPERTY(bool zoom READ GetZoom CONSTANT)
+	Q_PROPERTY(bool stretch READ GetStretch CONSTANT)
 
 	private:
 		SessionLog log;
@@ -166,11 +185,20 @@ class StreamSession : public QObject
 		bool allow_unmute;
 		int input_block;
 		QString host;
+		QString title_id;
+		ChiakiServiceType service_type; // Store service type from connect_info
+		bool fullscreen;
+		bool zoom;
+		bool stretch;
 		int audio_volume;
 		double measured_bitrate = 0;
 		double average_packet_loss = 0;
+		double measured_fps = 0;
+		double measured_rtt = 0;
+		QString resolution_str;
 		QList<double> packet_loss_history;
 		bool cant_display = false;
+		QString loading_message;
 		int haptics_handheld;
 		float rumble_multiplier;
 		int ps5_rumble_intensity;
@@ -220,7 +248,6 @@ class StreamSession : public QObject
 		bool mouse_touch_enabled;
 		bool dpad_regular;
 		bool dpad_regular_touch_switched;
-		bool fullscreen_combo_pressed;
 		uint dpad_touch_shortcut1;
 		uint dpad_touch_shortcut2;
 		uint dpad_touch_shortcut3;
@@ -232,6 +259,7 @@ class StreamSession : public QObject
 		RumbleHapticsIntensity rumble_haptics_intensity;
 		bool start_mic_unmuted;
 		bool session_started;
+		QPointer<GameLauncher> game_launcher;
 
 		ChiakiFfmpegDecoder *ffmpeg_decoder;
 		void TriggerFfmpegFrameAvailable();
@@ -260,9 +288,12 @@ class StreamSession : public QObject
 		MicBuf mic_buf;
 		QMap<Qt::Key, int> key_map;
 		QElapsedTimer connect_timer;
-		MacroRecorder macro_recorder;
+		// Cloud streaming parameter storage (keep alive for session lifetime)
+		QByteArray cloud_launch_spec_storage;
+		QByteArray cloud_handshake_key_storage;
+		QByteArray cloud_session_id_storage;
+		QByteArray host_storage; // For cloud mode when we modify host string
 
-		void FinalizeAndSendControllerState(ChiakiControllerState *state);
 		void PushAudioFrame(int16_t *buf, size_t samples_count);
 		void PushHapticsFrame(uint8_t *buf, size_t buf_size);
 		void CantDisplayMessage(bool cant_display);
@@ -307,19 +338,54 @@ class StreamSession : public QObject
 		void SetLoginPIN(const QString &pin);
 		void GoHome();
 		QString GetHost() { return host; }
+		QString GetTitleId() { return title_id; }
 		bool GetConnected() { return connected; }
 		double GetMeasuredBitrate()	{ return measured_bitrate; }
 		double GetAveragePacketLoss()	{ return average_packet_loss; }
+		double GetMeasuredFps()	{ return measured_fps; }
+		double GetMeasuredRtt()	{ return measured_rtt; }
+		QString GetResolution() {
+			// Use the resolution the video receiver is actually decoding (the
+			// negotiated/adaptive profile from the server's stream-info), not the
+			// requested connect_info profile — the cloud server may encode lower
+			// than requested. Fall back to the requested profile before the first
+			// frame selects an adaptive profile.
+			int w = 0, h = 0;
+			unsigned int uw = 0, uh = 0;
+			if(chiaki_stream_connection_video_resolution(&session.stream_connection, &uw, &uh))
+			{
+				w = (int)uw;
+				h = (int)uh;
+			}
+			else
+			{
+				w = session.connect_info.video_profile.width;
+				h = session.connect_info.video_profile.height;
+			}
+			return (w > 0 && h > 0) ? QStringLiteral("%1x%2").arg(w).arg(h) : QString();
+		}
 		bool GetMuted()	{ return muted; }
 		void SetMuted(bool enable)	{ if (enable != muted) ToggleMute(); }
-		void SetAudioVolume(int volume) { audio_volume = volume; }
+		Q_INVOKABLE int GetAudioVolume() { return audio_volume; }
+		Q_INVOKABLE void SetAudioVolume(int volume) { audio_volume = volume; }
 		bool GetCantDisplay()	{ return cant_display; }
-		MacroRecorder *GetMacroRecorder()	{ return &macro_recorder; }
+		QString GetLoadingMessage() { return loading_message; }
+		void SetLoadingMessage(const QString &message) { 
+			if (loading_message != message) {
+				loading_message = message;
+				emit LoadingMessageChanged();
+			}
+		}
+		bool IsCloudStreaming() { return chiaki_service_type_is_cloud(service_type); }
+		bool GetFullscreen() { return fullscreen; }
+		bool GetZoom() { return zoom; }
+		bool GetStretch() { return stretch; }
 		ChiakiErrorCode ConnectPsnConnection(QString duid, bool ps5);
 		void CancelPsnConnection(bool stop_thread);
 
-		ChiakiLog *GetChiakiLog()				{ return log.GetChiakiLog(); }
-		QList<Controller *> GetControllers()	{ return controllers.values(); }
+	ChiakiLog *GetChiakiLog()				{ return log.GetChiakiLog(); }
+	ChiakiSession *GetChiakiSession()		{ return &session; }
+	QList<Controller *> GetControllers()	{ return controllers.values(); }
 		ChiakiFfmpegDecoder *GetFfmpegDecoder()	{ return ffmpeg_decoder; }
 #if CHIAKI_LIB_ENABLE_PI_DECODER
 		ChiakiPiDecoder *GetPiDecoder()	{ return pi_decoder; }
@@ -336,7 +402,6 @@ class StreamSession : public QObject
 
 	signals:
 		void FfmpegFrameAvailable();
-		void FullscreenComboPressed();
 		void RumbleHapticPushed(uint16_t strength);
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 		void SdeckHapticPushed(haptic_packet_t packetl, haptic_packet_t packetr);
@@ -350,13 +415,20 @@ class StreamSession : public QObject
 		void ConnectedChanged();
 		void MeasuredBitrateChanged();
 		void AveragePacketLossChanged();
+		void MeasuredFpsChanged();
+		void MeasuredRttChanged();
+		void ResolutionChanged();
 		void MutedChanged();
 		void CantDisplayChanged(bool cant_display);
+		void LoadingMessageChanged();
+		void GameLaunchCompleted();
+		void PsChordFired(); // OPTIONS+SHARE chord fired -> open the in-stream menu
 
 	private slots:
 		void UpdateGamepads();
 		void DpadSendFeedbackState();
 		void SendFeedbackState();
+		void OnGameLauncherCompleted();
 };
 
 Q_DECLARE_METATYPE(ChiakiQuitReason)

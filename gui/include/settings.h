@@ -387,6 +387,49 @@ class Settings : public QObject
 	QString GetPsnAuthTokenExpiry() const;
 	void SetPsnAuthTokenExpiry(QString expiry_date);
 
+	// NPSSO cookie token (required for PS Plus cloud streaming)
+	QString GetNpssoToken() const;
+	void SetNpssoToken(QString npsso_token);
+
+	// PSCloud / PSNOW cloud streaming settings
+	int GetCloudResolutionPSCloud() const;
+	void SetCloudResolutionPSCloud(int resolution);
+	QString GetCloudStoreLocale() const;
+	void SetCloudStoreLocale(const QString &locale);
+	QString GetCloudGameLanguage() const;
+	void SetCloudGameLanguage(const QString &language);
+	QString GetCloudDatacenterPSCloud() const;
+	void SetCloudDatacenterPSCloud(const QString &datacenter);
+	QString GetCloudDatacentersJsonPSCloud() const;
+	void SetCloudDatacentersJsonPSCloud(const QString &json);
+	unsigned int GetCloudBitratePSCloud() const;
+	void SetCloudBitratePSCloud(unsigned int bitrate_kbps);
+	unsigned int GetCloudBitratePSNOW() const;
+	void SetCloudBitratePSNOW(unsigned int bitrate_kbps);
+	int GetCloudResolutionPSNOW() const;
+	void SetCloudResolutionPSNOW(int resolution);
+	QString GetCloudDatacenterPSNOW() const;
+	void SetCloudDatacenterPSNOW(const QString &datacenter);
+	QString GetCloudDatacentersJsonPSNOW() const;
+	void SetCloudDatacentersJsonPSNOW(const QString &json);
+	ChiakiConnectVideoProfile GetCloudVideoProfile(const QString &serviceType) const;
+	QString GetLastSelectedCloudSection() const;
+	void SetLastSelectedCloudSection(QString section);
+	QString GetCloudLibraryFilter() const;
+	void SetCloudLibraryFilter(QString filter);
+	QString GetCloudCatalogFilter() const;
+	void SetCloudCatalogFilter(QString filter);
+	QString GetCloudResolvedStoreCountry() const;
+	void SetCloudResolvedStoreCountry(const QString &country);
+	bool GetCloudCatalogNativeMode() const;
+	void SetCloudCatalogNativeMode(bool native_mode);
+	QString GetCloudTagFilters() const;
+	void SetCloudTagFilters(const QString &filtersJson);
+	int GetCloudSortState() const;
+	void SetCloudSortState(int sortState);
+	QString GetCloudFavorites() const;
+	void SetCloudFavorites(QString favorites);
+
 	// Yandex Cloud OCR Translation settings
 	QString GetYandexIamToken() const			{ return settings.value("settings/yandex_iam_token", "").toString(); }
 	void SetYandexIamToken(QString token)		{ settings.setValue("settings/yandex_iam_token", token); }
@@ -721,6 +764,9 @@ class Settings : public QObject
 		void CurrentProfileChanged();
 		void ProfilesUpdated();
 		void PlaceboSettingsUpdated();
+		void NpssoTokenChanged();
+		void CloudDatacentersJsonPSCloudChanged();
+		void CloudDatacentersJsonPSNOWChanged();
 };
 
 #endif // CHIAKI_SETTINGS_H
