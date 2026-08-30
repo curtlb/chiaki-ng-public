@@ -2,7 +2,6 @@
 
 #include <sessionlog.h>
 #include <chiaki/log.h>
-#include <chiaki/version.h>
 
 #include <QStandardPaths>
 #include <QDir>
