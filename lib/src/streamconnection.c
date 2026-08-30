@@ -1456,7 +1456,7 @@ static ChiakiErrorCode stream_connection_send_protobuf_message(ChiakiStreamConne
 static ChiakiErrorCode stream_connection_send_bandwidth_request(ChiakiStreamConnection *stream_connection, unsigned int kbps)
 {
 	if(!stream_connection->gkcrypt_remote)
-		return CHIAKI_ERR_INVALID_STATE;
+		return CHIAKI_ERR_UNINITIALIZED;
 
 	ChiakiSession *session = stream_connection->session;
 	ChiakiErrorCode err;

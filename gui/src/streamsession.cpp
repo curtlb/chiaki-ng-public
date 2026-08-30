@@ -220,7 +220,7 @@ void StreamSession::SetCloudBitrateKbps(unsigned int kbps)
 			settings->SetCloudBitratePSNOW(kbps);
 	}
 	ChiakiErrorCode err = chiaki_session_set_target_bitrate_kbps(&session, kbps);
-	if(err != CHIAKI_ERR_SUCCESS && err != CHIAKI_ERR_INVALID_STATE)
+	if(err != CHIAKI_ERR_SUCCESS)
 		CHIAKI_LOGW(GetChiakiLog(), "Live bitrate request failed: %s", chiaki_error_string(err));
 	CHIAKI_LOGI(GetChiakiLog(), "Cloud bitrate set to %u kbps", kbps);
 	emit CloudBitrateKbpsChanged();
