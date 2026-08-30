@@ -166,6 +166,33 @@ static void SessionSDeckCb(SDeckEvent *event, void *user);
 #endif
 static void FfmpegFrameCb(ChiakiFfmpegDecoder *decoder, void *user);
 
+void StreamSession::ApplyDisplayCrop(AVFrame *frame) const
+{
+	ApplyDisplayCrop(frame, session.connect_info.video_profile.width, session.connect_info.video_profile.height);
+}
+
+void StreamSession::ApplyDisplayCrop(AVFrame *frame, unsigned int display_w, unsigned int display_h)
+{
+	if(!frame)
+		return;
+
+	// HEVC often decodes to macroblock-aligned heights (e.g. 1088 for 1080p).
+	if(display_h == 0)
+	{
+		if(frame->height == 1088)
+			display_h = 1080;
+		else if(frame->height == 2176)
+			display_h = 2160;
+	}
+
+	frame->crop_top = 0;
+	frame->crop_left = 0;
+	frame->crop_bottom = (display_h > 0 && frame->height > (int)display_h)
+		? frame->height - (int)display_h : 0;
+	frame->crop_right = (display_w > 0 && frame->width > (int)display_w)
+		? frame->width - (int)display_w : 0;
+}
+
 StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObject *parent)
 	: QObject(parent),
 	log(this, connect_info.log_level_mask, connect_info.log_file),

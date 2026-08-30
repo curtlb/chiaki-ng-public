@@ -43,34 +43,8 @@
 #include <QStringDecoder>
 #endif
 
-#include <chiaki/streamconnection.h>
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
-
-static void CropDecodedFrameToStreamSize(StreamSession *session, AVFrame *frame)
-{
-	if(!session || !frame)
-		return;
-
-	unsigned int stream_w = 0, stream_h = 0;
-	ChiakiSession *chiaki_session = session->GetChiakiSession();
-	if(chiaki_session
-		&& chiaki_stream_connection_video_resolution(&chiaki_session->stream_connection, &stream_w, &stream_h)
-		&& stream_h > 0)
-	{
-		// negotiated stream resolution
-	}
-	else if(chiaki_session)
-	{
-		stream_w = chiaki_session->connect_info.video_profile.width;
-		stream_h = chiaki_session->connect_info.video_profile.height;
-	}
-
-	if(stream_h > 0 && frame->height > (int)stream_h)
-		frame->crop_bottom = frame->height - (int)stream_h;
-	if(stream_w > 0 && frame->width > (int)stream_w)
-		frame->crop_right = frame->width - (int)stream_w;
-}
 
 static void ResizeWindowForStream(QmlMainWindow *window, Settings *settings, unsigned int width, unsigned int height)
 {
@@ -299,7 +273,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
             if (!frame)
                 return;
 
-            CropDecodedFrameToStreamSize(session, frame);
+            session->ApplyDisplayCrop(frame);
 
             static const QSet<int> zero_copy_formats = {
                 AV_PIX_FMT_VULKAN,
@@ -318,6 +292,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
                 av_frame_copy_props(sw_frame, frame);
                 av_frame_unref(frame);
                 frame = sw_frame;
+                session->ApplyDisplayCrop(frame);
             }
             QMetaObject::invokeMethod(window, std::bind(&QmlMainWindow::presentFrame, window, frame, frames_lost));
         });

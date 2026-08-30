@@ -388,6 +388,8 @@ class StreamSession : public QObject
 	ChiakiSession *GetChiakiSession()		{ return &session; }
 	QList<Controller *> GetControllers()	{ return controllers.values(); }
 		ChiakiFfmpegDecoder *GetFfmpegDecoder()	{ return ffmpeg_decoder; }
+		void ApplyDisplayCrop(AVFrame *frame) const;
+		static void ApplyDisplayCrop(AVFrame *frame, unsigned int display_w, unsigned int display_h);
 #if CHIAKI_LIB_ENABLE_PI_DECODER
 		ChiakiPiDecoder *GetPiDecoder()	{ return pi_decoder; }
 #endif

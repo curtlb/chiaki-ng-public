@@ -905,6 +905,9 @@ void QmlMainWindow::render()
     frame_mutex.unlock();
 
     if (frame) {
+        if(session)
+            session->ApplyDisplayCrop(frame);
+
         struct pl_avframe_params avparams = {
             .frame = frame,
             .tex = tex,
