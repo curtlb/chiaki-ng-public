@@ -2,6 +2,7 @@
 
 #include <sessionlog.h>
 #include <chiaki/log.h>
+#include <chiaki/version.h>
 
 #include <QStandardPaths>
 #include <QDir>
@@ -130,4 +131,80 @@ QString CreateLogFilename()
 
 	QString filename = "chiaki_session_" + QDateTime::currentDateTime().toString(date_format) + ".log";
 	return dir.absoluteFilePath(filename);
+}
+
+QString CreateCloudLogFilename()
+{
+	static const QString date_format = "yyyy-MM-dd_HH-mm-ss-zzzzzz";
+
+	QString dir_str = GetLogBaseDir();
+	if(dir_str.isEmpty())
+		return QString();
+
+	QString filename = "chiaki_cloud_" + QDateTime::currentDateTime().toString(date_format) + ".log";
+	return QDir(dir_str).absoluteFilePath(filename);
+}
+
+class ChiakiFileLogPrivate
+{
+	public:
+		static void Log(ChiakiFileLog *log, ChiakiLogLevel level, const char *msg) { log->Log(level, msg); }
+};
+
+static void FileLogCb(ChiakiLogLevel level, const char *msg, void *user)
+{
+	auto log = reinterpret_cast<ChiakiFileLog *>(user);
+	ChiakiFileLogPrivate::Log(log, level, msg);
+}
+
+ChiakiFileLog::ChiakiFileLog(uint32_t level_mask, const QString &filename)
+	: file(nullptr)
+{
+	chiaki_log_init(&log, level_mask, FileLogCb, this);
+
+	if(filename.isEmpty())
+	{
+		CHIAKI_LOGI(&log, "Cloud logging to file disabled (no log directory)");
+		return;
+	}
+
+	file = new QFile(filename);
+	if(!file->open(QIODevice::WriteOnly | QIODevice::Append))
+	{
+		delete file;
+		file = nullptr;
+		CHIAKI_LOGI(&log, "Failed to open cloud log file %s", filename.toLocal8Bit().constData());
+		return;
+	}
+
+	CHIAKI_LOGI(&log, "Logging to file %s", filename.toLocal8Bit().constData());
+	CHIAKI_LOGI(&log, "Chiaki Version " CHIAKI_VERSION);
+}
+
+ChiakiFileLog::~ChiakiFileLog()
+{
+	delete file;
+}
+
+QString ChiakiFileLog::Filename() const
+{
+	return file ? file->fileName() : QString();
+}
+
+void ChiakiFileLog::Log(ChiakiLogLevel level, const char *msg)
+{
+	chiaki_log_cb_print(level, msg, nullptr);
+
+	if(!file)
+		return;
+
+	static const QString date_format = "yyyy-MM-dd HH:mm:ss:zzzzzz";
+	QString str = QString("[%1] [%2] %3\n").arg(
+			QDateTime::currentDateTime().toString(date_format),
+			QString(chiaki_log_level_char(level)),
+			msg);
+
+	QMutexLocker lock(&file_mutex);
+	file->write(str.toLocal8Bit());
+	file->flush();
 }

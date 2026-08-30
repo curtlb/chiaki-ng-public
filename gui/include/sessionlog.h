@@ -33,5 +33,26 @@ class SessionLog
 
 QString GetLogBaseDir();
 QString CreateLogFilename();
+QString CreateCloudLogFilename();
+
+// File-backed Chiaki log for operations that run outside StreamSession (cloud catalog, provisioning).
+class ChiakiFileLog
+{
+	friend class ChiakiFileLogPrivate;
+
+	private:
+		ChiakiLog log;
+		QFile *file;
+		QMutex file_mutex;
+
+		void Log(ChiakiLogLevel level, const char *msg);
+
+	public:
+		ChiakiFileLog(uint32_t level_mask, const QString &filename);
+		~ChiakiFileLog();
+
+		ChiakiLog *GetChiakiLog()	{ return &log; }
+		QString Filename() const;
+};
 
 #endif //CHIAKI_SESSIONLOG_H

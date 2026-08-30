@@ -4,6 +4,7 @@
 #ifdef CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
 #include "steamtools.h"
 #endif
+#include <sessionlog.h>
 #include <chiaki/cloudcatalog.h>
 #include <chiaki/log.h>
 #include <thread>
@@ -240,9 +241,12 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
     const QByteArray cacheDir = cacheDirectory.toUtf8();
 
     std::thread([self, reqId, gen, npsso, locale, cacheDir]() mutable {
-        ChiakiLog log;
-        chiaki_log_init(&log, CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR,
-                        chiaki_log_cb_print, nullptr);
+        const QString log_path = CreateCloudLogFilename();
+        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path);
+        ChiakiLog *log = file_log.GetChiakiLog();
+        if(!log_path.isEmpty())
+            CHIAKI_LOGI(log, "[CloudCatalog] unified fetch started (locale=%s, npsso=%s)",
+                locale.constData(), npsso.isEmpty() ? "missing" : "present");
 
         ChiakiCloudCatalogConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -252,7 +256,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
         cfg.force_refresh = false;
 
         ChiakiCloudCatalogResult res;
-        ChiakiErrorCode err = chiaki_cloudcatalog_fetch_unified(&cfg, &res, &log);
+        ChiakiErrorCode err = chiaki_cloudcatalog_fetch_unified(&cfg, &res, log);
         const bool success = (err == CHIAKI_ERR_SUCCESS && res.json);
         const QString json = res.json ? QString::fromUtf8(res.json) : QString();
         const QString message = success
@@ -266,7 +270,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
         QCoreApplication *app = QCoreApplication::instance();
         if (!app)
             return; // user quit mid-fetch: the app object is gone, nothing to deliver to
-        QMetaObject::invokeMethod(app, [self, reqId, gen, success, message, json]() mutable {
+        QMetaObject::invokeMethod(app, [self, reqId, gen, success, message, json, log_path]() mutable {
             if (!self)
                 return; // backend destroyed while the worker ran
             const QJSValue cb = self->pending_callbacks.take(reqId);
@@ -285,6 +289,8 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                 chiaki_cloudcatalog_invalidate_cache(staleCacheDir.constData());
                 qInfo() << "[CACHE] Discarding stale unified fetch (generation"
                         << gen << "!=" << self->catalogGeneration << "); refetching";
+                if (!log_path.isEmpty())
+                    qInfo() << "[CloudCatalog] Log file:" << log_path;
                 if (cb.isCallable())
                     self->fetchUnifiedCatalog(cb);
                 for (QJSValue &pcb : parked)
@@ -292,6 +298,10 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                         self->fetchUnifiedCatalog(pcb);
                 return;
             }
+
+            if (!log_path.isEmpty())
+                qInfo() << "[CloudCatalog] Fetch finished:" << (success ? "ok" : "failed")
+                        << message << "— log:" << log_path;
 
             // Persist the locale the lib actually settled on (region detection now lives
             // entirely in libchiaki: it re-bases the locale on the account's Kamaji-session

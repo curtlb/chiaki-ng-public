@@ -3,6 +3,7 @@
 #include "cloudstreamingbackend.h"
 #include "streamsession.h"
 #include "exception.h"
+#include "sessionlog.h"
 #include "chiaki/remote/holepunch.h"
 #include "chiaki/session.h"
 #include "chiaki/cloudsession.h"
@@ -162,9 +163,12 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
 
     std::thread([self, reqId, svc, gameId, npsso, storeCountry, storeLang, gameLang,
                  forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat]() mutable {
-        ChiakiLog log;
-        chiaki_log_init(&log, CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR,
-                        chiaki_log_cb_print, nullptr);
+        const QString log_path = CreateCloudLogFilename();
+        ChiakiFileLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_path);
+        ChiakiLog *log = file_log.GetChiakiLog();
+        if(!log_path.isEmpty())
+            CHIAKI_LOGI(log, "[CloudSession] provisioning started (service=%s, game=%s, npsso=%s)",
+                svc.constData(), gameId.constData(), npsso.isEmpty() ? "missing" : "present");
 
         ChiakiCloudProvisionConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -187,7 +191,7 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
         cfg.user = &self; // address of the lambda-local QPointer — valid for the blocking call's lifetime
 
         ChiakiCloudProvisionResult res;
-        ChiakiErrorCode err = chiaki_cloud_provision_session(&cfg, &res, &log);
+        ChiakiErrorCode err = chiaki_cloud_provision_session(&cfg, &res, log);
 
         const bool success = (err == CHIAKI_ERR_SUCCESS);
         const QString serviceTypeStr = QString::fromUtf8(svc);
@@ -207,9 +211,12 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
         if (!app)
             return; // user quit mid-provision: the app object is gone, nothing to deliver to
         QMetaObject::invokeMethod(app, [self, reqId, success, attrPassed, serviceTypeStr, serverIp, serverPort,
-                                         handshakeKey, launchSpec, sessionId, wrap, mtuIn, mtuOut, rttUs, errMsg, dcPings]() mutable {
+                                         handshakeKey, launchSpec, sessionId, wrap, mtuIn, mtuOut, rttUs, errMsg, dcPings, log_path]() mutable {
             if (!self)
                 return; // backend destroyed while the worker ran
+            if (!log_path.isEmpty())
+                qInfo() << "[CloudSession] Provisioning finished:" << (success ? "ok" : "failed")
+                        << (errMsg.isEmpty() ? QString() : errMsg) << "— log:" << log_path;
             const QJSValue callback = self->pending_callbacks.take(reqId);
             // Persist the merged datacenter list so Settings shows the measured RTTs
             // (done whether or not allocation succeeded -- the old code saved during the ping).
