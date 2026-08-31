@@ -53,6 +53,9 @@ public:
     //   gameIdentifier: Product ID (PSNOW) or Entitlement ID (PSCLOUD)
     // Platform is automatically detected from API response for PSNOW, or hardcoded to "ps5" for PSCLOUD
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback);
+
+    /** Re-run Gaikai allocation for the last-started cloud game (e.g. after bitrate change). */
+    Q_INVOKABLE void reconnectCurrentSession();
     
     QString getAllocationProgress() const { return allocation_progress; }
     QString getGameImageUrl() const { return game_image_url; }
@@ -91,6 +94,8 @@ private:
     Settings *settings;
     QString allocation_progress;
     QString game_image_url;  // Landscape image URL for current cloud game
+    QString last_service_type;
+    QString last_game_identifier;
 
     QHash<quint64, QJSValue> pending_callbacks; // GUI thread only
     quint64 next_request_id = 0;

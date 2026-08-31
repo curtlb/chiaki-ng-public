@@ -108,6 +108,7 @@ class QmlBackend : public QObject
     Q_PROPERTY(QString cloudLogPath READ cloudLogPath CONSTANT)
     Q_PROPERTY(QString cloudLogPathAlt READ cloudLogPathAlt CONSTANT)
     Q_PROPERTY(bool cloudSteamShortcutEnabled READ cloudSteamShortcutEnabled CONSTANT)
+    Q_PROPERTY(bool cloudSessionReconnecting READ cloudSessionReconnecting NOTIFY cloudSessionReconnectingChanged)
 
 public:
 
@@ -186,6 +187,9 @@ public:
     QString cloudLogPathAlt() const;
     bool cloudSteamShortcutEnabled() const;
 
+    bool cloudSessionReconnecting() const { return cloud_session_reconnecting; }
+    void setCloudSessionReconnecting(bool reconnecting);
+
     void finishAutoRegister(const ChiakiRegisteredHost &host);
 
     bool autoConnect() const;
@@ -221,6 +225,7 @@ public:
     Q_INVOKABLE bool registerHost(const QString &host, const QString &psn_id, const QString &pin, const QString &cpin, bool broadcast, int target, const QJSValue &callback);
     Q_INVOKABLE void connectToHost(int index, QString nickname = QString());
     Q_INVOKABLE void stopSession(bool sleep);
+    Q_INVOKABLE void reconnectCloudSession();
     Q_INVOKABLE void sessionGoHome();
     Q_INVOKABLE void enterPin(const QString &pin);
     Q_INVOKABLE QUrl psnLoginUrl() const;
@@ -284,6 +289,7 @@ signals:
     void sessionError(const QString &title, const QString &text);
     void sessionPinDialogRequested();
     void sessionStopDialogRequested();
+    void cloudSessionReconnectingChanged();
     void registDialogRequested(const QString &host, bool ps5, const QString &duid);
     void psnLoginAccountIdDone(const QString &accountId);
     void psnLoginAccountIdError(const QString &error);
@@ -339,6 +345,8 @@ private:
     QmlSettings *settings_qml = {};
     QmlMainWindow *window = {};
     StreamSession *session = {};
+    bool cloud_session_reconnect_pending = false;
+    bool cloud_session_reconnecting = false;
     QThread *frame_thread = {};
     QTimer *psn_reconnect_timer = {};
     QTimer *psn_auto_connect_timer = {};

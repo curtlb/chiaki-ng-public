@@ -257,6 +257,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
         }
 
         session = session_to_register;
+        setCloudSessionReconnecting(false);
 
         chiaki_log_mutex.lock();
         chiaki_log_ctx = session->GetChiakiLog();
@@ -298,6 +299,19 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
         });
 
         connect(session, &StreamSession::SessionQuit, this, [this](ChiakiQuitReason reason, const QString &reason_str) {
+            if (cloud_session_reconnect_pending) {
+                cloud_session_reconnect_pending = false;
+                chiaki_log_mutex.lock();
+                chiaki_log_ctx = nullptr;
+                chiaki_log_mutex.unlock();
+                session->deleteLater();
+                session = nullptr;
+                emit sessionChanged(session);
+                if (cloud_streaming_backend)
+                    cloud_streaming_backend->reconnectCurrentSession();
+                return;
+            }
+
             if (chiaki_quit_reason_is_error(reason)) {
                 QString m = tr("Chiaki Session has quit") + ":\n" + chiaki_quit_reason_string(reason);
                 if (!reason_str.isEmpty())
@@ -1644,6 +1658,27 @@ void QmlBackend::stopSession(bool sleep)
         session->GoToBed();
 
     session->Stop();
+}
+
+void QmlBackend::reconnectCloudSession()
+{
+    if (!session || !session->IsCloudStreaming())
+        return;
+    if (!session->ConsumeCloudSettingsPendingReconnect())
+        return;
+
+    cloud_session_reconnect_pending = true;
+    setCloudSessionReconnecting(true);
+    CloudLogMessage(QStringLiteral("Session"), QStringLiteral("stopping cloud stream to apply new settings"));
+    session->Stop();
+}
+
+void QmlBackend::setCloudSessionReconnecting(bool reconnecting)
+{
+    if (cloud_session_reconnecting == reconnecting)
+        return;
+    cloud_session_reconnecting = reconnecting;
+    emit cloudSessionReconnectingChanged();
 }
 
 void QmlBackend::sessionGoHome()

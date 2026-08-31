@@ -373,7 +373,7 @@ Item {
                 value: Chiaki.settings.audioVolume
                 onMoved: Chiaki.settings.audioVolume = value
                 KeyNavigation.left: closeButton
-                KeyNavigation.right: Chiaki.session && Chiaki.session.isCloudStreaming ? cloudBitrateSlider : muteButton
+                KeyNavigation.right: Chiaki.session && Chiaki.session.isCloudStreaming ? cloudResolutionCombo : muteButton
                 Keys.onEscapePressed: menuView.close()
                 Label {
                     anchors {
@@ -393,20 +393,28 @@ Item {
                 visible: Chiaki.session && Chiaki.session.isCloudStreaming
             }
 
-            Slider {
-                id: cloudBitrateSlider
+            C.ComboBox {
+                id: cloudResolutionCombo
                 visible: Chiaki.session && Chiaki.session.isCloudStreaming
                 Layout.rightMargin: 20
-                orientation: Qt.Vertical
-                from: 2
-                to: 100
-                Layout.preferredHeight: 100
-                padding: 10
-                stepSize: 1
-                value: Chiaki.session ? Chiaki.session.cloudBitrateKbps / 1000 : 20
-                onMoved: {
-                    if (Chiaki.session)
-                        Chiaki.session.cloudBitrateKbps = value * 1000
+                Layout.preferredWidth: 110
+                model: [qsTr("720p"), qsTr("1080p"), qsTr("1440p"), qsTr("2160p")]
+                currentIndex: {
+                    if (!Chiaki.session)
+                        return 1;
+                    switch (Chiaki.session.cloudResolution) {
+                    case 720: return 0;
+                    case 1440: return 2;
+                    case 2160: return 3;
+                    default: return 1;
+                    }
+                }
+                onActivated: index => {
+                    if (!Chiaki.session)
+                        return;
+                    const resolutions = [720, 1080, 1440, 2160];
+                    Chiaki.session.cloudResolution = resolutions[index];
+                    Chiaki.reconnectCloudSession();
                 }
                 KeyNavigation.left: volumeSlider
                 KeyNavigation.right: muteButton
@@ -417,7 +425,7 @@ Item {
                         horizontalCenter: parent.horizontalCenter
                     }
                     horizontalAlignment: Text.AlignHCenter
-                    text: Math.round(parent.value) + qsTr(" Mbps") + "\n" + qsTr("Cloud")
+                    text: qsTr("Cloud resolution")
                 }
             }
 
@@ -435,7 +443,7 @@ Item {
                 enabled: Chiaki.session && Chiaki.session.connected
                 checked: Chiaki.session && !Chiaki.session.muted
                 onToggled: Chiaki.session.muted = !Chiaki.session.muted
-                KeyNavigation.left: Chiaki.session && Chiaki.session.isCloudStreaming ? cloudBitrateSlider : volumeSlider
+                KeyNavigation.left: Chiaki.session && Chiaki.session.isCloudStreaming ? cloudResolutionCombo : volumeSlider
                 KeyNavigation.right: zoomButton
                 Keys.onReturnPressed: toggled()
                 Keys.onEscapePressed: menuView.close()
@@ -824,6 +832,13 @@ Item {
 
         function onSessionChanged() {
             if (!Chiaki.session) {
+                if (Chiaki.cloudSessionReconnecting) {
+                    sessionLoading = true;
+                    sessionError = false;
+                    errorTitleLabel.text = "";
+                    errorTextLabel.text = "";
+                    return;
+                }
                 if (errorTitleLabel.text)
                     closeTimer.start();
                 else

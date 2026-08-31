@@ -193,37 +193,85 @@ void StreamSession::ApplyDisplayCrop(AVFrame *frame, unsigned int display_w, uns
 		? frame->width - (int)display_w : 0;
 }
 
-unsigned int StreamSession::GetCloudBitrateKbps() const
+static void CloudResolutionToDimensions(int resolution, unsigned int *width, unsigned int *height)
 {
-	return session.connect_info.video_profile.bitrate;
+	switch(resolution)
+	{
+	case 720:
+		*width = 1280;
+		*height = 720;
+		break;
+	case 1440:
+		*width = 2560;
+		*height = 1440;
+		break;
+	case 2160:
+		*width = 3840;
+		*height = 2160;
+		break;
+	default:
+		*width = 1920;
+		*height = 1080;
+		break;
+	}
 }
 
-void StreamSession::SetCloudBitrateKbps(unsigned int kbps)
+static int HeightToCloudResolution(unsigned int height)
+{
+	switch(height)
+	{
+	case 720: return 720;
+	case 1440: return 1440;
+	case 2160: return 2160;
+	default: return 1080;
+	}
+}
+
+int StreamSession::GetCloudResolution() const
+{
+	return HeightToCloudResolution(session.connect_info.video_profile.height);
+}
+
+void StreamSession::SetCloudResolution(int resolution)
 {
 	if(!chiaki_service_type_is_cloud(service_type))
 		return;
 
-	if(kbps < 2000)
-		kbps = 2000;
-	if(kbps > 100000)
-		kbps = 100000;
+	switch(resolution)
+	{
+	case 720:
+	case 1080:
+	case 1440:
+	case 2160:
+		break;
+	default:
+		return;
+	}
 
-	if(session.connect_info.video_profile.bitrate == kbps)
+	if(GetCloudResolution() == resolution)
 		return;
 
-	session.connect_info.video_profile.bitrate = kbps;
+	unsigned int width = 0, height = 0;
+	CloudResolutionToDimensions(resolution, &width, &height);
+	session.connect_info.video_profile.width = width;
+	session.connect_info.video_profile.height = height;
 	if(settings)
 	{
 		if(service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
-			settings->SetCloudBitratePSCloud(kbps);
+			settings->SetCloudResolutionPSCloud(resolution);
 		else if(service_type == CHIAKI_SERVICE_TYPE_PSNOW)
-			settings->SetCloudBitratePSNOW(kbps);
+			settings->SetCloudResolutionPSNOW(resolution);
 	}
-	ChiakiErrorCode err = chiaki_session_set_target_bitrate_kbps(&session, kbps);
-	if(err != CHIAKI_ERR_SUCCESS)
-		CHIAKI_LOGW(GetChiakiLog(), "Live bitrate request failed: %s", chiaki_error_string(err));
-	CHIAKI_LOGI(GetChiakiLog(), "Cloud bitrate set to %u kbps", kbps);
-	emit CloudBitrateKbpsChanged();
+	cloud_settings_pending_reconnect = true;
+	CHIAKI_LOGI(GetChiakiLog(), "Cloud resolution set to %d (pending reconnect)", resolution);
+	emit CloudResolutionChanged();
+}
+
+bool StreamSession::ConsumeCloudSettingsPendingReconnect()
+{
+	const bool pending = cloud_settings_pending_reconnect;
+	cloud_settings_pending_reconnect = false;
+	return pending;
 }
 
 StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObject *parent)

@@ -55,7 +55,6 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
         qInfo() << "Using NPSSO:" << npssoToken.left(20) << "...";
     }
 
-    // Normalize service type to lowercase
     serviceType = serviceType.toLower();
 
     // Validate parameters
@@ -82,6 +81,9 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
         qWarning() << "Could not access CloudCatalogBackend for image lookup";
         setGameImageUrl(QString()); // Clear any previous image
     }
+
+    last_service_type = serviceType;
+    last_game_identifier = gameIdentifier;
 
     // The C provisioning flow runs the NPSSO authorizeCheck itself as its first
     // (silent) step and surfaces AUTHORIZATION_FAILED (handled in handleProvisionError)
@@ -365,9 +367,11 @@ void CloudStreamingBackend::finishCloudSession(QString serviceType, QString serv
         setGameImageUrl(QString());
         // Same dismissal contract as handleProvisionError: without sessionError the
         // loading page has no error text, no Escape handler, and never exits.
-        if (QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent()))
+        if (QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent())) {
+            qmlBackend->setCloudSessionReconnecting(false);
             emit qmlBackend->sessionError(tr("Cloud Streaming Failed"),
                 QString("Failed to start session: %1").arg(e.what()));
+        }
         if (callback.isCallable()) {
             callback.call({false, QString("Failed to start session: %1").arg(e.what())});
         }
@@ -427,6 +431,7 @@ void CloudStreamingBackend::handleProvisionError(QString serviceType, QString er
     }
 
     if (qmlBackend) {
+        qmlBackend->setCloudSessionReconnecting(false);
         emit qmlBackend->sessionError(tr("Cloud Streaming Failed"), userMessage);
     }
 
@@ -479,5 +484,20 @@ void CloudStreamingBackend::setGameImageUrl(const QString &url)
         game_image_url = url;
         emit gameImageUrlChanged();
     }
+}
+
+void CloudStreamingBackend::reconnectCurrentSession()
+{
+    if (last_service_type.isEmpty() || last_game_identifier.isEmpty()) {
+        qWarning() << "reconnectCurrentSession: no previous cloud session";
+        return;
+    }
+
+    const QString npsso = settings->GetNpssoToken();
+    CloudLogMessage(QStringLiteral("Session"),
+        QStringLiteral("reconnecting cloud session (service=%1, game=%2) to apply new settings")
+            .arg(last_service_type, last_game_identifier));
+    setAllocationProgress(tr("Applying settings — reconnecting..."));
+    continueCloudSessionAfterAuth(last_service_type, last_game_identifier, QJSValue(), npsso, QString());
 }
 
