@@ -95,8 +95,14 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
 // stream-ready result back to the GUI thread. Kamaji + Gaikai + datacenter
 // ping/select + the owned fast-path + the one-shot noGameForEntitlementId retry
 // all live in libchiaki (chiaki_cloud_provision_session) now.
-void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, QString gameIdentifier, const QJSValue &callback, QString npssoToken, QString sharedDuid)
+void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, QString gameIdentifier, const QJSValue &callback, QString npssoToken, QString sharedDuid, bool is_reconnect)
 {
+    if (provision_active.exchange(true)) {
+        qInfo() << "Cloud provision already running; will retry after it finishes";
+        reconnect_after_provision = true;
+        return;
+    }
+
     const bool pscloud = (serviceType == "pscloud");
 
     // Snapshot everything the worker needs as owned byte arrays (must outlive the thread).
@@ -146,7 +152,7 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     // C flow skips the resolve/acquire path. (If Gaikai rejects it, the orchestrator retries
     // the full resolve flow once internally.)
     QByteArray ownedEnt, ownedPlat;
-    if (!pscloud) {
+    if (!pscloud && !is_reconnect) {
         QmlBackend *qb = qobject_cast<QmlBackend*>(parent());
         QString e, p;
         if (qb && qb->cloudCatalog() && qb->cloudCatalog()->getOwnedPsnowEntitlement(gameIdentifier, e, p)) {
@@ -214,11 +220,11 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
                                          handshakeKey, launchSpec, sessionId, wrap, mtuIn, mtuOut, rttUs, errMsg, dcPings]() mutable {
             if (!self)
                 return; // backend destroyed while the worker ran
+            const QJSValue callback = self->pending_callbacks.take(reqId);
             CloudLogMessage(QStringLiteral("Session"),
                 success ? QStringLiteral("provisioning finished: success")
                         : QStringLiteral("provisioning finished: %1")
                               .arg(errMsg.isEmpty() ? QStringLiteral("failed") : errMsg));
-            const QJSValue callback = self->pending_callbacks.take(reqId);
             // Persist the merged datacenter list so Settings shows the measured RTTs
             // (done whether or not allocation succeeded -- the old code saved during the ping).
             if (!dcPings.isEmpty()) {
@@ -233,6 +239,7 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
             } else {
                 self->handleProvisionError(serviceTypeStr, errMsg, callback);
             }
+            self->finishProvisionRun();
         }, Qt::QueuedConnection);
     }).detach();
 }
@@ -486,6 +493,18 @@ void CloudStreamingBackend::setGameImageUrl(const QString &url)
     }
 }
 
+void CloudStreamingBackend::finishProvisionRun(bool schedule_pending_reconnect)
+{
+    provision_active = false;
+    if (!schedule_pending_reconnect || !reconnect_after_provision)
+        return;
+    reconnect_after_provision = false;
+    if (last_service_type.isEmpty() || last_game_identifier.isEmpty())
+        return;
+    qInfo() << "Running queued cloud reconnect after previous provision finished";
+    QTimer::singleShot(1500, this, [this]() { reconnectCurrentSession(); });
+}
+
 void CloudStreamingBackend::reconnectCurrentSession()
 {
     if (last_service_type.isEmpty() || last_game_identifier.isEmpty()) {
@@ -498,6 +517,6 @@ void CloudStreamingBackend::reconnectCurrentSession()
         QStringLiteral("reconnecting cloud session (service=%1, game=%2) to apply new settings")
             .arg(last_service_type, last_game_identifier));
     setAllocationProgress(tr("Applying settings — reconnecting..."));
-    continueCloudSessionAfterAuth(last_service_type, last_game_identifier, QJSValue(), npsso, QString());
+    continueCloudSessionAfterAuth(last_service_type, last_game_identifier, QJSValue(), npsso, QString(), true);
 }
 

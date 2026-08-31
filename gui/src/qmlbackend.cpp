@@ -32,7 +32,7 @@
 #include <QImageReader>
 #include <QProcessEnvironment>
 #include <QDesktopServices>
-#include <QtConcurrent>
+#include <QTimer>
 #include <QTemporaryFile>
 #include <QNetworkCookie>
 #include <QJsonDocument>
@@ -263,8 +263,11 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
         chiaki_log_ctx = session->GetChiakiLog();
         chiaki_log_mutex.unlock();
 
-        connect(session, &StreamSession::FfmpegFrameAvailable, frame_thread->parent(), [this, window]() {
-            ChiakiFfmpegDecoder *decoder = session->GetFfmpegDecoder();
+        const QPointer<StreamSession> bound_session(session_to_register);
+        connect(session, &StreamSession::FfmpegFrameAvailable, frame_thread->parent(), [this, window, bound_session]() {
+            if (!bound_session || session != bound_session)
+                return;
+            ChiakiFfmpegDecoder *decoder = bound_session->GetFfmpegDecoder();
             if (!decoder) {
                 qCCritical(chiakiGui) << "Session has no FFmpeg decoder";
                 return;
@@ -274,7 +277,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
             if (!frame)
                 return;
 
-            session->ApplyDisplayCrop(frame);
+            bound_session->ApplyDisplayCrop(frame);
 
             static const QSet<int> zero_copy_formats = {
                 AV_PIX_FMT_VULKAN,
@@ -293,7 +296,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
                 av_frame_copy_props(sw_frame, frame);
                 av_frame_unref(frame);
                 frame = sw_frame;
-                session->ApplyDisplayCrop(frame);
+                bound_session->ApplyDisplayCrop(frame);
             }
             QMetaObject::invokeMethod(window, std::bind(&QmlMainWindow::presentFrame, window, frame, frames_lost));
         });
@@ -304,11 +307,16 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
                 chiaki_log_mutex.lock();
                 chiaki_log_ctx = nullptr;
                 chiaki_log_mutex.unlock();
+                session->disconnect(this);
                 session->deleteLater();
                 session = nullptr;
                 emit sessionChanged(session);
-                if (cloud_streaming_backend)
-                    cloud_streaming_backend->reconnectCurrentSession();
+                if (cloud_streaming_backend) {
+                    QTimer::singleShot(3000, cloud_streaming_backend, [this]() {
+                        if (cloud_streaming_backend)
+                            cloud_streaming_backend->reconnectCurrentSession();
+                    });
+                }
                 return;
             }
 

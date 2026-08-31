@@ -10,6 +10,8 @@
 #include <QJSValue>
 #include <QHash>
 #include <QPointer>
+#include <QTimer>
+#include <atomic>
 
 // ============================================================================
 // CONFIGURATION - Shared settings and values used by multiple classes
@@ -79,7 +81,7 @@ private:
     // provisioning flow (chiaki_cloud_provision_session) on a worker thread and
     // hands the stream-ready result to StreamSession. Kamaji+Gaikai, the owned
     // fast-path and the one-shot noGameForEntitlementId retry all live in libchiaki.
-    void continueCloudSessionAfterAuth(QString serviceType, QString gameIdentifier, const QJSValue &callback, QString npssoToken, QString sharedDuid);
+    void continueCloudSessionAfterAuth(QString serviceType, QString gameIdentifier, const QJSValue &callback, QString npssoToken, QString sharedDuid, bool is_reconnect = false);
 
     // Build StreamSessionConnectInfo from a successful provision result and start the session.
     void finishCloudSession(QString serviceType, QString serverIp, int serverPort,
@@ -91,6 +93,8 @@ private:
     // C progress callback (called from the worker thread): marshals to setAllocationProgress.
     static void provisionProgressThunk(const char *stage, void *user);
 
+    void finishProvisionRun(bool schedule_pending_reconnect = true);
+
     Settings *settings;
     QString allocation_progress;
     QString game_image_url;  // Landscape image URL for current cloud game
@@ -99,6 +103,8 @@ private:
 
     QHash<quint64, QJSValue> pending_callbacks; // GUI thread only
     quint64 next_request_id = 0;
+    std::atomic<bool> provision_active{false};
+    bool reconnect_after_provision = false;
 };
 
 #endif // CLOUDSTREAMINGBACKEND_H
