@@ -2569,7 +2569,7 @@ DialogView {
                     }
 
                     Label {
-                        text: qsTr("NPSSO токен (для облачного каталога и стриминга)")
+                        text: qsTr("NPSSO токен (каталог облака)")
                         wrapMode: Text.Wrap
                     }
 
@@ -2620,6 +2620,54 @@ DialogView {
                         opacity: 0.8
                         font.pixelSize: 12
                         text: qsTr("Войдите на playstation.com, откройте страницу NPSSO и скопируйте токен. Токен сохраняется до ручной замены. Не создавайте chiaki_cloud.log вручную — файл появится сам при запуске.")
+                    }
+
+                    Label {
+                        text: qsTr("NPSSO для подключения к игре (тест)")
+                        wrapMode: Text.Wrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        C.TextField {
+                            id: npssoSecondaryTokenField
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 500
+                            echoMode: Chiaki.settings.streamerMode ? TextInput.Password : TextInput.Normal
+                            placeholderText: qsTr("Второй NPSSO — только при запуске стрима")
+                            text: Chiaki.settings.psnNpssoTokenSecondary
+                            onTextChanged: {
+                                let inputText = text.trim();
+                                let token = inputText;
+                                if (inputText.startsWith("{") && inputText.includes("npsso")) {
+                                    try {
+                                        let json = JSON.parse(inputText);
+                                        if (json.npsso)
+                                            token = json.npsso;
+                                    } catch (e) {}
+                                }
+                                if (token !== Chiaki.settings.psnNpssoTokenSecondary)
+                                    Chiaki.settings.psnNpssoTokenSecondary = token;
+                            }
+                        }
+
+                        C.Button {
+                            text: qsTr("Очистить")
+                            Material.roundedScale: Material.SmallScale
+                            onClicked: {
+                                Chiaki.settings.psnNpssoTokenSecondary = "";
+                                npssoSecondaryTokenField.text = "";
+                            }
+                        }
+                    }
+
+                    Label {
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
+                        font.pixelSize: 12
+                        text: qsTr("Если заполнено — каталог грузится с основным NPSSO, а Gaikai/Kamaji при старте игры используют этот токен. Пустое поле = без подмены.")
                     }
 
                     Label {

@@ -650,6 +650,17 @@ void QmlSettings::setPsnNpssoToken(const QString &npsso_token)
     emit psnNpssoTokenChanged();
 }
 
+QString QmlSettings::psnNpssoTokenSecondary() const
+{
+    return settings->GetNpssoTokenSecondary();
+}
+
+void QmlSettings::setPsnNpssoTokenSecondary(const QString &npsso_token)
+{
+    settings->SetNpssoTokenSecondary(npsso_token);
+    emit psnNpssoTokenSecondaryChanged();
+}
+
 QString QmlSettings::cloudStoreLocale() const
 {
     return settings->GetCloudStoreLocale();

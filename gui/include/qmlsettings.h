@@ -78,6 +78,7 @@ class QmlSettings : public QObject
     Q_PROPERTY(QString psnAuthTokenExpiry READ psnAuthTokenExpiry WRITE setPsnAuthTokenExpiry NOTIFY psnAuthTokenExpiryChanged)
     Q_PROPERTY(QString psnAccountId READ psnAccountId WRITE setPsnAccountId NOTIFY psnAccountIdChanged)
     Q_PROPERTY(QString psnNpssoToken READ psnNpssoToken WRITE setPsnNpssoToken NOTIFY psnNpssoTokenChanged)
+    Q_PROPERTY(QString psnNpssoTokenSecondary READ psnNpssoTokenSecondary WRITE setPsnNpssoTokenSecondary NOTIFY psnNpssoTokenSecondaryChanged)
     Q_PROPERTY(QString cloudStoreLocale READ cloudStoreLocale WRITE setCloudStoreLocale NOTIFY cloudStoreLocaleChanged)
     Q_PROPERTY(QString cloudResolvedStoreCountry READ cloudResolvedStoreCountry WRITE setCloudResolvedStoreCountry NOTIFY cloudResolvedStoreCountryChanged)
     Q_PROPERTY(bool cloudCatalogNativeMode READ cloudCatalogNativeMode WRITE setCloudCatalogNativeMode NOTIFY cloudCatalogNativeModeChanged)
@@ -514,6 +515,8 @@ public:
 
     QString psnNpssoToken() const;
     void setPsnNpssoToken(const QString &npsso_token);
+    QString psnNpssoTokenSecondary() const;
+    void setPsnNpssoTokenSecondary(const QString &npsso_token);
 
     QString cloudStoreLocale() const;
     void setCloudStoreLocale(const QString &locale);
@@ -679,6 +682,7 @@ signals:
     void psnAuthTokenExpiryChanged();
     void psnAccountIdChanged();
     void psnNpssoTokenChanged();
+    void psnNpssoTokenSecondaryChanged();
     void cloudStoreLocaleChanged();
     void cloudResolvedStoreCountryChanged();
     void cloudCatalogNativeModeChanged();

@@ -390,6 +390,10 @@ class Settings : public QObject
 	// NPSSO cookie token (required for PS Plus cloud streaming)
 	QString GetNpssoToken() const;
 	void SetNpssoToken(QString npsso_token);
+	/** Optional second NPSSO used only at cloud game provision (catalog keeps primary). */
+	QString GetNpssoTokenSecondary() const;
+	void SetNpssoTokenSecondary(QString npsso_token);
+	QString GetNpssoTokenForCloudProvision() const;
 
 	// PSCloud / PSNOW cloud streaming settings
 	int GetCloudResolutionPSCloud() const;
@@ -770,6 +774,7 @@ class Settings : public QObject
 		void ProfilesUpdated();
 		void PlaceboSettingsUpdated();
 		void NpssoTokenChanged();
+		void NpssoTokenSecondaryChanged();
 		void CloudDatacentersJsonPSCloudChanged();
 		void CloudDatacentersJsonPSNOWChanged();
 };

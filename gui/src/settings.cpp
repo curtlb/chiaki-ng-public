@@ -2452,6 +2452,27 @@ void Settings::SetNpssoToken(QString npsso_token)
 	emit NpssoTokenChanged();
 }
 
+QString Settings::GetNpssoTokenSecondary() const
+{
+	return settings.value("settings/psn_npsso_token_secondary").toString();
+}
+
+void Settings::SetNpssoTokenSecondary(QString npsso_token)
+{
+	if(settings.value("settings/psn_npsso_token_secondary").toString() == npsso_token)
+		return;
+	settings.setValue("settings/psn_npsso_token_secondary", npsso_token);
+	emit NpssoTokenSecondaryChanged();
+}
+
+QString Settings::GetNpssoTokenForCloudProvision() const
+{
+	const QString secondary = GetNpssoTokenSecondary().trimmed();
+	if(!secondary.isEmpty())
+		return secondary;
+	return GetNpssoToken().trimmed();
+}
+
 QString Settings::GetLastSelectedCloudSection() const
 {
 	return settings.value("settings/last_selected_cloud_section", "catalog").toString();

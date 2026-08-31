@@ -43,14 +43,19 @@ CloudStreamingBackend::CloudStreamingBackend(Settings *settings, QObject *parent
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback)
 {
-    // Get NPSSO token from settings
-    QString npssoToken = settings->GetNpssoToken();
+    // Provision uses secondary NPSSO when set (catalog keeps the primary token).
+    const QString npssoToken = settings->GetNpssoTokenForCloudProvision();
+    const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
     CloudLogMessage(QStringLiteral("Session"),
-        QStringLiteral("startCompleteCloudSession service=%1 game=%2 npsso=%3")
-            .arg(serviceType, gameIdentifier, npssoToken.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present")));
+        QStringLiteral("startCompleteCloudSession service=%1 game=%2 provision_npsso=%3")
+            .arg(serviceType, gameIdentifier,
+                 npssoToken.isEmpty() ? QStringLiteral("missing")
+                                      : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary"))));
 
     if (npssoToken.isEmpty()) {
         qWarning() << "NPSSO token is empty - cloud play may not work";
+    } else if (usingSecondaryNpsso) {
+        qInfo() << "Cloud provision: using secondary NPSSO override";
     } else {
         qInfo() << "Using NPSSO:" << npssoToken.left(20) << "...";
     }
@@ -148,11 +153,11 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     const bool isForeign = settings->IsCloudCatalogIsForeign();
     const bool attrPassed = settings->GetAccountAttributesCheckPassed();
 
-    // Owned-PSNOW fast-path: hand the catalog's resolved owned entitlement straight in so the
-    // C flow skips the resolve/acquire path. (If Gaikai rejects it, the orchestrator retries
-    // the full resolve flow once internally.)
+    // Owned-PSNOW fast-path: skip when a secondary provision NPSSO is active — entitlements
+    // in the catalog cache belong to the primary account.
     QByteArray ownedEnt, ownedPlat;
-    if (!pscloud && !is_reconnect) {
+    const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
+    if (!pscloud && !is_reconnect && !usingSecondaryNpsso) {
         QmlBackend *qb = qobject_cast<QmlBackend*>(parent());
         QString e, p;
         if (qb && qb->cloudCatalog() && qb->cloudCatalog()->getOwnedPsnowEntitlement(gameIdentifier, e, p)) {
@@ -170,11 +175,13 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     QPointer<CloudStreamingBackend> self(this);
 
     std::thread([self, reqId, svc, gameId, npsso, storeCountry, storeLang, gameLang,
-                 forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat]() mutable {
+                 forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat,
+                 usingSecondaryNpsso]() mutable {
         CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, "Session");
         ChiakiLog *log = file_log.GetChiakiLog();
         CHIAKI_LOGI(log, "provisioning started (service=%s, game=%s, npsso=%s)",
-            svc.constData(), gameId.constData(), npsso.isEmpty() ? "missing" : "present");
+            svc.constData(), gameId.constData(),
+            npsso.isEmpty() ? "missing" : (usingSecondaryNpsso ? "secondary" : "primary"));
 
         ChiakiCloudProvisionConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -512,10 +519,13 @@ void CloudStreamingBackend::reconnectCurrentSession()
         return;
     }
 
-    const QString npsso = settings->GetNpssoToken();
+    const QString npsso = settings->GetNpssoTokenForCloudProvision();
+    const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
     CloudLogMessage(QStringLiteral("Session"),
-        QStringLiteral("reconnecting cloud session (service=%1, game=%2) to apply new settings")
-            .arg(last_service_type, last_game_identifier));
+        QStringLiteral("reconnecting cloud session (service=%1, game=%2, provision_npsso=%3) to apply new settings")
+            .arg(last_service_type, last_game_identifier,
+                 npsso.isEmpty() ? QStringLiteral("missing")
+                                 : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary")));
     setAllocationProgress(tr("Applying settings — reconnecting..."));
     continueCloudSessionAfterAuth(last_service_type, last_game_identifier, QJSValue(), npsso, QString(), true);
 }
