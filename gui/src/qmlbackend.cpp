@@ -33,6 +33,7 @@
 #include <QProcessEnvironment>
 #include <QDesktopServices>
 #include <QTimer>
+#include <QtConcurrent>
 #include <QTemporaryFile>
 #include <QNetworkCookie>
 #include <QJsonDocument>
