@@ -46,11 +46,12 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
     // Provision uses secondary NPSSO when set (catalog keeps the primary token).
     const QString npssoToken = settings->GetNpssoTokenForCloudProvision();
     const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
+    const QString npssoLabel = npssoToken.isEmpty()
+        ? QStringLiteral("missing")
+        : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary"));
     CloudLogMessage(QStringLiteral("Session"),
         QStringLiteral("startCompleteCloudSession service=%1 game=%2 provision_npsso=%3")
-            .arg(serviceType, gameIdentifier,
-                 npssoToken.isEmpty() ? QStringLiteral("missing")
-                                      : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary"))));
+            .arg(serviceType, gameIdentifier, npssoLabel));
 
     if (npssoToken.isEmpty()) {
         qWarning() << "NPSSO token is empty - cloud play may not work";
@@ -521,12 +522,13 @@ void CloudStreamingBackend::reconnectCurrentSession()
 
     const QString npsso = settings->GetNpssoTokenForCloudProvision();
     const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
+    const QString npssoLabel = npsso.isEmpty()
+        ? QStringLiteral("missing")
+        : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary"));
     CloudLogMessage(QStringLiteral("Session"),
         QStringLiteral("reconnecting cloud session (service=%1, game=%2, provision_npsso=%3) to apply new settings")
-            .arg(last_service_type, last_game_identifier,
-                 npsso.isEmpty() ? QStringLiteral("missing")
-                                 : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary")));
-    setAllocationProgress(tr("Applying settings — reconnecting..."));
+            .arg(last_service_type, last_game_identifier, npssoLabel));
+    setAllocationProgress(tr("Applying settings - reconnecting..."));
     continueCloudSessionAfterAuth(last_service_type, last_game_identifier, QJSValue(), npsso, QString(), true);
 }
 
