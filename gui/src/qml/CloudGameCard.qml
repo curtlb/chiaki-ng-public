@@ -19,12 +19,14 @@ Rectangle {
     property var qrCodeDialog: null // Reference to QR code dialog
     // With 4cloud hourly billing, PS5 cloud titles marked "purchaseable" in the user's
     // catalog are played via a rented PS account NPSSO after payment — not the user's library.
-    function isCloudBillingRentalActive() {
+    function isCloudBillingServerConfigured() {
         if (!Chiaki || !Chiaki.settings)
             return false;
         return Chiaki.settings.cloudBillingEnabled
-            && (Chiaki.settings.fourCloudEmail || "").length > 0
             && (Chiaki.settings.cloudBillingHost || "").length > 0;
+    }
+    function isCloudBillingRentalActive() {
+        return isCloudBillingServerConfigured();
     }
     readonly property bool needsAddToLibrary: gameData && gameData.category === "purchaseable"
         && !isCloudBillingRentalActive()

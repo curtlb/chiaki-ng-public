@@ -3250,6 +3250,8 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
     qCInfo(chiakiGui) << "Authentication request for email:" << email;
     settings->SetFourCloudEmail(email);
     settings_qml->refreshFourCloudEmail();
+    if (cloud_catalog_backend)
+        cloud_catalog_backend->invalidateCache();
     
     if (!network_manager) {
         network_manager = new QNetworkAccessManager(this);

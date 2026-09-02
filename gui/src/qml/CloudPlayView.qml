@@ -190,12 +190,17 @@ Pane {
             setTagFilters(current);
     }
 
-    function isCloudBillingActive() {
+    function isCloudBillingServerConfigured() {
         if (!Chiaki || !Chiaki.settings)
             return false;
         return Chiaki.settings.cloudBillingEnabled
-            && (Chiaki.settings.fourCloudEmail || "").length > 0
             && (Chiaki.settings.cloudBillingHost || "").length > 0;
+    }
+
+    function isCloudBillingActive() {
+        if (!isCloudBillingServerConfigured())
+            return false;
+        return (Chiaki.settings.fourCloudEmail || "").length > 0;
     }
 
     function applySearchFilter() {
@@ -206,7 +211,7 @@ Pane {
                 activeTagFilters || [],
                 showFavoritesOnly ? favoriteProductIds : [],
                 sortState,
-                isCloudBillingActive(),
+                isCloudBillingServerConfigured(),
                 maxGridGames
             );
             filteredGameCount = result.totalFiltered || 0;
@@ -232,11 +237,14 @@ Pane {
 
     function loadUnifiedCatalog() {
         console.log("[CloudPlayView] loadUnifiedCatalog()");
+        let billingServer = isCloudBillingServerConfigured();
         let billingActive = isCloudBillingActive();
         let npssoToken = Chiaki.settings ? Chiaki.settings.psnNpssoToken : "";
-        if (!billingActive && (!npssoToken || npssoToken.trim().length === 0)) {
+        if (billingServer && !billingActive) {
+            authErrorMessage = qsTr("Войдите в 4cloud.pro — каталог с сервера доступен, но запуск игр требует аккаунт 4cloud.");
+        } else if (!billingServer && (!npssoToken || npssoToken.trim().length === 0)) {
             authErrorMessage = qsTr("NPSSO token is required for cloud games. Please login and enter a valid NPSSO token. You also need a valid PS Plus subscription.");
-        } else if (billingActive || (npssoToken && npssoToken.trim().length > 0)) {
+        } else if (billingActive || billingServer || (npssoToken && npssoToken.trim().length > 0)) {
             authErrorMessage = "";
         }
 
@@ -1180,6 +1188,15 @@ Pane {
                             }
 
                             let useBilling = root.isCloudBillingActive();
+
+                            if (root.isCloudBillingServerConfigured() && !useBilling) {
+                                Chiaki.error(
+                                    qsTr("4cloud.pro"),
+                                    qsTr("Войдите в аккаунт 4cloud.pro в приложении, затем повторите запуск."),
+                                    10000
+                                );
+                                return;
+                            }
 
                             if (!useBilling) {
                                 launchCloudStream();

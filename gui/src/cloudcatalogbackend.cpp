@@ -207,13 +207,17 @@ QString CloudCatalogBackend::getNpSsoToken()
     return settings->GetNpssoToken();
 }
 
-static bool useBillingCatalogSource(const Settings *settings)
+static bool billingServerConfigured(const Settings *settings)
 {
     if (!settings || !settings->GetCloudBillingEnabled())
         return false;
-    if (settings->GetFourCloudEmail().trimmed().isEmpty())
-        return false;
     return !settings->GetCloudBillingHost().trimmed().isEmpty();
+}
+
+static bool useBillingCatalogSource(const Settings *settings)
+{
+    // Catalog from MySQL does not need the player's 4cloud email — only server host.
+    return billingServerConfigured(settings);
 }
 
 static QJsonObject billingCatalogEnvelope(const QJsonArray &games, const QString &locale)
@@ -507,6 +511,10 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
     const quint64 gen = catalogGeneration;
 
     const bool billingCatalog = useBillingCatalogSource(settings);
+    if (settings && settings->GetCloudBillingEnabled() && !billingCatalog) {
+        CloudLogMessage(QStringLiteral("Catalog"),
+            QStringLiteral("billing catalog skipped: set cloud_billing_host in settings"));
+    }
     const QByteArray npsso = billingCatalog ? QByteArray() : getNpSsoToken().toUtf8();
     const QByteArray locale =
         (settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-US")).toUtf8();
@@ -530,12 +538,12 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("billing catalog fetch started"));
             const qint64 cacheTtlMs = 60 * 60 * 1000;
             if (self) {
-                const QString cached = self->getCachedData(QStringLiteral("billing_catalog_v5"), cacheTtlMs);
+                const QString cached = self->getCachedData(QStringLiteral("billing_catalog_v6"), cacheTtlMs);
                 if (!cached.isEmpty()) {
                     json = cached;
                     success = true;
                     message = QStringLiteral("Cached");
-                    CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("[CACHE HIT] billing_catalog_v5"));
+                    CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("[CACHE HIT] billing_catalog_v6"));
                 }
             }
             if (!success) {
@@ -548,7 +556,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                     success = true;
                     message = QStringLiteral("Success");
                     if (self)
-                        self->setCachedData(QStringLiteral("billing_catalog_v5"), QJsonDocument(root));
+                        self->setCachedData(QStringLiteral("billing_catalog_v6"), QJsonDocument(root));
                     CloudLogMessage(QStringLiteral("Catalog"),
                         QStringLiteral("billing catalog fetch finished: %1 games").arg(games.size()));
                 } else {
@@ -603,7 +611,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             if (self->catalogGeneration != gen) {
                 const QByteArray staleCacheDir = self->cacheDirectory.toUtf8();
                 chiaki_cloudcatalog_invalidate_cache(staleCacheDir.constData());
-                QFile::remove(self->getCacheFilePath(QStringLiteral("billing_catalog_v5")));
+                QFile::remove(self->getCacheFilePath(QStringLiteral("billing_catalog_v6")));
                 qInfo() << "[CACHE] Discarding stale unified fetch (generation"
                         << gen << "!=" << self->catalogGeneration << "); refetching";
                 if (cb.isCallable())
@@ -1091,7 +1099,7 @@ void CloudCatalogBackend::invalidateCache()
     // the client from drifting out of sync when the cache schema/version bumps.
     const QByteArray cacheDir = cacheDirectory.toUtf8();
     chiaki_cloudcatalog_invalidate_cache(cacheDir.constData());
-    QFile::remove(getCacheFilePath(QStringLiteral("billing_catalog_v5")));
+    QFile::remove(getCacheFilePath(QStringLiteral("billing_catalog_v6")));
     qInfo() << "[CACHE INVALIDATED] Delegated cache invalidation to libchiaki for" << cacheDirectory;
     // Tell the cloud view to drop its stale in-memory list and re-fetch (the cache files are gone,
     // so the next fetch is a guaranteed network refresh for the now-current account).

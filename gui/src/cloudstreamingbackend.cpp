@@ -305,6 +305,17 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
     last_game_identifier = gameIdentifier;
     last_game_name = gameName;
 
+    const bool billing_server = settings
+        && settings->GetCloudBillingEnabled()
+        && !settings->GetCloudBillingHost().trimmed().isEmpty();
+    if (billing_server && settings->GetFourCloudEmail().trimmed().isEmpty()) {
+        const QString msg = tr("Войдите в аккаунт 4cloud.pro в приложении — без этого аренда PS-аккаунта и оплата недоступны.");
+        CloudLogMessage(QStringLiteral("Session"), QStringLiteral("billing blocked: fourcloud email missing"));
+        if (callback.isCallable())
+            callback.call({false, msg});
+        return;
+    }
+
     QString npssoToken = settings->GetNpssoTokenForCloudProvision();
     QString billing_error;
     if(runBillingStart(serviceType, gameIdentifier, gameName, &npssoToken, &billing_error)) {
@@ -325,6 +336,10 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
         qInfo() << "Cloud billing: using rented PS account NPSSO";
     } else if (npssoToken.isEmpty()) {
         qWarning() << "NPSSO token is empty - cloud play may not work";
+        if (billing_server && callback.isCallable()) {
+            callback.call({false, tr("Не удалось получить NPSSO арендованного аккаунта. Проверьте вход в 4cloud и биллинг на сервере.")});
+            return;
+        }
     }
 
     // The C provisioning flow runs the NPSSO authorizeCheck itself as its first
