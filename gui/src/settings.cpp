@@ -2498,12 +2498,27 @@ void Settings::SetCloudBillingEnabled(bool enabled)
 
 QString Settings::GetCloudBillingHost() const
 {
-	return settings.value("settings/cloud_billing_host", "").toString().trimmed();
+	return settings.value("settings/cloud_billing_host", "5.183.190.150").toString().trimmed();
+}
+
+void Settings::SetCloudBillingHost(const QString &host)
+{
+	const QString v = host.trimmed();
+	if(settings.value("settings/cloud_billing_host").toString() == v)
+		return;
+	settings.setValue("settings/cloud_billing_host", v);
 }
 
 quint16 Settings::GetCloudBillingPort() const
 {
 	return static_cast<quint16>(settings.value("settings/cloud_billing_port", 13750).toUInt());
+}
+
+void Settings::SetCloudBillingPort(quint16 port)
+{
+	if(settings.value("settings/cloud_billing_port", 13750).toUInt() == port)
+		return;
+	settings.setValue("settings/cloud_billing_port", port);
 }
 
 QString Settings::GetLastSelectedCloudSection() const

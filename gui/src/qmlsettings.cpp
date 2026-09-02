@@ -661,6 +661,49 @@ void QmlSettings::setPsnNpssoTokenSecondary(const QString &npsso_token)
     emit psnNpssoTokenSecondaryChanged();
 }
 
+bool QmlSettings::cloudBillingEnabled() const
+{
+    return settings->GetCloudBillingEnabled();
+}
+
+void QmlSettings::setCloudBillingEnabled(bool enabled)
+{
+    settings->SetCloudBillingEnabled(enabled);
+    emit cloudBillingEnabledChanged();
+}
+
+QString QmlSettings::cloudBillingHost() const
+{
+    return settings->GetCloudBillingHost();
+}
+
+void QmlSettings::setCloudBillingHost(const QString &host)
+{
+    settings->SetCloudBillingHost(host);
+    emit cloudBillingHostChanged();
+}
+
+int QmlSettings::cloudBillingPort() const
+{
+    return settings->GetCloudBillingPort();
+}
+
+void QmlSettings::setCloudBillingPort(int port)
+{
+    settings->SetCloudBillingPort(static_cast<quint16>(port));
+    emit cloudBillingPortChanged();
+}
+
+QString QmlSettings::fourCloudEmail() const
+{
+    return settings->GetFourCloudEmail();
+}
+
+void QmlSettings::refreshFourCloudEmail()
+{
+    emit fourCloudEmailChanged();
+}
+
 QString QmlSettings::cloudStoreLocale() const
 {
     return settings->GetCloudStoreLocale();

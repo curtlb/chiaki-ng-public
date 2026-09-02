@@ -2671,6 +2671,65 @@ DialogView {
                     }
 
                     Label {
+                        Layout.topMargin: 20
+                        text: qsTr("Почасовая оплата (4cloud.pro)")
+                        font.bold: true
+                        font.pixelSize: 14
+                    }
+
+                    C.CheckBox {
+                        text: qsTr("Включить почасовую оплату и аренду PS-аккаунта")
+                        checked: Chiaki.settings.cloudBillingEnabled
+                        onToggled: Chiaki.settings.cloudBillingEnabled = checked
+                    }
+
+                    Label {
+                        wrapMode: Text.Wrap
+                        opacity: 0.85
+                        font.pixelSize: 12
+                        text: Chiaki.settings.fourCloudEmail.length > 0
+                            ? qsTr("Аккаунт 4cloud: %1").arg(Chiaki.settings.fourCloudEmail)
+                            : qsTr("Войдите в 4cloud.pro в приложении — email подставится автоматически.")
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        visible: Chiaki.settings.cloudBillingEnabled
+
+                        Label { text: qsTr("Сервер биллинга:") }
+
+                        C.TextField {
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 220
+                            placeholderText: "5.183.190.150"
+                            text: Chiaki.settings.cloudBillingHost
+                            onEditingFinished: Chiaki.settings.cloudBillingHost = text.trim()
+                        }
+
+                        Label { text: qsTr("UDP:") }
+
+                        C.TextField {
+                            Layout.preferredWidth: 80
+                            text: String(Chiaki.settings.cloudBillingPort)
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            onEditingFinished: {
+                                let p = parseInt(text, 10);
+                                if (!isNaN(p) && p > 0 && p < 65536)
+                                    Chiaki.settings.cloudBillingPort = p;
+                            }
+                        }
+                    }
+
+                    Label {
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
+                        font.pixelSize: 12
+                        visible: Chiaki.settings.cloudBillingEnabled
+                        text: qsTr("Перед запуском игры показывается сумма списания. Оплата с привязанной карты (autobilling). Сохранения на PS-аккаунте — 3 дня.")
+                    }
+
+                    Label {
                         Layout.topMargin: 24
                         text: qsTr("Графика облачного стриминга")
                         font.bold: true

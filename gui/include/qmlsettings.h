@@ -79,6 +79,10 @@ class QmlSettings : public QObject
     Q_PROPERTY(QString psnAccountId READ psnAccountId WRITE setPsnAccountId NOTIFY psnAccountIdChanged)
     Q_PROPERTY(QString psnNpssoToken READ psnNpssoToken WRITE setPsnNpssoToken NOTIFY psnNpssoTokenChanged)
     Q_PROPERTY(QString psnNpssoTokenSecondary READ psnNpssoTokenSecondary WRITE setPsnNpssoTokenSecondary NOTIFY psnNpssoTokenSecondaryChanged)
+    Q_PROPERTY(bool cloudBillingEnabled READ cloudBillingEnabled WRITE setCloudBillingEnabled NOTIFY cloudBillingEnabledChanged)
+    Q_PROPERTY(QString cloudBillingHost READ cloudBillingHost WRITE setCloudBillingHost NOTIFY cloudBillingHostChanged)
+    Q_PROPERTY(int cloudBillingPort READ cloudBillingPort WRITE setCloudBillingPort NOTIFY cloudBillingPortChanged)
+    Q_PROPERTY(QString fourCloudEmail READ fourCloudEmail NOTIFY fourCloudEmailChanged)
     Q_PROPERTY(QString cloudStoreLocale READ cloudStoreLocale WRITE setCloudStoreLocale NOTIFY cloudStoreLocaleChanged)
     Q_PROPERTY(QString cloudResolvedStoreCountry READ cloudResolvedStoreCountry WRITE setCloudResolvedStoreCountry NOTIFY cloudResolvedStoreCountryChanged)
     Q_PROPERTY(bool cloudCatalogNativeMode READ cloudCatalogNativeMode WRITE setCloudCatalogNativeMode NOTIFY cloudCatalogNativeModeChanged)
@@ -518,6 +522,15 @@ public:
     QString psnNpssoTokenSecondary() const;
     void setPsnNpssoTokenSecondary(const QString &npsso_token);
 
+    bool cloudBillingEnabled() const;
+    void setCloudBillingEnabled(bool enabled);
+    QString cloudBillingHost() const;
+    void setCloudBillingHost(const QString &host);
+    int cloudBillingPort() const;
+    void setCloudBillingPort(int port);
+    QString fourCloudEmail() const;
+    void refreshFourCloudEmail();
+
     QString cloudStoreLocale() const;
     void setCloudStoreLocale(const QString &locale);
 
@@ -683,6 +696,10 @@ signals:
     void psnAccountIdChanged();
     void psnNpssoTokenChanged();
     void psnNpssoTokenSecondaryChanged();
+    void cloudBillingEnabledChanged();
+    void cloudBillingHostChanged();
+    void cloudBillingPortChanged();
+    void fourCloudEmailChanged();
     void cloudStoreLocaleChanged();
     void cloudResolvedStoreCountryChanged();
     void cloudCatalogNativeModeChanged();

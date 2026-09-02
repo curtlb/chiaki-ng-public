@@ -401,7 +401,9 @@ class Settings : public QObject
 	bool GetCloudBillingEnabled() const;
 	void SetCloudBillingEnabled(bool enabled);
 	QString GetCloudBillingHost() const;
+	void SetCloudBillingHost(const QString &host);
 	quint16 GetCloudBillingPort() const;
+	void SetCloudBillingPort(quint16 port);
 
 	// PSCloud / PSNOW cloud streaming settings
 	int GetCloudResolutionPSCloud() const;
