@@ -5,7 +5,7 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ---------------------------------------------------------------------------
--- Users (4cloud email; payment method lives in existing `autobilling` table)
+-- Users (4cloud email)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS CloudStreaming_Users (
     ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -21,10 +21,83 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
+-- Cloud gaming payment credentials (separate from console rental `autobilling`)
+-- Robokassa recurring parent invoice (StartPaymentID) for hourly charges only.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS CloudStreaming_PaymentMethods (
+    ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    UserID          BIGINT UNSIGNED NOT NULL,
+    Email           VARCHAR(255) NOT NULL COMMENT '4cloud email',
+    StartPaymentID  VARCHAR(64) NOT NULL COMMENT 'Robokassa recurring parent invoice',
+    Status          ENUM('active','disabled') NOT NULL DEFAULT 'active',
+    CreatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UpdatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (ID),
+    UNIQUE KEY uq_cs_pay_user (UserID),
+    UNIQUE KEY uq_cs_pay_email (Email),
+    CONSTRAINT fk_cs_pay_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- Synced Sony catalog (filled hourly by catalog_sync_service.py)
+-- Pick CatalogID when linking games to rental accounts.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS CloudStreaming_Catalog (
+    ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    CatalogKey      VARCHAR(200) NOT NULL COMMENT 'service:stream_id',
+    Name            VARCHAR(512) NOT NULL COMMENT 'human-readable title (use in phpMyAdmin FK display)',
+    PickerLabel     VARCHAR(720) GENERATED ALWAYS AS (
+                        CONCAT(
+                            Name,
+                            ' [', ServiceType, '] ',
+                            CASE
+                                WHEN LOCATE('CUSA', COALESCE(ProductId, StreamIdentifier, '')) > 0 THEN
+                                    CONCAT('CUSA', SUBSTRING_INDEX(SUBSTRING_INDEX(COALESCE(ProductId, StreamIdentifier), 'CUSA', -1), '_', 1))
+                                WHEN LOCATE('PPSA', COALESCE(ProductId, StreamIdentifier, '')) > 0 THEN
+                                    CONCAT('PPSA', SUBSTRING_INDEX(SUBSTRING_INDEX(COALESCE(ProductId, StreamIdentifier), 'PPSA', -1), '_', 1))
+                                ELSE LEFT(COALESCE(ProductId, StreamIdentifier, ''), 16)
+                            END,
+                            ' • ',
+                            CASE
+                                WHEN LEFT(COALESCE(ProductId, StreamIdentifier, ''), 2) IN ('EP', 'EE', 'EC') THEN 'EU'
+                                WHEN LEFT(COALESCE(ProductId, StreamIdentifier, ''), 2) = 'UP' THEN 'US'
+                                WHEN LOCATE('CUSA', COALESCE(ProductId, StreamIdentifier, '')) > 0 THEN 'US'
+                                WHEN LOCATE('PPSA', COALESCE(ProductId, StreamIdentifier, '')) > 0
+                                     AND LEFT(COALESCE(ProductId, StreamIdentifier, ''), 2) = 'UP' THEN 'US'
+                                WHEN LOCATE('PPSA', COALESCE(ProductId, StreamIdentifier, '')) > 0 THEN 'EU'
+                                ELSE '?'
+                            END
+                        )
+                    ) STORED COMMENT 'phpMyAdmin FK: Name + CUSA/PPSA + region hint',
+    ServiceType     ENUM('psnow','pscloud') NOT NULL,
+    Platform        ENUM('ps3','ps4','ps5','unknown') NOT NULL DEFAULT 'unknown',
+    ProductId       VARCHAR(128) NULL,
+    EntitlementId   VARCHAR(128) NULL,
+    StreamIdentifier VARCHAR(128) NOT NULL COMMENT 'ID sent by chiaki-ng as game_identifier',
+    ConceptId       VARCHAR(64) NULL,
+    ImageUrl        VARCHAR(1024) NULL,
+    Category        VARCHAR(32) NOT NULL DEFAULT 'streamable',
+    SourceList      VARCHAR(64) NULL,
+    Locale          VARCHAR(16) NULL,
+    IsVisible       TINYINT(1) NOT NULL DEFAULT 1,
+    FirstSeenAt     DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    LastSyncedAt    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (ID),
+    UNIQUE KEY uq_cs_catalog_key (CatalogKey),
+    KEY idx_cs_catalog_name (Name(191)),
+    KEY idx_cs_catalog_picker (PickerLabel(191)),
+    KEY idx_cs_catalog_service (ServiceType, Platform),
+    KEY idx_cs_catalog_stream (StreamIdentifier),
+    KEY idx_cs_catalog_product (ProductId),
+    KEY idx_cs_catalog_entitlement (EntitlementId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
 -- Game catalog (hourly price per title)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS CloudStreaming_Games (
     ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    CatalogID       BIGINT UNSIGNED NULL COMMENT 'link to synced catalog row',
     Code            VARCHAR(64) NOT NULL,
     Name            VARCHAR(255) NOT NULL,
     ServiceType     ENUM('pscloud','psnow') NOT NULL,
@@ -36,7 +109,9 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Games (
     CreatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (ID),
     UNIQUE KEY uq_cs_game_service_id (ServiceType, GameIdentifier),
-    KEY idx_cs_game_code (Code)
+    KEY idx_cs_game_code (Code),
+    KEY idx_cs_game_catalog (CatalogID),
+    CONSTRAINT fk_cs_game_catalog FOREIGN KEY (CatalogID) REFERENCES CloudStreaming_Catalog(ID) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -58,17 +133,18 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Accounts (
     KEY idx_cs_acc_pool (Status, HasPsPlus, Region)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Owned games on a PS account (optional; PS Plus uses HasPsPlus flag)
+-- Owned / purchased titles on a rental PS account (pick CatalogID from CloudStreaming_Catalog)
 CREATE TABLE IF NOT EXISTS CloudStreaming_AccountOwnedGames (
     ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     AccountID       BIGINT UNSIGNED NOT NULL,
-    GameID          BIGINT UNSIGNED NOT NULL,
-    EntitlementID   VARCHAR(128) NULL,
+    CatalogID       BIGINT UNSIGNED NOT NULL COMMENT 'FK CloudStreaming_Catalog — pick from v_cs_catalog_picker',
+    GameID          BIGINT UNSIGNED NULL COMMENT 'optional; links CloudStreaming_Games (billing price). NULL = auto on first play',
     CreatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (ID),
-    UNIQUE KEY uq_cs_aog (AccountID, GameID),
+    UNIQUE KEY uq_cs_aog (AccountID, CatalogID),
     CONSTRAINT fk_cs_aog_account FOREIGN KEY (AccountID) REFERENCES CloudStreaming_Accounts(ID) ON DELETE CASCADE,
-    CONSTRAINT fk_cs_aog_game FOREIGN KEY (GameID) REFERENCES CloudStreaming_Games(ID) ON DELETE CASCADE
+    CONSTRAINT fk_cs_aog_catalog FOREIGN KEY (CatalogID) REFERENCES CloudStreaming_Catalog(ID) ON DELETE CASCADE,
+    CONSTRAINT fk_cs_aog_game FOREIGN KEY (GameID) REFERENCES CloudStreaming_Games(ID) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -169,6 +245,61 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Charges (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- Admin picker: games available to assign to rental accounts
+CREATE OR REPLACE VIEW v_cs_catalog_picker AS
+SELECT
+    c.ID AS CatalogID,
+    c.PickerLabel,
+    c.Name,
+    c.ServiceType,
+    c.Platform,
+    c.ProductId,
+    c.EntitlementId,
+    c.StreamIdentifier,
+    c.Category,
+    c.LastSyncedAt
+FROM CloudStreaming_Catalog c
+WHERE c.IsVisible = 1
+ORDER BY c.Name;
+
+-- Assignments with human-readable account + game names (use this in phpMyAdmin browse)
+CREATE OR REPLACE VIEW v_cs_account_owned_games AS
+SELECT
+    aog.ID,
+    aog.AccountID,
+    a.Label AS AccountLabel,
+    aog.CatalogID,
+    c.Name AS GameName,
+    c.ServiceType,
+    c.Platform,
+    c.StreamIdentifier,
+    c.EntitlementId,
+    aog.GameID,
+    g.Name AS BillingGameName,
+    g.HourlyPrice,
+    aog.CreatedAt
+FROM CloudStreaming_AccountOwnedGames aog
+JOIN CloudStreaming_Accounts a ON a.ID = aog.AccountID
+JOIN CloudStreaming_Catalog c ON c.ID = aog.CatalogID
+LEFT JOIN CloudStreaming_Games g ON g.ID = aog.GameID
+ORDER BY a.Label, c.Name;
+
+-- Billing games picker (GameID is optional; table fills on first client play or manual insert)
+CREATE OR REPLACE VIEW v_cs_games_picker AS
+SELECT
+    g.ID AS GameID,
+    g.Code,
+    g.Name,
+    g.ServiceType,
+    g.GameIdentifier,
+    g.HourlyPrice,
+    g.Currency,
+    g.IsActive,
+    c.Name AS CatalogName
+FROM CloudStreaming_Games g
+LEFT JOIN CloudStreaming_Catalog c ON c.ID = g.CatalogID
+ORDER BY g.Name;
 
 -- Example seed (adjust identifiers to your catalog):
 -- INSERT INTO CloudStreaming_Games (Code, Name, ServiceType, GameIdentifier, AccessType, HourlyPrice)

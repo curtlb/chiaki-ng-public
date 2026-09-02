@@ -39,3 +39,7 @@ chiaki.conf
 .cache/
 *.vscode
 site/
+
+__pycache__/
+*.pyc
+

@@ -7,8 +7,12 @@ UDP billing service for chiaki-ng cloud play. Clients connect to **VM IP:13750**
 ```
 chiaki-ng  --UDP:13750-->  cloud_billing_udp_server.py  --MySQL-->  your_database
                                     |
-                                    +--> Robokassa Recurring (autobilling.StartPaymentID)
+                                    +--> Robokassa Recurring (CloudStreaming_PaymentMethods.StartPaymentID)
+
+cloud_catalog_sync (separate pm2)  --hourly-->  CloudStreaming_Catalog (same MySQL)
 ```
+
+Catalog sync is a **separate service**: `../cloud_catalog_sync/` — see its `DEPLOY.md`.
 
 ## 1. MySQL
 
@@ -18,9 +22,30 @@ mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < schema.sql
 mysql ... < seed_example.sql
 ```
 
-Tables: `CloudStreaming_Users`, `CloudStreaming_Games`, `CloudStreaming_Accounts`, `CloudStreaming_Leases`, `CloudStreaming_Sessions`, `CloudStreaming_Charges`.
+Tables: `CloudStreaming_Catalog` (filled by `../cloud_catalog_sync`), `CloudStreaming_Users`, ...
 
-Users must exist in `autobilling` with valid `StartPaymentID` for recurring charges.
+Fresh install:
+
+```bash
+mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < schema.sql
+```
+
+Existing database (already has old `CloudStreaming_*` tables):
+
+```bash
+mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < migrate_catalog.sql
+```
+
+Users need a row in **`CloudStreaming_PaymentMethods`** with `StartPaymentID` (Robokassa parent invoice for **cloud gaming only**). This is **not** the console rental `autobilling` table.
+
+```sql
+-- After user exists in CloudStreaming_Users:
+INSERT INTO CloudStreaming_PaymentMethods (UserID, Email, StartPaymentID)
+SELECT u.ID, u.User, 'PARENT_INVOICE_FROM_ROBOKASSA'
+FROM CloudStreaming_Users u
+WHERE u.User = 'user@example.com'
+LIMIT 1;
+```
 
 ## 2. VM setup (5.183.190.150)
 
@@ -47,8 +72,16 @@ Edit `.env` (created from `.env.example`):
 Restart after editing:
 
 ```bash
-pm2 restart cloud-billing-udp
+pm2 restart cloud-billing-udp --update-env
 pm2 logs cloud-billing-udp
+```
+
+## 2b. Catalog sync (separate pm2, same VM)
+
+```bash
+cd ../cloud_catalog_sync
+chmod +x install.sh && ./install.sh
+pm2 logs cloud-catalog-sync
 ```
 
 ## 3. Firewall
@@ -66,7 +99,7 @@ echo '{"id":"test","action":"ping"}' | nc -u -w2 5.183.190.150 13750
 
 Expected JSON: `{"id":"test","ok":true,"message":"pong",...}`
 
-## 4. Add PS accounts
+## 4. Add PS accounts and games
 
 For each rental account:
 
@@ -75,7 +108,26 @@ INSERT INTO CloudStreaming_Accounts (Label, NPSSO, HasPsPlus, Region, Status)
 VALUES ('ps-rent-02', '<NPSSO>', 1, 'PL', 'available');
 ```
 
-Register games in `CloudStreaming_Games` and link owned titles via `CloudStreaming_AccountOwnedGames`.
+**PS Plus / PSNOW** — `HasPsPlus = 1` is enough; catalog link not required.
+
+**Purchased PS5 cloud games** — pick from synced catalog:
+
+```sql
+-- list titles
+SELECT CatalogID, Name, ServiceType, StreamIdentifier
+FROM v_cs_catalog_picker
+WHERE Name LIKE '%Game Name%'
+LIMIT 20;
+
+-- assign to account
+INSERT INTO CloudStreaming_AccountOwnedGames (AccountID, CatalogID)
+VALUES (
+  (SELECT ID FROM CloudStreaming_Accounts WHERE Label = 'ps-rent-02'),
+  12345   -- CatalogID from picker
+);
+```
+
+Pre-orders not in Sony catalog yet: wait for hourly sync in `cloud-catalog-sync` (set `CS_CATALOG_NPSSO` in `../cloud_catalog_sync/.env`).
 
 ## 5. chiaki-ng client
 

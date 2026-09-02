@@ -30,12 +30,37 @@ import time
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+BASE_DIR = Path(__file__).resolve().parent
+ENV_FILE = Path(os.environ.get("CS_ENV_FILE", str(BASE_DIR / ".env")))
+
+
+def load_env_file():
+    """Load .env from the script directory (pm2 env_file is not reliable)."""
+    if not ENV_FILE.is_file():
+        log_pre = logging.getLogger("cloud_billing_udp")
+        log_pre.warning("Env file not found: %s", ENV_FILE)
+        return False
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(ENV_FILE, override=False)
+        return True
+    except ImportError:
+        # Minimal parser if python-dotenv is missing
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key, val = key.strip(), val.strip().strip("'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+        return True
+
+
+load_env_file()
 
 try:
     import pymysql
@@ -53,7 +78,11 @@ except ImportError:
 def require_env(name):
     value = os.environ.get(name, "").strip()
     if not value:
-        print("Missing required environment variable: %s" % name, file=sys.stderr)
+        print(
+            "Missing required environment variable: %s (check %s)"
+            % (name, ENV_FILE),
+            file=sys.stderr,
+        )
         sys.exit(2)
     return value
 
@@ -119,13 +148,23 @@ def reply(req_id, ok, **kwargs):
     return out
 
 
-def get_autobilling(conn, email):
+def get_payment_method(conn, email):
+    """Cloud gaming card — NOT the console rental autobilling table."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT ID, Email, StartPaymentID FROM autobilling WHERE Email = %s LIMIT 1",
-            (email,),
+            "SELECT pm.ID, pm.UserID, pm.Email, pm.StartPaymentID, pm.Status "
+            "FROM CloudStreaming_PaymentMethods pm "
+            "WHERE pm.Email = %s AND pm.Status = 'active' LIMIT 1",
+            (email.strip().lower(),),
         )
         return cur.fetchone()
+
+
+PAYMENT_SETUP_MSG = (
+    "Для облачного гейминга нужна отдельная привязка карты. "
+    "Оформите автоплатёж для cloud gaming в личном кабинете 4cloud.pro "
+    "(не путать с арендой консоли)."
+)
 
 
 def ensure_user(conn, email):
@@ -142,6 +181,20 @@ def ensure_user(conn, email):
         return cur.fetchone()
 
 
+def find_catalog_match(conn, service_type, game_identifier):
+    st = service_type.lower().strip()
+    gid = game_identifier.strip()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Catalog "
+            "WHERE ServiceType = %s AND IsVisible = 1 AND ("
+            "StreamIdentifier = %s OR ProductId = %s OR EntitlementId = %s"
+            ") LIMIT 1",
+            (st, gid, gid, gid),
+        )
+        return cur.fetchone()
+
+
 def ensure_game(conn, service_type, game_identifier, game_name=None):
     st = service_type.lower().strip()
     gid = game_identifier.strip()
@@ -154,13 +207,16 @@ def ensure_game(conn, service_type, game_identifier, game_name=None):
         row = cur.fetchone()
         if row:
             return row
-        code = re.sub(r"[^a-zA-Z0-9_]+", "_", (game_name or gid))[:60].lower()
+        catalog = find_catalog_match(conn, st, gid)
+        code = re.sub(r"[^a-zA-Z0-9_]+", "_", (game_name or (catalog or {}).get("Name") or gid))[:60].lower()
         access = "ps_plus" if st == "psnow" else "owned_only"
+        display_name = game_name or (catalog or {}).get("Name") or gid
+        catalog_id = catalog["ID"] if catalog else None
         cur.execute(
             "INSERT INTO CloudStreaming_Games "
-            "(Code, Name, ServiceType, GameIdentifier, AccessType, HourlyPrice) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (code, game_name or gid, st, gid, access, DEFAULT_HOURLY),
+            "(CatalogID, Code, Name, ServiceType, GameIdentifier, AccessType, HourlyPrice) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (catalog_id, code, display_name, st, gid, access, DEFAULT_HOURLY),
         )
         cur.execute(
             "SELECT * FROM CloudStreaming_Games "
@@ -170,20 +226,45 @@ def ensure_game(conn, service_type, game_identifier, game_name=None):
         return cur.fetchone()
 
 
+def account_owns_game(conn, account_id, service_type, game_identifier, game_id=None):
+    st = service_type.lower().strip()
+    gid = game_identifier.strip()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM CloudStreaming_AccountOwnedGames aog "
+            "JOIN CloudStreaming_Catalog c ON c.ID = aog.CatalogID "
+            "WHERE aog.AccountID = %s AND c.ServiceType = %s AND ("
+            "c.StreamIdentifier = %s OR c.ProductId = %s OR c.EntitlementId = %s"
+            ") LIMIT 1",
+            (account_id, st, gid, gid, gid),
+        )
+        if cur.fetchone():
+            return True
+        if game_id:
+            cur.execute(
+                "SELECT 1 FROM CloudStreaming_AccountOwnedGames "
+                "WHERE AccountID = %s AND GameID = %s LIMIT 1",
+                (account_id, game_id),
+            )
+            if cur.fetchone():
+                return True
+    return False
+
+
 def account_can_play_game(conn, account, game):
     access = game.get("AccessType")
     if game["ServiceType"] == "psnow" or access == "ps_plus":
         if int(account.get("HasPsPlus") or 0):
             return True
     if access in ("owned_only", "both"):
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM CloudStreaming_AccountOwnedGames "
-                "WHERE AccountID = %s AND GameID = %s LIMIT 1",
-                (account["ID"], game["ID"]),
-            )
-            if cur.fetchone():
-                return True
+        if account_owns_game(
+            conn,
+            account["ID"],
+            game["ServiceType"],
+            game["GameIdentifier"],
+            game.get("ID"),
+        ):
+            return True
     if int(account.get("HasPsPlus") or 0) and game.get("AccessType") in ("ps_plus", "both"):
         return True
     return False
@@ -327,9 +408,9 @@ def wait_paid(invoice_id, email=""):
 
 
 def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, idem_key):
-    ab = get_autobilling(conn, email)
-    if not ab or not ab.get("StartPaymentID"):
-        return False, "Нет привязанной карты для безакцептных списаний. Оформите автоплатёж в личном кабинете 4cloud.pro."
+    pm = get_payment_method(conn, email)
+    if not pm or not pm.get("StartPaymentID"):
+        return False, PAYMENT_SETUP_MSG
 
     with conn.cursor() as cur:
         cur.execute(
@@ -348,7 +429,7 @@ def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, i
             if ch and ch["Status"] == "failed":
                 return False, ch.get("ErrorMessage") or "Предыдущая оплата не прошла"
 
-    result = robokassa_charge(email, ab["StartPaymentID"], amount, game_name)
+    result = robokassa_charge(email, pm["StartPaymentID"], amount, game_name)
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO CloudStreaming_Charges "
@@ -461,13 +542,13 @@ def handle_quote(conn, req):
     if not game_identifier:
         return reply(req_id, False, error="Не указана игра")
 
-    ab = get_autobilling(conn, email)
+    ab = get_payment_method(conn, email)
     if not ab or not ab.get("StartPaymentID"):
         return reply(
             req_id,
             False,
-            error="Для облачного гейминга нужна привязанная карта (автоплатёж) в личном кабинете 4cloud.pro.",
-            ui_message="Сначала привяжите карту для безакцептных списаний.",
+            error=PAYMENT_SETUP_MSG,
+            ui_message="Сначала привяжите карту для почасовой оплаты облачных игр.",
         )
 
     user = ensure_user(conn, email)
@@ -906,8 +987,10 @@ def auto_renew_job():
 
 
 def init_config():
-    """Load required secrets from environment (or .env on the server)."""
-    global DB_NAME, DB_USER, DB_PASS, MRH_LOGIN, PASS1, PASS2
+    """Load required secrets from environment (or .env next to this script)."""
+    global DB_HOST, DB_NAME, DB_USER, DB_PASS, MRH_LOGIN, PASS1, PASS2
+    load_env_file()
+    DB_HOST = os.environ.get("CS_DB_HOST", "127.0.0.1").strip() or "127.0.0.1"
     DB_NAME = require_env("CS_DB_NAME")
     DB_USER = require_env("CS_DB_USER")
     DB_PASS = require_env("CS_DB_PASS")

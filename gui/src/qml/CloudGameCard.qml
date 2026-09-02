@@ -17,13 +17,13 @@ Rectangle {
     property bool isPsnow: isPsnowGame()
     property string cachedImageUrl: ""
     property var qrCodeDialog: null // Reference to QR code dialog
-    // In the modern PS Plus catalog (imagic; isPsnow=false) a game you don't own can't be streamed
-    // until it's added to your library: Gaikai rejects an unowned PS5 entitlement, and the legacy
-    // Kamaji $0-acquire only works for the old PS Now free-SKU titles, not modern Extra/Premium ones
-    // (e.g. Far Cry 5's streaming SKU is paid, so the acquire 500s). So ANY non-owned catalog game
-    // shows "Add Game" (QR to the store / Add-to-Library); owned games stream directly. Legacy
-    // PS Now browse cards (isPsnow) keep one-click Stream — free streaming is the PS Now model.
+    // With 4cloud hourly billing, PS5 cloud titles marked "purchaseable" in the user's
+    // catalog are played via a rented PS account NPSSO after payment — not the user's library.
+    readonly property bool cloudBillingRental: Chiaki.settings.cloudBillingEnabled
+        && (Chiaki.settings.fourCloudEmail || "").length > 0
+        && (Chiaki.settings.cloudBillingHost || "").length > 0
     readonly property bool needsAddToLibrary: gameData && gameData.category === "purchaseable"
+        && !cloudBillingRental
     property bool isFavorite: false // Whether this game is favorited
     
     // Steam library shortcut: shown when a Steam install is detected on this device (steam-shortcut build only)

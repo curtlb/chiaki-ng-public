@@ -9,7 +9,6 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "256M",
-      env_file: ".env",
       env: {
         CS_BILLING_UDP_HOST: "0.0.0.0",
         CS_BILLING_UDP_PORT: "13750",

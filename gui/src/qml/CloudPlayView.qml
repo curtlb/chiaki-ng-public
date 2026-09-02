@@ -184,7 +184,11 @@ Pane {
     }
 
     function isPlayableNow(game) {
-        return game && game.category !== "purchaseable";
+        if (!game) return false;
+        if (game.category !== "purchaseable") return true;
+        return Chiaki.settings.cloudBillingEnabled
+            && (Chiaki.settings.fourCloudEmail || "").length > 0
+            && (Chiaki.settings.cloudBillingHost || "").length > 0;
     }
 
     function sortGames(games) {
