@@ -290,7 +290,7 @@ static QString pickImageUrl(const QJsonObject &g, const QString &locale = QStrin
     return QString();
 }
 
-static QString rowLookupKey(const CloudCatalogBackend::CatalogDisplayRow &row)
+QString CloudCatalogBackend::rowLookupKey(const CatalogDisplayRow &row)
 {
     if (!row.streamIdentifier.isEmpty())
         return row.streamIdentifier;
@@ -405,7 +405,7 @@ static bool isLegacyClassicStreamId(const QString &pid)
         && !title.startsWith(QLatin1String("PPSA"), Qt::CaseInsensitive);
 }
 
-static bool isBillingRentalPlayableRow(const CatalogDisplayRow &row)
+bool CloudCatalogBackend::isBillingRentalPlayableRow(const CatalogDisplayRow &row)
 {
     if (row.category == QLatin1String("owned"))
         return true;
@@ -776,7 +776,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             if (success)
                 root = QJsonDocument::fromJson(json.toUtf8()).object();
             if (success) {
-                self->catalogDisplayRows_ = buildCatalogDisplayRows(root.value(QStringLiteral("games")).toArray());
+                self->catalogDisplayRows_ = self->buildCatalogDisplayRows(root.value(QStringLiteral("games")).toArray());
                 self->catalogTotalGames_ = self->catalogDisplayRows_.size();
             } else {
                 self->catalogDisplayRows_.clear();

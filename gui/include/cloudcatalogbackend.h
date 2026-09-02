@@ -159,7 +159,9 @@ private:
     };
     static CatalogDisplayRow catalogRowFromJson(const QJsonObject &g, const QString &storeLocale = QStringLiteral("en-GB"));
     static QVariantMap catalogRowToVariant(const CatalogDisplayRow &row);
-    static QVector<CatalogDisplayRow> buildCatalogDisplayRows(const QJsonArray &games);
+    QVector<CatalogDisplayRow> buildCatalogDisplayRows(const QJsonArray &games);
+    static QString rowLookupKey(const CatalogDisplayRow &row);
+    static bool isBillingRentalPlayableRow(const CatalogDisplayRow &row);
     QVector<CatalogDisplayRow> catalogDisplayRows_;
     int catalogTotalGames_ = 0;
 
