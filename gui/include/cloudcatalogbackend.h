@@ -162,6 +162,8 @@ private:
     QVector<CatalogDisplayRow> buildCatalogDisplayRows(const QJsonArray &games);
     static QString rowLookupKey(const CatalogDisplayRow &row);
     static bool isBillingRentalPlayableRow(const CatalogDisplayRow &row);
+    static QString billingCatalogCacheKey();
+    void purgeStaleBillingCatalogCaches();
     QVector<CatalogDisplayRow> catalogDisplayRows_;
     int catalogTotalGames_ = 0;
 

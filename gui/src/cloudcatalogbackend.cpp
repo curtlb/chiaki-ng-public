@@ -433,10 +433,8 @@ bool CloudCatalogBackend::isBillingRentalPlayableRow(const CatalogDisplayRow &ro
     return true;
 }
 
-static void purgeStaleBillingCatalogCaches(CloudCatalogBackend *self)
+void CloudCatalogBackend::purgeStaleBillingCatalogCaches()
 {
-    if (!self)
-        return;
     const QStringList stale = {
         QStringLiteral("billing_catalog_v6"),
         QStringLiteral("billing_catalog_v7"),
@@ -446,10 +444,10 @@ static void purgeStaleBillingCatalogCaches(CloudCatalogBackend *self)
         QStringLiteral("billing_catalog_v11"),
     };
     for (const QString &key : stale)
-        QFile::remove(self->getCacheFilePath(key));
+        QFile::remove(getCacheFilePath(key));
 }
 
-static const QString billingCatalogCacheKey()
+QString CloudCatalogBackend::billingCatalogCacheKey()
 {
     return QStringLiteral("billing_catalog_v12");
 }
@@ -673,7 +671,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
         if (billingCatalog) {
             CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("billing catalog fetch started"));
             if (self)
-                purgeStaleBillingCatalogCaches(self.data());
+                self->purgeStaleBillingCatalogCaches();
             const qint64 cacheTtlMs = 60 * 60 * 1000;
             const QString cacheKey = billingCatalogCacheKey();
             if (self) {
@@ -1239,7 +1237,7 @@ void CloudCatalogBackend::invalidateCache()
     // the client from drifting out of sync when the cache schema/version bumps.
     const QByteArray cacheDir = cacheDirectory.toUtf8();
     chiaki_cloudcatalog_invalidate_cache(cacheDir.constData());
-    purgeStaleBillingCatalogCaches(this);
+    purgeStaleBillingCatalogCaches();
     QFile::remove(getCacheFilePath(billingCatalogCacheKey()));
     qInfo() << "[CACHE INVALIDATED] Delegated cache invalidation to libchiaki for" << cacheDirectory;
     // Tell the cloud view to drop its stale in-memory list and re-fetch (the cache files are gone,
