@@ -33,8 +33,20 @@ mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < schema.sql
 Existing database (already has old `CloudStreaming_*` tables):
 
 ```bash
-mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < migrate_catalog.sql
+mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < migrate_catalog_v2.sql
 ```
+
+Use **`migrate_catalog_v2.sql`** (not `migrate_catalog.sql`) if phpMyAdmin reports **#1022 duplicate key** on `CloudStreaming_AccountOwnedGames_new` — the old script reused FK names already taken by the live table.
+
+If a previous attempt failed halfway:
+
+```sql
+SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS CloudStreaming_AccountOwnedGames_new;
+SET FOREIGN_KEY_CHECKS = 1;
+```
+
+Then run `migrate_catalog_v2.sql` again.
 
 Users need a row in **`CloudStreaming_PaymentMethods`** with `StartPaymentID` (Robokassa parent invoice for **cloud gaming only**). This is **not** the console rental `autobilling` table.
 
