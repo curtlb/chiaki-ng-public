@@ -241,6 +241,63 @@ const char *cc_stable_key(const char *product_id, char *out, size_t out_sz)
 	return out;
 }
 
+static const char *game_display_name(struct json_object *g)
+{
+	const char *n = cc_json_str(g, "name");
+	if(*n)
+		return n;
+	struct json_object *gm = cc_json_obj(g, "game_meta");
+	if(gm)
+	{
+		n = cc_json_str(gm, "name");
+		if(*n)
+			return n;
+	}
+	return "";
+}
+
+// Lowercase alphanumeric title key for cross-service dedup (PS Now vs PS5 cloud).
+static void catalog_title_key(struct json_object *g, char *out, size_t out_sz)
+{
+	char buf[256];
+	snprintf(buf, sizeof(buf), "%s", game_display_name(g));
+	size_t j = 0;
+	for(const char *p = buf; *p && j + 1 < out_sz; p++)
+	{
+		unsigned char c = (unsigned char)*p;
+		if(c >= 'A' && c <= 'Z')
+			c = (unsigned char)tolower(c);
+		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+			out[j++] = (char)c;
+	}
+	out[j] = 0;
+}
+
+static bool ps5_browse_has_product(struct json_object *ps5_browse, const char *pid)
+{
+	if(!pid || !*pid)
+		return false;
+	size_t n = json_object_array_length(ps5_browse);
+	for(size_t i = 0; i < n; i++)
+	{
+		struct json_object *row = json_object_array_get_idx(ps5_browse, i);
+		if(!strcmp(game_product_id(row), pid))
+			return true;
+	}
+	return false;
+}
+
+static void ps5_browse_add(struct json_object *ps5_browse, struct json_object *src, bool force_plus)
+{
+	struct json_object *g = cc_json_clone(src);
+	const char *existing = cc_json_str(g, "serviceType");
+	if(!cc_ieq(existing, "psnow") && !cc_ieq(existing, "pscloud"))
+		cc_json_set_str(g, "serviceType", "pscloud");
+	if(force_plus || cc_json_bool(src, "plusCatalog"))
+		cc_json_set_bool(g, "plusCatalog", true);
+	json_object_array_add(ps5_browse, g);
+}
+
 static const char *stream_service_type(struct json_object *g)
 {
 	const char *st = cc_json_str(g, "serviceType");
@@ -1345,11 +1402,7 @@ struct json_object *cc_assemble_unified_catalog(ChiakiLog *log, const CCAssemble
 				continue;
 			if(set_has(apollo_pids, game_product_id(v)))
 				continue;
-			struct json_object *g = cc_json_clone(v);
-			const char *existing = cc_json_str(g, "serviceType");
-			if(!cc_ieq(existing, "psnow") && !cc_ieq(existing, "pscloud"))
-				cc_json_set_str(g, "serviceType", "pscloud");
-			json_object_array_add(ps5_browse, g);
+			ps5_browse_add(ps5_browse, v, false);
 		}
 	}
 	// Plus-library supplement (plus-games-list rows without streamingSupported) must still
@@ -1362,19 +1415,26 @@ struct json_object *cc_assemble_unified_catalog(ChiakiLog *log, const CCAssemble
 			struct json_object *v = json_object_array_get_idx(in->imagic_supplement, i);
 			if(!v || !is_ps5_platform(v))
 				continue;
-			if(!cc_json_bool(v, "plusCatalog"))
-				continue;
 			const char *pid = game_product_id(v);
-			if(*pid && set_has(apollo_pids, pid))
+			if(*pid && (set_has(apollo_pids, pid) || ps5_browse_has_product(ps5_browse, pid)))
 				continue;
-			struct json_object *g = cc_json_clone(v);
-			cc_json_set_str(g, "serviceType", "pscloud");
-			cc_json_set_bool(g, "plusCatalog", true);
-			json_object_array_add(ps5_browse, g);
+			ps5_browse_add(ps5_browse, v, cc_json_bool(v, "plusCatalog"));
 		}
 	}
 
-	// 3. universe = apollo + ps5Browse
+	struct json_object *psnow_title_keys = json_object_new_object();
+	{
+		size_t n = json_object_array_length(apollo_norm);
+		for(size_t i = 0; i < n; i++)
+		{
+			char tk[128];
+			catalog_title_key(json_object_array_get_idx(apollo_norm, i), tk, sizeof(tk));
+			if(*tk)
+				set_add(psnow_title_keys, tk);
+		}
+	}
+
+	// 3. universe = full PS Now catalog + PS5 cloud rows without a PS Now sibling title.
 	struct json_object *universe = json_object_new_array();
 	{
 		size_t n = json_object_array_length(apollo_norm);
@@ -1382,8 +1442,16 @@ struct json_object *cc_assemble_unified_catalog(ChiakiLog *log, const CCAssemble
 			json_object_array_add(universe, cc_json_clone(json_object_array_get_idx(apollo_norm, i)));
 		n = json_object_array_length(ps5_browse);
 		for(size_t i = 0; i < n; i++)
-			json_object_array_add(universe, cc_json_clone(json_object_array_get_idx(ps5_browse, i)));
+		{
+			struct json_object *g = json_object_array_get_idx(ps5_browse, i);
+			char tk[128];
+			catalog_title_key(g, tk, sizeof(tk));
+			if(*tk && set_has(psnow_title_keys, tk))
+				continue;
+			json_object_array_add(universe, cc_json_clone(g));
+		}
 	}
+	json_object_put(psnow_title_keys);
 
 	// 4. merge owned
 	struct json_object *games = merge_owned_into_browse(universe, in->owned_cross_ref, true);

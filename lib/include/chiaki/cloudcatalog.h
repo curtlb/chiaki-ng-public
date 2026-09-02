@@ -40,8 +40,10 @@ extern "C" {
  * v7: explicit disc-upgrade rescues launch through their replacement product id.
  * v8: public fallback walks every APOLLOROOT child container (genres, A-Z, PS3,
  *     PSP/PS1/PS2) deduped by product id, restoring the PS4 streamable catalog for
- *     fallback regions; invalidates v5-v7 caches that held only the PS3 child. */
-#define CHIAKI_CLOUDCATALOG_SCHEMA_VERSION 8
+ *     fallback regions; invalidates v5-v7 caches that held only the PS3 child.
+ * v9: when the same title exists on PS Now and PS5 cloud, keep the PS Now row for
+ *     hourly rental (PS5 cloud PPSA ids fail on rented accounts). */
+#define CHIAKI_CLOUDCATALOG_SCHEMA_VERSION 9
 
 typedef struct chiaki_cloudcatalog_config_t
 {
@@ -68,7 +70,7 @@ typedef struct chiaki_cloudcatalog_result_t
  * The JSON envelope (see CHIAKI_CLOUDCATALOG_SCHEMA_VERSION):
  *
  *   {
- *     "schemaVersion": 8,
+ *     "schemaVersion": 9,
  *     "total": <int>,
  *     "nativeMode": <bool>,            // true when the authenticated PS Now walk succeeded
  *     "fallbackRegion": "US"|"HU"|...,  // account country used for modern product resolution;

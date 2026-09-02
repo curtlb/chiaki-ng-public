@@ -297,6 +297,19 @@ int CloudCatalogBackend::catalogGameCount() const
     return catalogTotalGames_;
 }
 
+static QString catalogTitleKey(QString name)
+{
+    name = name.toLower();
+    name.remove(QStringLiteral("(playstation plus)"));
+    QString out;
+    out.reserve(name.size());
+    for (const QChar &c : name) {
+        if (c.isLetterOrNumber())
+            out.append(c);
+    }
+    return out;
+}
+
 QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,
                                                       const QVariantList &favoriteIds, int sortState,
                                                       bool billingRental, int limit) const
@@ -315,13 +328,27 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     const bool filterFavorites = !favorites.isEmpty();
     const bool filterSearch = !q.isEmpty();
 
+    QSet<QString> psnowTitleKeys;
+    if (billingRental) {
+        for (const CatalogDisplayRow &row : catalogDisplayRows_) {
+            if (row.serviceType == QLatin1String("psnow")) {
+                const QString tk = catalogTitleKey(row.name);
+                if (!tk.isEmpty())
+                    psnowTitleKeys.insert(tk);
+            }
+        }
+    }
+
     QVector<const CatalogDisplayRow *> matches;
     matches.reserve(catalogDisplayRows_.size());
     for (const CatalogDisplayRow &row : catalogDisplayRows_) {
-        // Hourly rental uses a dedicated PS5 cloud account — PS Now catalog rows are a
-        // different service and often fail (noGameForEntitlementId) on rented accounts.
-        if (billingRental && row.serviceType == QLatin1String("psnow"))
-            continue;
+        // Hourly rental streams through PS Now on the allocated account; PS5 cloud SKUs
+        // (PPSA…) need an owned entitlement and fail with noGameForEntitlementId.
+        if (billingRental && row.serviceType == QLatin1String("pscloud")) {
+            const QString tk = catalogTitleKey(row.name);
+            if (!tk.isEmpty() && psnowTitleKeys.contains(tk))
+                continue;
+        }
         if (filterCategories) {
             bool category_ok = false;
             for (const QString &cat : categories) {
@@ -371,6 +398,12 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
             const bool pb = playable(*b);
             if (pa != pb)
                 return pa > pb;
+            if (billingRental) {
+                const bool psnow_a = a->serviceType == QLatin1String("psnow");
+                const bool psnow_b = b->serviceType == QLatin1String("psnow");
+                if (psnow_a != psnow_b)
+                    return psnow_a > psnow_b;
+            }
             return QString::localeAwareCompare(a->name, b->name) < 0;
         });
     }
