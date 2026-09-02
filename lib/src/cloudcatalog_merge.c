@@ -266,6 +266,9 @@ static const char *category_for(struct json_object *g)
 	// the owned fast-path keys on the separate isOwned flag, which is untouched.
 	if(strcmp(stream_service_type(g), "psnow") == 0)
 		return "streamable";
+	// PS5 PlayStation Plus catalog rows (plus-games-list supplement) stream via pscloud.
+	if(cc_json_bool(g, "plusCatalog") && is_ps5_platform(g))
+		return "streamable";
 	if(cc_json_bool(g, "isOwned"))
 		return "owned";
 	return "purchaseable";
@@ -1349,6 +1352,27 @@ struct json_object *cc_assemble_unified_catalog(ChiakiLog *log, const CCAssemble
 			json_object_array_add(ps5_browse, g);
 		}
 	}
+	// Plus-library supplement (plus-games-list rows without streamingSupported) must still
+	// appear in the catalog — e.g. Ghost of Tsushima PS5 (PPSA03392) vs PS Now duplicates.
+	if(in->imagic_supplement)
+	{
+		size_t n = json_object_array_length(in->imagic_supplement);
+		for(size_t i = 0; i < n; i++)
+		{
+			struct json_object *v = json_object_array_get_idx(in->imagic_supplement, i);
+			if(!v || !is_ps5_platform(v))
+				continue;
+			if(!cc_json_bool(v, "plusCatalog"))
+				continue;
+			const char *pid = game_product_id(v);
+			if(*pid && set_has(apollo_pids, pid))
+				continue;
+			struct json_object *g = cc_json_clone(v);
+			cc_json_set_str(g, "serviceType", "pscloud");
+			cc_json_set_bool(g, "plusCatalog", true);
+			json_object_array_add(ps5_browse, g);
+		}
+	}
 
 	// 3. universe = apollo + ps5Browse
 	struct json_object *universe = json_object_new_array();
@@ -1388,7 +1412,8 @@ struct json_object *cc_assemble_unified_catalog(ChiakiLog *log, const CCAssemble
 		for(size_t i = 0; i < n; i++)
 		{
 			struct json_object *g = json_object_array_get_idx(games, i);
-			if(!cc_json_bool(g, "isOwned") || streamability_is_streamable(&ix, g))
+			if(cc_json_bool(g, "isOwned") || cc_json_bool(g, "plusCatalog")
+				|| streamability_is_streamable(&ix, g))
 				json_object_array_add(kept, json_object_get(g));
 			else
 				dropped++;

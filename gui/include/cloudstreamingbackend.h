@@ -97,6 +97,8 @@ private:
     void startBillingHeartbeat();
     void stopBillingHeartbeat();
     bool runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error);
+    bool confirmBillingCharge(QString *out_error);
+    void abandonBillingReservation();
 
     // Continue cloud session: runs the unified C
     // provisioning flow (chiaki_cloud_provision_session) on a worker thread and
@@ -124,6 +126,7 @@ private:
     QString last_game_name;
     QString billing_session_token;
     QString billing_npsso;
+    bool billing_payment_pending = false;
     QString billing_status_message;
     int billing_minutes_left = 0;
     QTimer billing_heartbeat_timer;

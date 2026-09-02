@@ -318,6 +318,10 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     QVector<const CatalogDisplayRow *> matches;
     matches.reserve(catalogDisplayRows_.size());
     for (const CatalogDisplayRow &row : catalogDisplayRows_) {
+        // Hourly rental uses a dedicated PS5 cloud account — PS Now catalog rows are a
+        // different service and often fail (noGameForEntitlementId) on rented accounts.
+        if (billingRental && row.serviceType == QLatin1String("psnow"))
+            continue;
         if (filterCategories) {
             bool category_ok = false;
             for (const QString &cat : categories) {

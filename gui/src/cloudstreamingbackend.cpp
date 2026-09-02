@@ -137,6 +137,7 @@ void CloudStreamingBackend::notifyStreamStopped()
         billing_session_token);
     billing_session_token.clear();
     billing_npsso.clear();
+    billing_payment_pending = false;
 }
 
 bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error)
@@ -162,11 +163,51 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
     billing_session_token = start.data.value(QStringLiteral("session_token")).toString();
     *out_npsso = start.data.value(QStringLiteral("npsso")).toString();
     billing_npsso = *out_npsso;
+    billing_payment_pending = start.data.value(QStringLiteral("payment_pending")).toBool(false);
     setBillingStatus(start.ui_message,
         billingMinutesFromResponse(start.data));
     setAllocationProgress(start.ui_message);
+    if(!billing_payment_pending)
+        startBillingHeartbeat();
+    return true;
+}
+
+bool CloudStreamingBackend::confirmBillingCharge(QString *out_error)
+{
+    if(!settings || billing_session_token.isEmpty() || !billing_payment_pending)
+        return true;
+    const QString email = settings->GetFourCloudEmail();
+    const auto res = CloudBillingClient::confirmStream(
+        settings->GetCloudBillingHost(),
+        settings->GetCloudBillingPort(),
+        email,
+        billing_session_token);
+    if(!res.ok) {
+        if(out_error)
+            *out_error = res.ui_message.isEmpty() ? res.error : res.ui_message;
+        return false;
+    }
+    billing_payment_pending = false;
+    setBillingStatus(res.ui_message.isEmpty() ? tr("Оплата прошла") : res.ui_message,
+        billingMinutesFromResponse(res.data));
     startBillingHeartbeat();
     return true;
+}
+
+void CloudStreamingBackend::abandonBillingReservation()
+{
+    if(!settings || billing_session_token.isEmpty())
+        return;
+    if(billing_payment_pending) {
+        CloudBillingClient::endStream(
+            settings->GetCloudBillingHost(),
+            settings->GetCloudBillingPort(),
+            billing_session_token);
+        billing_session_token.clear();
+        billing_npsso.clear();
+        billing_payment_pending = false;
+        stopBillingHeartbeat();
+    }
 }
 
 void CloudStreamingBackend::onBillingHeartbeatTick()
@@ -414,11 +455,20 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
                 else self->settings->SetCloudDatacentersJsonPSNOW(dcPings);
             }
             if (success) {
+                QString billing_error;
+                if(!self->confirmBillingCharge(&billing_error)) {
+                    self->abandonBillingReservation();
+                    if (callback.isCallable())
+                        callback.call({false, billing_error});
+                    self->finishProvisionRun();
+                    return;
+                }
                 if (!attrPassed)
                     self->settings->SetAccountAttributesCheckPassed(true);
                 self->finishCloudSession(serviceTypeStr, serverIp, serverPort, handshakeKey, launchSpec,
                                          sessionId, wrap, mtuIn, mtuOut, rttUs, callback);
             } else {
+                self->abandonBillingReservation();
                 self->handleProvisionError(serviceTypeStr, errMsg, callback);
             }
             self->finishProvisionRun();

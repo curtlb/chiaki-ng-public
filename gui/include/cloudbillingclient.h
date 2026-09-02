@@ -27,6 +27,8 @@ public:
 		const QString &service_type, const QString &game_identifier, const QString &game_name);
 	static Result start(const QString &host, quint16 port, const QString &email,
 		const QString &service_type, const QString &game_identifier, const QString &game_name);
+	static Result confirmStream(const QString &host, quint16 port, const QString &email,
+		const QString &session_token);
 	static Result heartbeat(const QString &host, quint16 port, const QString &session_token, bool streaming);
 	static Result renew(const QString &host, quint16 port, const QString &email, const QString &session_token);
 	static Result endStream(const QString &host, quint16 port, const QString &session_token);

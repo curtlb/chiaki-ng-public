@@ -107,6 +107,15 @@ CloudBillingClient::Result CloudBillingClient::start(const QString &host, quint1
 	return request(o, 120000);
 }
 
+CloudBillingClient::Result CloudBillingClient::confirmStream(const QString &host, quint16 port,
+	const QString &email, const QString &session_token)
+{
+	QJsonObject o = baseReq(host, port, QStringLiteral("confirm_stream"));
+	o[QStringLiteral("email")] = email;
+	o[QStringLiteral("session_token")] = session_token;
+	return request(o, 120000);
+}
+
 CloudBillingClient::Result CloudBillingClient::heartbeat(const QString &host, quint16 port, const QString &session_token, bool streaming)
 {
 	QJsonObject o = baseReq(host, port, QStringLiteral("heartbeat"));

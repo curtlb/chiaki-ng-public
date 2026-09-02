@@ -7,7 +7,7 @@ JSON over UDP (request/response share the same "id" field).
 Default bind: 0.0.0.0:13750
 
 Actions:
-  ping, quote, start, heartbeat, renew, end_stream, status
+  ping, quote, start, confirm_stream, heartbeat, renew, end_stream, status
 
 Deploy:
   cp .env.example .env   # fill in secrets locally (never commit .env)
@@ -1004,7 +1004,8 @@ def handle_start(conn, req):
     paid_until = now + timedelta(hours=1)
     renew_at = paid_until - RENEW_LEAD
     ui_msg = (
-        "Оплата за 1 час игры «%s». Списание %s ₽ с привязанной карты…"
+        "Подготовка к запуску «%s». Списание %s ₽ произойдёт только после успешного "
+        "подключения к игре."
         % (game["Name"], int(price))
     )
 
@@ -1029,17 +1030,60 @@ def handle_start(conn, req):
             ),
         )
         session_id = cur.lastrowid
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (session_id,))
+        sess = cur.fetchone()
 
-    idem = "cs-%s-b1" % token
+    touch_lease(conn, lease["ID"])
+    conn.commit()
+
+    payload = session_payload(conn, sess)
+    payload["payment_pending"] = True
+    payload["hourly_price"] = price
+    payload["ui_message"] = ui_msg
+    return reply(req_id, True, **payload)
+
+
+def handle_confirm_stream(conn, req):
+    """Charge the reserved hour after Gaikai allocation succeeded."""
+    token = (req.get("session_token") or "").strip()
+    email = (req.get("email") or "").strip().lower()
+    req_id = req.get("id")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.*, g.Name AS GameName, g.HourlyPrice "
+            "FROM CloudStreaming_Sessions s "
+            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+            "WHERE s.SessionToken=%s LIMIT 1 FOR UPDATE",
+            (token,),
+        )
+        sess = cur.fetchone()
+    if not sess:
+        conn.rollback()
+        return reply(req_id, False, error="Сессия не найдена")
+
+    if sess["Status"] in ("active", "grace_no_stream", "renewal_pending"):
+        conn.commit()
+        payload = session_payload(conn, sess)
+        payload["already_active"] = True
+        return reply(req_id, True, **payload)
+
+    if sess["Status"] != "pending_payment":
+        conn.rollback()
+        return reply(req_id, False, error="Сессия не ожидает подтверждения", status=sess["Status"])
+
+    price = float(sess["HourlyPrice"])
+    block_no = int(sess["BlockNo"])
+    idem = "cs-%s-b%s" % (token, block_no)
     ok_pay, pay_msg = charge_hour(
-        conn, email, session_id, user["ID"], 1, price, game["Name"], idem
+        conn, email, sess["ID"], sess["UserID"], block_no, price, sess["GameName"], idem
     )
     if not ok_pay:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET Status='failed', EndedAt=NOW(3), "
                 "EndReason='payment_failed', UiMessage=%s WHERE ID=%s",
-                (pay_msg, session_id),
+                (pay_msg, sess["ID"]),
             )
         conn.commit()
         return reply(req_id, False, error=pay_msg, ui_message=pay_msg)
@@ -1048,12 +1092,11 @@ def handle_start(conn, req):
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET Status='active', StreamActive=1, "
             "LastHeartbeatAt=NOW(3), UiMessage=%s WHERE ID=%s",
-            ("Оплата прошла. Запускаем облачный стрим…", session_id),
+            ("Оплата прошла. Игра запущена.", sess["ID"]),
         )
-        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (session_id,))
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
         sess = cur.fetchone()
-
-    touch_lease(conn, lease["ID"])
+    touch_lease(conn, sess["LeaseID"])
     conn.commit()
 
     payload = session_payload(conn, sess)
@@ -1085,6 +1128,14 @@ def handle_heartbeat(conn, req):
 
     if sess["Status"] not in ("active", "grace_no_stream", "renewal_pending"):
         conn.rollback()
+        if sess["Status"] == "pending_payment":
+            return reply(
+                req_id,
+                False,
+                error="Ожидается подтверждение запуска",
+                ui_message="Списание ещё не выполнено — дождитесь подключения к игре.",
+                status=sess["Status"],
+            )
         return reply(req_id, False, error="Сессия завершена", status=sess["Status"])
 
     if int(sess.get("SecsLeft") or 0) <= 0:
@@ -1207,6 +1258,21 @@ def handle_end_stream(conn, req):
         conn.rollback()
         return reply(req_id, False, error="Сессия не найдена")
 
+    if sess["Status"] == "pending_payment":
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
+                "EndReason='payment_aborted', StreamActive=0, UiMessage=%s WHERE ID=%s",
+                ("Запуск не удался — списание не выполнялось.", sess["ID"]),
+            )
+        conn.commit()
+        return reply(
+            req_id,
+            True,
+            ui_message="Сессия отменена без списания.",
+            payment_aborted=True,
+        )
+
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
@@ -1257,6 +1323,8 @@ def dispatch(payload):
     try:
         if action == "quote":
             out = handle_quote(conn, payload)
+        elif action == "confirm_stream":
+            out = handle_confirm_stream(conn, payload)
         elif action == "start":
             out = handle_start(conn, payload)
         elif action == "heartbeat":
@@ -1304,6 +1372,11 @@ def expire_leases_job():
                     "EndReason='lease_expired', StreamActive=0 "
                     "WHERE Status IN ('active','grace_no_stream','renewal_pending') "
                     "AND LeaseID IN (SELECT ID FROM CloudStreaming_Leases WHERE Status='expired')"
+                )
+                cur.execute(
+                    "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
+                    "EndReason='payment_aborted', StreamActive=0 "
+                    "WHERE Status='pending_payment' AND BlockStartedAt < DATE_SUB(NOW(3), INTERVAL 20 MINUTE)"
                 )
             conn.commit()
             conn.close()
