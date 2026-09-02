@@ -24,8 +24,19 @@ jobs:
           git config --global core.autocrlf false
           git config --global core.eol lf
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - name: Init Windows build submodules
+        shell: bash
+        run: |
+          # Skip switch/android/sr.ht submodules not needed for Windows GUI build.
+          # Jerasure/gf-complete are required but fetched from GitHub mirrors (sr.ht is unreliable in CI).
+          git config --global url."https://github.com/thestr4ng3r/".insteadOf "https://git.sr.ht/~thestr4ng3r/"
+          git submodule update --init --depth 1 \
+            third-party/cpp-steam-tools \
+            third-party/curl \
+            third-party/nanopb \
+            third-party/jerasure \
+            third-party/gf-complete \
+            test/munit
       - uses: msys2/setup-msys2@v2
         with:
           msystem: mingw64
