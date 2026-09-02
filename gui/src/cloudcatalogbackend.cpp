@@ -29,7 +29,6 @@
 #include <QPainter>
 #include <QPixmap>
 #include <climits>
-#include <QQmlEngine>
 #include <QJSEngine>
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
@@ -327,7 +326,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
 
             QJSValue payload;
             if (success) {
-                if (QQmlEngine *eng = qjsEngine(self.data()))
+                if (QJSEngine *eng = qjsEngine(self.data()))
                     payload = eng->toScriptValue(root);
                 else
                     payload = QJSValue(json);
