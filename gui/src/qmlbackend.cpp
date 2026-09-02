@@ -354,6 +354,9 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
                 emit sessionError(tr("Session has quit"), m);
             }
 
+            if (cloud_streaming_backend)
+                cloud_streaming_backend->notifyStreamStopped();
+
             chiaki_log_mutex.lock();
             chiaki_log_ctx = nullptr;
             chiaki_log_mutex.unlock();
@@ -1232,6 +1235,7 @@ bool QmlBackend::closeRequested()
         return true;
 
     bool stop = true;
+    bool sleep = false;
     if (session->IsConnected()) {
         switch (settings->GetDisconnectAction()) {
         case DisconnectAction::Ask:
@@ -1239,7 +1243,7 @@ bool QmlBackend::closeRequested()
             emit sessionStopDialogRequested();
             break;
         case DisconnectAction::AlwaysSleep:
-            session->GoToBed();
+            sleep = true;
             break;
         default:
             break;
@@ -1247,7 +1251,7 @@ bool QmlBackend::closeRequested()
     }
 
     if (stop)
-        session->Stop();
+        stopSession(sleep);
 
     return false;
 }

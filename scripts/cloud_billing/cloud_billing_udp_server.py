@@ -1812,7 +1812,7 @@ def handle_heartbeat(conn, req):
     conn.commit()
 
     payload = session_payload(conn, sess)
-    if payload.get("renew_soon") and streaming:
+    if payload.get("renew_soon") and streaming and int(sess.get("StreamActive") or 0):
         payload["ui_message"] = (
             "Осталось %s мин. При активном стриме скоро спишется следующий час."
             % payload.get("minutes_left", 0)

@@ -131,6 +131,9 @@ void CloudStreamingBackend::notifyStreamStopped()
     stopBillingHeartbeat();
     if(!settings || billing_session_token.isEmpty())
         return;
+    CloudLogMessage(QStringLiteral("Session"),
+        QStringLiteral("billing end_stream (stream stopped, token=%1…)")
+            .arg(billing_session_token.left(8)));
     CloudBillingClient::endStream(
         settings->GetCloudBillingHost(),
         settings->GetCloudBillingPort(),
@@ -141,6 +144,7 @@ void CloudStreamingBackend::notifyStreamStopped()
     billing_store_country.clear();
     billing_store_lang.clear();
     billing_payment_pending = false;
+    setBillingStatus(QString(), 0);
 }
 
 bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error)

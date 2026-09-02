@@ -69,8 +69,8 @@ public:
     /** Heartbeat for hourly billing (call periodically while streaming). */
     Q_INVOKABLE void sendBillingHeartbeat(bool streaming);
 
-    /** Notify billing service that the user stopped the stream. */
-    void notifyStreamStopped();
+    /** Notify billing service that the user stopped the stream (end_stream). */
+    Q_INVOKABLE void notifyStreamStopped();
     
     QString getAllocationProgress() const { return allocation_progress; }
     QString getGameImageUrl() const { return game_image_url; }

@@ -375,8 +375,10 @@ Item {
                 onClicked: {
                     if (Chiaki.session)
                         Chiaki.window.close();
-                    else
+                    else {
+                        Chiaki.cloudStreaming.notifyStreamStopped();
                         root.showMainView();
+                    }
                 }
                 KeyNavigation.right: volumeSlider
                 Keys.onReturnPressed: clicked()
