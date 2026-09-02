@@ -4,6 +4,7 @@
 #include "streamsession.h"
 #include "exception.h"
 #include "cloudlog.h"
+#include "cloudbillingclient.h"
 #include "chiaki/remote/holepunch.h"
 #include "chiaki/session.h"
 #include "chiaki/cloudsession.h"
@@ -35,6 +36,135 @@ CloudStreamingBackend::CloudStreamingBackend(Settings *settings, QObject *parent
     , settings(settings)
     , allocation_progress("")
 {
+    billing_heartbeat_timer.setInterval(45000);
+    connect(&billing_heartbeat_timer, &QTimer::timeout, this, &CloudStreamingBackend::onBillingHeartbeatTick);
+}
+
+CloudStreamingBackend::~CloudStreamingBackend()
+{
+    notifyStreamStopped();
+}
+
+void CloudStreamingBackend::setBillingStatus(const QString &message, int minutes_left)
+{
+    bool changed = false;
+    if(billing_status_message != message) {
+        billing_status_message = message;
+        changed = true;
+    }
+    if(minutes_left >= 0 && billing_minutes_left != minutes_left) {
+        billing_minutes_left = minutes_left;
+        changed = true;
+    }
+    if(changed)
+        emit billingStatusChanged();
+}
+
+void CloudStreamingBackend::startBillingHeartbeat()
+{
+    if(billing_session_token.isEmpty())
+        return;
+    if(!billing_heartbeat_timer.isActive())
+        billing_heartbeat_timer.start();
+    sendBillingHeartbeat(true);
+}
+
+void CloudStreamingBackend::stopBillingHeartbeat()
+{
+    billing_heartbeat_timer.stop();
+}
+
+void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
+{
+    if(!settings || billing_session_token.isEmpty())
+        return;
+    const auto res = CloudBillingClient::heartbeat(
+        settings->GetCloudBillingHost(),
+        settings->GetCloudBillingPort(),
+        billing_session_token,
+        streaming);
+    if(!res.ok) {
+        setBillingStatus(res.ui_message.isEmpty() ? res.error : res.ui_message);
+        if(res.error.contains(QStringLiteral("истёк")) || res.error.contains(QStringLiteral("закончилось")))
+            stopBillingHeartbeat();
+        return;
+    }
+    const int mins = res.data.value(QStringLiteral("minutes_left")).toInt(-1);
+    QString msg = res.ui_message;
+    if(msg.isEmpty())
+        msg = tr("Оплаченное время: %1 мин").arg(mins);
+    setBillingStatus(msg, mins);
+    if(res.data.value(QStringLiteral("should_renew")).toBool()) {
+        const QString email = settings->GetFourCloudEmail();
+        setAllocationProgress(tr("Списание за следующий час…"));
+        const auto renew_res = CloudBillingClient::renew(
+            settings->GetCloudBillingHost(),
+            settings->GetCloudBillingPort(),
+            email,
+            billing_session_token);
+        if(renew_res.ok)
+            setBillingStatus(renew_res.ui_message.isEmpty() ? tr("Сессия продлена на 1 час") : renew_res.ui_message,
+                renew_res.data.value(QStringLiteral("minutes_left")).toInt(mins));
+        else
+            setBillingStatus(renew_res.ui_message.isEmpty() ? renew_res.error : renew_res.ui_message, mins);
+    }
+}
+
+void CloudStreamingBackend::notifyStreamStopped()
+{
+    stopBillingHeartbeat();
+    if(!settings || billing_session_token.isEmpty())
+        return;
+    CloudBillingClient::endStream(
+        settings->GetCloudBillingHost(),
+        settings->GetCloudBillingPort(),
+        billing_session_token);
+    billing_session_token.clear();
+    billing_npsso.clear();
+}
+
+bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error)
+{
+    if(!settings || !settings->GetCloudBillingEnabled())
+        return false;
+    const QString email = settings->GetFourCloudEmail();
+    if(email.isEmpty())
+        return false;
+
+    const QString host = settings->GetCloudBillingHost();
+    if(host.isEmpty())
+        return false;
+    const quint16 port = settings->GetCloudBillingPort();
+
+    setAllocationProgress(tr("Проверка оплаты и аренды PS-аккаунта…"));
+    const auto quote = CloudBillingClient::quote(host, port, email, serviceType, gameIdentifier, gameName);
+    if(!quote.ok) {
+        *out_error = quote.ui_message.isEmpty() ? quote.error : quote.ui_message;
+        return true;
+    }
+    setBillingStatus(quote.ui_message);
+    setAllocationProgress(quote.ui_message);
+
+    setAllocationProgress(tr("Списание с привязанной карты…"));
+    const auto start = CloudBillingClient::start(host, port, email, serviceType, gameIdentifier, gameName);
+    if(!start.ok) {
+        *out_error = start.ui_message.isEmpty() ? start.error : start.ui_message;
+        return true;
+    }
+
+    billing_session_token = start.data.value(QStringLiteral("session_token")).toString();
+    *out_npsso = start.data.value(QStringLiteral("npsso")).toString();
+    billing_npsso = *out_npsso;
+    setBillingStatus(start.ui_message,
+        start.data.value(QStringLiteral("minutes_left")).toInt(60));
+    setAllocationProgress(start.ui_message);
+    startBillingHeartbeat();
+    return true;
+}
+
+void CloudStreamingBackend::onBillingHeartbeatTick()
+{
+    sendBillingHeartbeat(true);
 }
 
 // ============================================================================
@@ -43,24 +173,11 @@ CloudStreamingBackend::CloudStreamingBackend(Settings *settings, QObject *parent
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback)
 {
-    // Provision uses secondary NPSSO when set (catalog keeps the primary token).
-    const QString npssoToken = settings->GetNpssoTokenForCloudProvision();
-    const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
-    const QString npssoLabel = npssoToken.isEmpty()
-        ? QStringLiteral("missing")
-        : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary"));
-    CloudLogMessage(QStringLiteral("Session"),
-        QStringLiteral("startCompleteCloudSession service=%1 game=%2 provision_npsso=%3")
-            .arg(serviceType, gameIdentifier, npssoLabel));
+    startCompleteCloudSession(serviceType, gameIdentifier, QString(), callback);
+}
 
-    if (npssoToken.isEmpty()) {
-        qWarning() << "NPSSO token is empty - cloud play may not work";
-    } else if (usingSecondaryNpsso) {
-        qInfo() << "Cloud provision: using secondary NPSSO override";
-    } else {
-        qInfo() << "Using NPSSO:" << npssoToken.left(20) << "...";
-    }
-
+void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback)
+{
     serviceType = serviceType.toLower();
 
     // Validate parameters
@@ -71,6 +188,9 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
         }
         return;
     }
+
+    CloudLogMessage(QStringLiteral("Session"),
+        QStringLiteral("startCompleteCloudSession service=%1 game=%2").arg(serviceType, gameIdentifier));
 
     // Lookup game image from cache before starting session
     QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent());
@@ -90,6 +210,21 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
 
     last_service_type = serviceType;
     last_game_identifier = gameIdentifier;
+    last_game_name = gameName;
+
+    QString npssoToken = settings->GetNpssoTokenForCloudProvision();
+    QString billing_error;
+    if(runBillingStart(serviceType, gameIdentifier, gameName, &npssoToken, &billing_error)) {
+        if(npssoToken.isEmpty()) {
+            qWarning() << "Cloud billing failed:" << billing_error;
+            if(callback.isCallable())
+                callback.call({false, billing_error});
+            return;
+        }
+        qInfo() << "Cloud billing: using rented PS account NPSSO";
+    } else if (npssoToken.isEmpty()) {
+        qWarning() << "NPSSO token is empty - cloud play may not work";
+    }
 
     // The C provisioning flow runs the NPSSO authorizeCheck itself as its first
     // (silent) step and surfaces AUTHORIZATION_FAILED (handled in handleProvisionError)
@@ -520,7 +655,9 @@ void CloudStreamingBackend::reconnectCurrentSession()
         return;
     }
 
-    const QString npsso = settings->GetNpssoTokenForCloudProvision();
+    const QString npsso = billing_npsso.isEmpty()
+        ? settings->GetNpssoTokenForCloudProvision()
+        : billing_npsso;
     const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
     const QString npssoLabel = npsso.isEmpty()
         ? QStringLiteral("missing")

@@ -395,6 +395,14 @@ class Settings : public QObject
 	void SetNpssoTokenSecondary(QString npsso_token);
 	QString GetNpssoTokenForCloudProvision() const;
 
+	// 4cloud.pro account (hourly cloud gaming billing)
+	QString GetFourCloudEmail() const;
+	void SetFourCloudEmail(const QString &email);
+	bool GetCloudBillingEnabled() const;
+	void SetCloudBillingEnabled(bool enabled);
+	QString GetCloudBillingHost() const;
+	quint16 GetCloudBillingPort() const;
+
 	// PSCloud / PSNOW cloud streaming settings
 	int GetCloudResolutionPSCloud() const;
 	void SetCloudResolutionPSCloud(int resolution);

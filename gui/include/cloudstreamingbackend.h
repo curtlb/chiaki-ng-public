@@ -42,9 +42,12 @@ class CloudStreamingBackend : public QObject
     Q_OBJECT
     Q_PROPERTY(QString allocationProgress READ getAllocationProgress NOTIFY allocationProgressChanged)
     Q_PROPERTY(QString gameImageUrl READ getGameImageUrl WRITE setGameImageUrl NOTIFY gameImageUrlChanged)
+    Q_PROPERTY(QString billingStatusMessage READ billingStatusMessage NOTIFY billingStatusChanged)
+    Q_PROPERTY(int billingMinutesLeft READ billingMinutesLeft NOTIFY billingStatusChanged)
 
 public:
     explicit CloudStreamingBackend(Settings *settings, QObject *parent = nullptr);
+    ~CloudStreamingBackend() override;
 
     // Rebind to a new profile's Settings (profile switch deletes the old object).
     void setSettings(Settings *new_settings) { settings = new_settings; }
@@ -55,13 +58,22 @@ public:
     //   gameIdentifier: Product ID (PSNOW) or Entitlement ID (PSCLOUD)
     // Platform is automatically detected from API response for PSNOW, or hardcoded to "ps5" for PSCLOUD
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback);
+    Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
 
     /** Re-run Gaikai allocation for the last-started cloud game (e.g. after bitrate change). */
     Q_INVOKABLE void reconnectCurrentSession();
+
+    /** Heartbeat for hourly billing (call periodically while streaming). */
+    Q_INVOKABLE void sendBillingHeartbeat(bool streaming);
+
+    /** Notify billing service that the user stopped the stream. */
+    void notifyStreamStopped();
     
     QString getAllocationProgress() const { return allocation_progress; }
     QString getGameImageUrl() const { return game_image_url; }
     void setGameImageUrl(const QString &url);
+    QString billingStatusMessage() const { return billing_status_message; }
+    int billingMinutesLeft() const { return billing_minutes_left; }
 
 signals:
     // Emitted when a cloud streaming session is created and ready to be registered
@@ -70,12 +82,18 @@ signals:
     void allocationProgressChanged();
     // Emitted when game image URL changes
     void gameImageUrlChanged();
+    void billingStatusChanged();
 
 private slots:
     void onAllocationProgress(QString message);
+    void onBillingHeartbeatTick();
 
 private:
     void setAllocationProgress(const QString &message);
+    void setBillingStatus(const QString &message, int minutes_left = -1);
+    void startBillingHeartbeat();
+    void stopBillingHeartbeat();
+    bool runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error);
 
     // Continue cloud session: runs the unified C
     // provisioning flow (chiaki_cloud_provision_session) on a worker thread and
@@ -100,6 +118,12 @@ private:
     QString game_image_url;  // Landscape image URL for current cloud game
     QString last_service_type;
     QString last_game_identifier;
+    QString last_game_name;
+    QString billing_session_token;
+    QString billing_npsso;
+    QString billing_status_message;
+    int billing_minutes_left = 0;
+    QTimer billing_heartbeat_timer;
 
     QHash<quint64, QJSValue> pending_callbacks; // GUI thread only
     quint64 next_request_id = 0;

@@ -1654,6 +1654,9 @@ void QmlBackend::stopSession(bool sleep)
     if (!session)
         return;
 
+    if (session->IsCloudStreaming() && cloud_streaming_backend)
+        cloud_streaming_backend->notifyStreamStopped();
+
     if (!session_info.nickname.isEmpty())
     {
         waking_sleeping_nicknames.append(session_info.nickname);
@@ -3245,6 +3248,7 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
 void QmlBackend::authenticate(const QString &email, const QString &password)
 {
     qCInfo(chiakiGui) << "Authentication request for email:" << email;
+    settings->SetFourCloudEmail(email);
     
     if (!network_manager) {
         network_manager = new QNetworkAccessManager(this);

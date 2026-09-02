@@ -186,6 +186,33 @@ Item {
         }
     }
 
+    Label {
+        id: cloudBillingOverlay
+        anchors {
+            top: parent.top
+            left: parent.left
+            right: parent.right
+            margins: 12
+        }
+        z: 50
+        padding: 8
+        visible: !sessionError && (Chiaki.cloudStreaming.billingStatusMessage || "").length > 0
+        wrapMode: Text.WordWrap
+        color: "#ffb347"
+        font.pixelSize: 14
+        text: {
+            var msg = Chiaki.cloudStreaming.billingStatusMessage || "";
+            var mins = Chiaki.cloudStreaming.billingMinutesLeft;
+            if (mins > 0 && msg.indexOf("мин") < 0)
+                return msg + " (" + mins + " " + qsTr("мин") + ")";
+            return msg;
+        }
+        background: Rectangle {
+            color: "#88000000"
+            radius: 8
+        }
+    }
+
     Item {
         id: streamStats
         anchors.fill: parent

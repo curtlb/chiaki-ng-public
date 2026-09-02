@@ -2473,6 +2473,39 @@ QString Settings::GetNpssoTokenForCloudProvision() const
 	return GetNpssoToken().trimmed();
 }
 
+QString Settings::GetFourCloudEmail() const
+{
+	return settings.value("settings/fourcloud_email").toString().trimmed();
+}
+
+void Settings::SetFourCloudEmail(const QString &email)
+{
+	const QString v = email.trimmed();
+	if(settings.value("settings/fourcloud_email").toString() == v)
+		return;
+	settings.setValue("settings/fourcloud_email", v);
+}
+
+bool Settings::GetCloudBillingEnabled() const
+{
+	return settings.value("settings/cloud_billing_enabled", true).toBool();
+}
+
+void Settings::SetCloudBillingEnabled(bool enabled)
+{
+	settings.setValue("settings/cloud_billing_enabled", enabled);
+}
+
+QString Settings::GetCloudBillingHost() const
+{
+	return settings.value("settings/cloud_billing_host", "").toString().trimmed();
+}
+
+quint16 Settings::GetCloudBillingPort() const
+{
+	return static_cast<quint16>(settings.value("settings/cloud_billing_port", 13750).toUInt());
+}
+
 QString Settings::GetLastSelectedCloudSection() const
 {
 	return settings.value("settings/last_selected_cloud_section", "catalog").toString();

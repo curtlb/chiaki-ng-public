@@ -80,6 +80,8 @@ set(SOURCE_FILES
 	src/psntoken.cpp
 	include/cloudstreamingbackend.h
 	src/cloudstreamingbackend.cpp
+	include/cloudbillingclient.h
+	src/cloudbillingclient.cpp
 	include/cloudcatalogbackend.h
 	src/cloudcatalogbackend.cpp
 	include/jsonrequester.h

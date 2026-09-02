@@ -1172,6 +1172,12 @@ Pane {
                         
                         onStreamGame: (streamingId, platform, serviceType) => {
                             console.log("Stream game:", streamingId, platform, serviceType);
+                            let gameName = "";
+                            if (modelData) {
+                                gameName = modelData.name || "";
+                                if (!gameName && modelData.game_meta && modelData.game_meta.name)
+                                    gameName = modelData.game_meta.name;
+                            }
                             
                             // Show StreamView immediately with loading spinner
                             // Find Main component by traversing parent chain
@@ -1188,6 +1194,7 @@ Pane {
                             Chiaki.cloudStreaming.startCompleteCloudSession(
                                 serviceType,
                                 streamingId,
+                                gameName,
                                 function(success, message, serverIp) {
                                     console.log("Cloud streaming:", success ? "SUCCESS" : "FAILED");
                                     console.log("Result:", message);
