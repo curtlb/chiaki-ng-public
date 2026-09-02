@@ -318,8 +318,23 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     QVector<const CatalogDisplayRow *> matches;
     matches.reserve(catalogDisplayRows_.size());
     for (const CatalogDisplayRow &row : catalogDisplayRows_) {
-        if (filterCategories && !categories.contains(row.category))
-            continue;
+        if (filterCategories) {
+            bool category_ok = false;
+            for (const QString &cat : categories) {
+                if (row.category == cat) {
+                    category_ok = true;
+                    break;
+                }
+                // Hourly rental: PS5 "Add Game" titles are playable without store purchase.
+                if (billingRental && cat == QLatin1String("streamable")
+                    && row.category == QLatin1String("purchaseable")) {
+                    category_ok = true;
+                    break;
+                }
+            }
+            if (!category_ok)
+                continue;
+        }
         if (filterFavorites) {
             const QString pid = row.productId.isEmpty() ? row.id : row.productId;
             if (!favorites.contains(pid))

@@ -29,7 +29,7 @@ import threading
 import time
 import urllib.parse
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -125,6 +125,40 @@ def php_urlencode(s):
 
 def fmt_dt(dt):
     return dt.strftime(DATE_FMT)
+
+
+def parse_db_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    text = str(value).strip()
+    if not text:
+        return None
+    return datetime.strptime(text[:19], DATE_FMT)
+
+
+def sql_minutes_left_expr():
+    """Remaining paid minutes using the same MySQL clock as PaidUntil / NOW(3)."""
+    return (
+        "GREATEST(0, CEILING(TIMESTAMPDIFF(SECOND, NOW(3), s.PaidUntil) / 60))"
+    )
+
+
+def fetch_minutes_left(conn, session_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT "
+            + sql_minutes_left_expr()
+            + " AS MinutesLeft FROM CloudStreaming_Sessions s WHERE s.ID = %s LIMIT 1",
+            (session_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return 0
+    return int(row.get("MinutesLeft") or 0)
 
 
 def db_connect():
@@ -247,6 +281,49 @@ def find_catalog_match(conn, service_type, game_identifier):
         return cur.fetchone()
 
 
+def access_type_for_catalog(service_type, category=None):
+    st = (service_type or "").lower()
+    cat = (category or "").lower()
+    if st == "psnow" or cat == "streamable":
+        return "ps_plus"
+    if cat == "owned":
+        return "owned_only"
+    # Hourly rental: PS+ account can add / stream catalog titles without store purchase.
+    return "both"
+
+
+def catalog_for_game(conn, game):
+    if game.get("CatalogID"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM CloudStreaming_Catalog WHERE ID = %s LIMIT 1",
+                (game["CatalogID"],),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+    return find_catalog_match(
+        conn, game.get("ServiceType") or "", game.get("GameIdentifier") or ""
+    )
+
+
+def refresh_game_access_type(conn, game):
+    catalog = catalog_for_game(conn, game)
+    expected = access_type_for_catalog(
+        game.get("ServiceType"),
+        catalog.get("Category") if catalog else None,
+    )
+    if game.get("AccessType") != expected:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Games SET AccessType = %s WHERE ID = %s",
+                (expected, game["ID"]),
+            )
+        game = dict(game)
+        game["AccessType"] = expected
+    return game
+
+
 def ensure_game(conn, service_type, game_identifier, game_name=None):
     st = service_type.lower().strip()
     gid = game_identifier.strip()
@@ -258,10 +335,10 @@ def ensure_game(conn, service_type, game_identifier, game_name=None):
         )
         row = cur.fetchone()
         if row:
-            return row
+            return refresh_game_access_type(conn, row)
         catalog = find_catalog_match(conn, st, gid)
         code = re.sub(r"[^a-zA-Z0-9_]+", "_", (game_name or (catalog or {}).get("Name") or gid))[:60].lower()
-        access = "ps_plus" if st == "psnow" else "owned_only"
+        access = access_type_for_catalog(st, (catalog or {}).get("Category"))
         display_name = game_name or (catalog or {}).get("Name") or gid
         catalog_id = catalog["ID"] if catalog else None
         cur.execute(
@@ -304,6 +381,7 @@ def account_owns_game(conn, account_id, service_type, game_identifier, game_id=N
 
 
 def account_can_play_game(conn, account, game):
+    game = refresh_game_access_type(conn, game) if game.get("ID") else game
     access = game.get("AccessType")
     if game["ServiceType"] == "psnow" or access == "ps_plus":
         if int(account.get("HasPsPlus") or 0):
@@ -322,7 +400,22 @@ def account_can_play_game(conn, account, game):
     return False
 
 
+def find_any_user_lease(conn, user_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT l.*, a.NPSSO, a.Label AS AccountLabel, a.HasPsPlus "
+            "FROM CloudStreaming_Leases l "
+            "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
+            "WHERE l.UserID = %s AND l.Status IN ('active','retention') "
+            "AND l.RetentionUntil > NOW(3) "
+            "ORDER BY l.LastActivityAt DESC LIMIT 1",
+            (user_id,),
+        )
+        return cur.fetchone()
+
+
 def find_active_lease(conn, user_id, game):
+    game = refresh_game_access_type(conn, game) if game.get("ID") else game
     with conn.cursor() as cur:
         cur.execute(
             "SELECT l.*, a.NPSSO, a.Label AS AccountLabel, a.HasPsPlus "
@@ -343,35 +436,122 @@ def find_active_lease(conn, user_id, game):
         }
         if account_can_play_game(conn, acc, game):
             return lease
+    # Hourly rental: one PS account per player — reuse it for any catalog title.
+    return find_any_user_lease(conn, user_id)
+
+
+def collect_game_identity(conn, service_type, game_identifier, game=None):
+    """Aliases for the same catalog title (productId, entitlementId, streamIdentifier)."""
+    st = service_type.lower().strip()
+    gid = game_identifier.strip()
+    identifiers = {gid}
+    catalog_ids = set()
+    catalog = find_catalog_match(conn, st, gid)
+    if catalog:
+        catalog_ids.add(catalog["ID"])
+        for field in ("StreamIdentifier", "ProductId", "EntitlementId"):
+            val = catalog.get(field)
+            if val:
+                identifiers.add(str(val).strip())
+    if game:
+        if game.get("CatalogID"):
+            catalog_ids.add(game["CatalogID"])
+        if game.get("GameIdentifier"):
+            identifiers.add(str(game["GameIdentifier"]).strip())
+    identifiers = {x for x in identifiers if x}
+    catalog_ids = {x for x in catalog_ids if x}
+    return st, identifiers, catalog_ids
+
+
+def _session_same_game(row, st, identifiers, catalog_ids, game_id=None):
+    if game_id and row.get("GameID") == game_id:
+        return True
+    if row.get("ServiceType") == st:
+        sid = (row.get("GameIdentifier") or "").strip()
+        if sid and sid in identifiers:
+            return True
+    row_catalog = row.get("CatalogID")
+    if row_catalog and catalog_ids and row_catalog in catalog_ids:
+        return True
+    return False
+
+
+def find_resumable_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
+    """Paid session for the same game that still has time left (after stream stop or app close)."""
+    st, identifiers, catalog_ids = collect_game_identity(
+        conn, service_type, game_identifier, game
+    )
+    active_statuses = ("active", "grace_no_stream", "renewal_pending")
+    status_ph = ",".join(["%s"] * len(active_statuses))
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
+            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+            "WHERE s.UserID = %s AND s.Status IN (" + status_ph + ") AND s.PaidUntil > NOW(3) "
+            "ORDER BY s.PaidUntil DESC",
+            (user_id,) + active_statuses,
+        )
+        rows = cur.fetchall()
+
+    for row in rows:
+        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
+            return row
+
+    # Recover session wrongly ended (e.g. old billing ended same game on re-entry).
+    recover_reasons = ("game_switch", "stream_stopped", "user_exit")
+    reason_ph = ",".join(["%s"] * len(recover_reasons))
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
+            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+            "WHERE s.UserID = %s AND s.Status = 'ended' AND s.PaidUntil > NOW(3) "
+            "AND s.EndReason IN (" + reason_ph + ") "
+            "ORDER BY s.PaidUntil DESC",
+            (user_id,) + recover_reasons,
+        )
+        rows = cur.fetchall()
+
+    for row in rows:
+        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE CloudStreaming_Sessions SET Status='grace_no_stream', "
+                    "StreamActive=0, EndedAt=NULL, EndReason=NULL, "
+                    "UiMessage=%s WHERE ID=%s",
+                    ("Восстановлена оплаченная сессия…", row["ID"]),
+                )
+                cur.execute(
+                    "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
+                    "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+                    "WHERE s.ID = %s LIMIT 1",
+                    (row["ID"],),
+                )
+                return cur.fetchone()
     return None
 
 
-def find_resumable_session(conn, user_id, game_id):
-    """Paid session for the same game that still has time left (after stream stop or app close)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM CloudStreaming_Sessions "
-            "WHERE UserID = %s AND GameID = %s "
-            "AND Status IN ('active','grace_no_stream','renewal_pending') "
-            "AND PaidUntil > NOW(3) "
-            "ORDER BY PaidUntil DESC LIMIT 1",
-            (user_id, game_id),
-        )
-        return cur.fetchone()
-
-
-def find_other_active_session(conn, user_id, game_id):
+def find_other_active_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
     """Another game with remaining paid time (switching forfeits that time)."""
+    st, identifiers, catalog_ids = collect_game_identity(
+        conn, service_type, game_identifier, game
+    )
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT * FROM CloudStreaming_Sessions "
-            "WHERE UserID = %s AND GameID != %s "
-            "AND Status IN ('active','grace_no_stream','renewal_pending') "
-            "AND PaidUntil > NOW(3) "
-            "ORDER BY PaidUntil DESC LIMIT 1",
-            (user_id, game_id),
+            "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
+            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+            "WHERE s.UserID = %s AND s.Status IN ('active','grace_no_stream','renewal_pending') "
+            "AND s.PaidUntil > NOW(3) "
+            "ORDER BY s.PaidUntil DESC",
+            (user_id,),
         )
-        return cur.fetchone()
+        rows = cur.fetchall()
+
+    for row in rows:
+        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
+            continue
+        return row
+    return None
 
 
 def allocate_account(conn, game):
@@ -549,16 +729,33 @@ def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, i
     return True, "Оплата прошла успешно"
 
 
-def end_other_active_sessions(conn, user_id, except_session_id=None):
+def end_other_active_sessions(
+    conn,
+    user_id,
+    except_session_id=None,
+    service_type=None,
+    game_identifier=None,
+    game_id=None,
+    game=None,
+):
+    st, identifiers, catalog_ids = (None, set(), set())
+    if service_type and game_identifier:
+        st, identifiers, catalog_ids = collect_game_identity(
+            conn, service_type, game_identifier, game
+        )
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT ID, SessionToken FROM CloudStreaming_Sessions "
-            "WHERE UserID = %s AND Status IN ('active','grace_no_stream','renewal_pending')",
+            "SELECT s.ID, s.SessionToken, s.ServiceType, s.GameIdentifier, s.GameID, "
+            "g.CatalogID FROM CloudStreaming_Sessions s "
+            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+            "WHERE s.UserID = %s AND s.Status IN ('active','grace_no_stream','renewal_pending')",
             (user_id,),
         )
         rows = cur.fetchall()
     for row in rows:
         if except_session_id and row["ID"] == except_session_id:
+            continue
+        if st and _session_same_game(row, st, identifiers, catalog_ids, game_id):
             continue
         with conn.cursor() as cur:
             cur.execute(
@@ -572,7 +769,9 @@ def session_payload(conn, sess):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.*, g.Name AS GameName, g.HourlyPrice, a.NPSSO, a.Label AS AccountLabel, "
-            "l.RetentionUntil "
+            "l.RetentionUntil, "
+            + sql_minutes_left_expr()
+            + " AS MinutesLeft "
             "FROM CloudStreaming_Sessions s "
             "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
             "JOIN CloudStreaming_Accounts a ON a.ID = s.AccountID "
@@ -583,23 +782,18 @@ def session_payload(conn, sess):
         row = cur.fetchone()
     if not row:
         return {}
-    now = datetime.now()
-    paid_until = row["PaidUntil"]
-    if isinstance(paid_until, str):
-        paid_until = datetime.strptime(paid_until[:19], DATE_FMT)
-    minutes_left = max(0, int((paid_until - now).total_seconds() // 60))
-    renew_at = row["RenewAt"]
-    if isinstance(renew_at, str):
-        renew_at = datetime.strptime(renew_at[:19], DATE_FMT)
+    paid_until = parse_db_datetime(row["PaidUntil"])
+    minutes_left = int(row.get("MinutesLeft") or 0)
+    renew_at = parse_db_datetime(row["RenewAt"])
     return {
         "session_token": row["SessionToken"],
         "npsso": row["NPSSO"],
         "account_label": row.get("AccountLabel"),
         "game_name": row.get("GameName"),
         "hourly_price": float(row.get("HourlyPrice") or DEFAULT_HOURLY),
-        "paid_until": fmt_dt(paid_until),
+        "paid_until": fmt_dt(paid_until) if paid_until else "",
         "minutes_left": minutes_left,
-        "renew_at": fmt_dt(renew_at),
+        "renew_at": fmt_dt(renew_at) if renew_at else "",
         "renew_soon": minutes_left <= int(RENEW_LEAD.total_seconds() // 60),
         "retention_until": str(row.get("RetentionUntil") or ""),
         "status": row["Status"],
@@ -636,7 +830,9 @@ def handle_quote(conn, req):
     conn.commit()
 
     price = float(game["HourlyPrice"])
-    resumable = find_resumable_session(conn, user["ID"], game["ID"])
+    resumable = find_resumable_session(
+        conn, user["ID"], service_type, game_identifier, game["ID"], game
+    )
     if resumable:
         payload = session_payload(conn, resumable)
         mins = payload.get("minutes_left", 0)
@@ -658,7 +854,9 @@ def handle_quote(conn, req):
 
     lease = find_active_lease(conn, user["ID"], game)
     reuse = lease is not None
-    other_active = find_other_active_session(conn, user["ID"], game["ID"])
+    other_active = find_other_active_session(
+        conn, user["ID"], service_type, game_identifier, game["ID"], game
+    )
 
     if reuse:
         msg = (
@@ -716,29 +914,52 @@ def handle_start(conn, req):
     game = ensure_game(conn, service_type, game_identifier, game_name)
     price = float(game["HourlyPrice"])
 
-    resumable = find_resumable_session(conn, user["ID"], game["ID"])
+    resumable = find_resumable_session(
+        conn, user["ID"], service_type, game_identifier, game["ID"], game
+    )
     if resumable:
-        end_other_active_sessions(conn, user["ID"], except_session_id=resumable["ID"])
+        end_other_active_sessions(
+            conn,
+            user["ID"],
+            except_session_id=resumable["ID"],
+            service_type=service_type,
+            game_identifier=game_identifier,
+            game_id=game["ID"],
+            game=game,
+        )
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET StreamActive=1, Status='active', "
-                "LastHeartbeatAt=NOW(3), UiMessage=%s WHERE ID=%s",
-                ("Продолжаем оплаченную сессию…", resumable["ID"]),
+                "LastHeartbeatAt=NOW(3) WHERE ID=%s",
+                (resumable["ID"],),
             )
-            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (resumable["ID"],))
-            sess = cur.fetchone()
         touch_lease(conn, resumable["LeaseID"])
         conn.commit()
-        payload = session_payload(conn, sess)
-        payload["resumed"] = True
-        payload["ui_message"] = (
+        payload = session_payload(conn, resumable)
+        mins = payload.get("minutes_left", 0)
+        ui_msg = (
             "Продолжение сессии «%s». Осталось %s мин оплаченного времени."
-            % (game["Name"], payload.get("minutes_left", 0))
+            % (game["Name"], mins)
         )
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET UiMessage=%s WHERE ID=%s",
+                (ui_msg, resumable["ID"]),
+            )
+        conn.commit()
+        payload["resumed"] = True
+        payload["ui_message"] = ui_msg
         return reply(req_id, True, **payload)
 
-    # Switching game forfeits remaining paid time on other sessions
-    end_other_active_sessions(conn, user["ID"])
+    # Switching game forfeits remaining paid time on other sessions only.
+    end_other_active_sessions(
+        conn,
+        user["ID"],
+        service_type=service_type,
+        game_identifier=game_identifier,
+        game_id=game["ID"],
+        game=game,
+    )
 
     lease = find_active_lease(conn, user["ID"], game)
     account = None
@@ -853,7 +1074,8 @@ def handle_heartbeat(conn, req):
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT * FROM CloudStreaming_Sessions WHERE SessionToken=%s LIMIT 1 FOR UPDATE",
+            "SELECT *, TIMESTAMPDIFF(SECOND, NOW(3), PaidUntil) AS SecsLeft "
+            "FROM CloudStreaming_Sessions WHERE SessionToken=%s LIMIT 1 FOR UPDATE",
             (token,),
         )
         sess = cur.fetchone()
@@ -865,12 +1087,7 @@ def handle_heartbeat(conn, req):
         conn.rollback()
         return reply(req_id, False, error="Сессия завершена", status=sess["Status"])
 
-    now = datetime.now()
-    paid_until = sess["PaidUntil"]
-    if isinstance(paid_until, str):
-        paid_until = datetime.strptime(paid_until[:19], DATE_FMT)
-
-    if now >= paid_until:
+    if int(sess.get("SecsLeft") or 0) <= 0:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
@@ -949,8 +1166,12 @@ def handle_renew(conn, req):
         return reply(req_id, False, error=pay_msg, ui_message=pay_msg)
 
     now = datetime.now()
-    paid_until = now + timedelta(hours=1)
+    current_paid_until = parse_db_datetime(sess["PaidUntil"])
+    # Stack the new hour on any remaining paid time (e.g. 8 min left + 60 min = 68 min).
+    base = current_paid_until if current_paid_until and current_paid_until > now else now
+    paid_until = base + timedelta(hours=1)
     renew_at = paid_until - RENEW_LEAD
+    minutes_left = max(0, int((paid_until - now).total_seconds() + 59) // 60)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET BlockNo=%s, BlockStartedAt=%s, "
@@ -960,7 +1181,8 @@ def handle_renew(conn, req):
                 fmt_dt(now),
                 fmt_dt(paid_until),
                 fmt_dt(renew_at),
-                "Продлено ещё на 1 час (%s ₽)" % int(price),
+                "Продлено ещё на 1 час (%s ₽). Всего осталось %s мин."
+                % (int(price), minutes_left),
                 sess["ID"],
             ),
         )

@@ -31,6 +31,22 @@ extern "C" {
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
+static int billingMinutesFromResponse(const QJsonObject &data)
+{
+    if(data.contains(QStringLiteral("minutes_left")))
+        return data.value(QStringLiteral("minutes_left")).toInt(0);
+    const QString paid_until = data.value(QStringLiteral("paid_until")).toString().trimmed();
+    if(paid_until.isEmpty())
+        return 0;
+    const QDateTime until = QDateTime::fromString(paid_until, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    if(!until.isValid())
+        return 0;
+    const qint64 secs = QDateTime::currentDateTime().secsTo(until);
+    if(secs <= 0)
+        return 0;
+    return static_cast<int>((secs + 59) / 60);
+}
+
 CloudStreamingBackend::CloudStreamingBackend(Settings *settings, QObject *parent)
     : QObject(parent)
     , settings(settings)
@@ -89,7 +105,7 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
             stopBillingHeartbeat();
         return;
     }
-    const int mins = res.data.value(QStringLiteral("minutes_left")).toInt(-1);
+    const int mins = billingMinutesFromResponse(res.data);
     QString msg = res.ui_message;
     if(msg.isEmpty())
         msg = tr("Оплаченное время: %1 мин").arg(mins);
@@ -104,7 +120,7 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
             billing_session_token);
         if(renew_res.ok)
             setBillingStatus(renew_res.ui_message.isEmpty() ? tr("Сессия продлена на 1 час") : renew_res.ui_message,
-                renew_res.data.value(QStringLiteral("minutes_left")).toInt(mins));
+                billingMinutesFromResponse(renew_res.data));
         else
             setBillingStatus(renew_res.ui_message.isEmpty() ? renew_res.error : renew_res.ui_message, mins);
     }
@@ -147,7 +163,7 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
     *out_npsso = start.data.value(QStringLiteral("npsso")).toString();
     billing_npsso = *out_npsso;
     setBillingStatus(start.ui_message,
-        start.data.value(QStringLiteral("minutes_left")).toInt(60));
+        billingMinutesFromResponse(start.data));
     setAllocationProgress(start.ui_message);
     startBillingHeartbeat();
     return true;
