@@ -187,6 +187,18 @@ def friendly_db_error(exc):
     return msg
 
 
+def _table_exists(conn, table):
+    with conn.cursor() as cur:
+        cur.execute("SHOW TABLES LIKE %s", (table,))
+        return cur.fetchone() is not None
+
+
+def _column_exists(conn, table, column):
+    with conn.cursor() as cur:
+        cur.execute("SHOW COLUMNS FROM `%s` LIKE %%s" % table.replace("`", ""), (column,))
+        return cur.fetchone() is not None
+
+
 def verify_schema(conn):
     """Fail fast at startup when the catalog migration was not applied."""
     required = [
@@ -196,18 +208,12 @@ def verify_schema(conn):
         ("CloudStreaming_PaymentMethods", "StartPaymentID"),
     ]
     missing = []
-    with conn.cursor() as cur:
-        for table, column in required:
-            cur.execute(
-                "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
-                "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s",
-                (DB_NAME, table, column),
-            )
-            if int(cur.fetchone()["n"]) == 0:
-                missing.append("%s.%s" % (table, column))
+    for table, column in required:
+        if not _table_exists(conn, table) or not _column_exists(conn, table, column):
+            missing.append("%s.%s" % (table, column))
     if missing:
         raise RuntimeError(
-            "Cloud billing schema is outdated (missing: %s). Run migrate_catalog.sql "
+            "Cloud billing schema is outdated (missing: %s). Run migrate_catalog_v2.sql "
             "and migrate_payment_methods.sql, then pm2 restart cloud-billing-udp."
             % ", ".join(missing)
         )

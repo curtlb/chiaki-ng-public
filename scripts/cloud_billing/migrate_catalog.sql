@@ -1,23 +1,20 @@
--- Safe catalog migration for EXISTING CloudStreaming DB (idempotent, phpMyAdmin-friendly).
--- Fixes MySQL #1022 (duplicate FK name) from migrate_catalog.sql when the old
--- CloudStreaming_AccountOwnedGames table already defines fk_cs_aog_* constraints.
+-- Миграция каталога для существующей БД CloudStreaming (без information_schema).
+-- phpMyAdmin: выполняйте блоки по порядку. Если строка падает с «Duplicate column» /
+-- «Duplicate key» / «already exists» — пропустите её и идите дальше.
 --
--- Run once:
---   mysql -h HOST -u USER -p DBNAME < migrate_catalog_v2.sql
---
--- If a previous attempt failed halfway, this script cleans up *_new leftovers first.
+-- mysql -h HOST -u USER -p DBNAME < migrate_catalog_v2.sql
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
--- ---------------------------------------------------------------------------
--- 0) Cleanup partial runs
--- ---------------------------------------------------------------------------
+-- ===========================================================================
+-- 1) Очистка после неудачной попытки
+-- ===========================================================================
 DROP TABLE IF EXISTS CloudStreaming_AccountOwnedGames_new;
 
--- ---------------------------------------------------------------------------
--- 1) Catalog table
--- ---------------------------------------------------------------------------
+-- ===========================================================================
+-- 2) Таблица каталога
+-- ===========================================================================
 CREATE TABLE IF NOT EXISTS CloudStreaming_Catalog (
     ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     CatalogKey      VARCHAR(200) NOT NULL,
@@ -44,42 +41,18 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Catalog (
     KEY idx_cs_catalog_entitlement (EntitlementId)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ---------------------------------------------------------------------------
--- 2) CloudStreaming_Games.CatalogID (skip if already present)
--- ---------------------------------------------------------------------------
-SET @games_has_catalog := (
-    SELECT COUNT(*) FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'CloudStreaming_Games'
-      AND COLUMN_NAME = 'CatalogID'
-);
-SET @sql_games := IF(
-    @games_has_catalog = 0,
-    'ALTER TABLE CloudStreaming_Games ADD COLUMN CatalogID BIGINT UNSIGNED NULL COMMENT ''link to synced catalog row'' AFTER ID',
-    'SELECT ''CloudStreaming_Games.CatalogID already exists'' AS info'
-);
-PREPARE stmt_games FROM @sql_games;
-EXECUTE stmt_games;
-DEALLOCATE PREPARE stmt_games;
+-- ===========================================================================
+-- 3) Колонка CatalogID в CloudStreaming_Games
+--    Ошибка #1060 Duplicate column — уже есть, пропустите.
+-- ===========================================================================
+ALTER TABLE CloudStreaming_Games
+    ADD COLUMN CatalogID BIGINT UNSIGNED NULL COMMENT 'link to synced catalog row' AFTER ID;
 
--- Optional FK on Games.CatalogID (ignore if exists)
-SET @games_fk_exists := (
-    SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'CloudStreaming_Games'
-      AND CONSTRAINT_NAME = 'fk_cs_game_catalog'
-      AND CONSTRAINT_TYPE = 'FOREIGN KEY'
-);
-SET @sql_games_fk := IF(
-    @games_fk_exists = 0,
-    'ALTER TABLE CloudStreaming_Games ADD CONSTRAINT fk_cs_game_catalog FOREIGN KEY (CatalogID) REFERENCES CloudStreaming_Catalog(ID) ON DELETE SET NULL',
-    'SELECT ''fk_cs_game_catalog already exists'' AS info'
-);
-PREPARE stmt_games_fk FROM @sql_games_fk;
-EXECUTE stmt_games_fk;
-DEALLOCATE PREPARE stmt_games_fk;
+-- Ошибка #1826 / duplicate FK — уже есть, пропустите.
+ALTER TABLE CloudStreaming_Games
+    ADD CONSTRAINT fk_cs_game_catalog FOREIGN KEY (CatalogID) REFERENCES CloudStreaming_Catalog(ID) ON DELETE SET NULL;
 
--- Seed catalog rows from legacy CloudStreaming_Games (manual entries)
+-- Заполнить каталог из старых строк Games (ручные записи)
 INSERT IGNORE INTO CloudStreaming_Catalog
     (CatalogKey, Name, ServiceType, Platform, ProductId, EntitlementId, StreamIdentifier, Category)
 SELECT
@@ -93,71 +66,42 @@ SELECT
     'manual'
 FROM CloudStreaming_Games g;
 
--- ---------------------------------------------------------------------------
--- 3) Rebuild AccountOwnedGames ONLY when CatalogID column is still missing
--- ---------------------------------------------------------------------------
-SET @aog_has_catalog := (
-    SELECT COUNT(*) FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'CloudStreaming_AccountOwnedGames'
-      AND COLUMN_NAME = 'CatalogID'
-);
+-- ===========================================================================
+-- 4) Пересборка CloudStreaming_AccountOwnedGames
+--
+--    СНАЧАЛА выполните вручную:
+--      SHOW COLUMNS FROM CloudStreaming_AccountOwnedGames;
+--
+--    Если в списке УЖЕ есть CatalogID — весь блок 4 НЕ ЗАПУСКАЙТЕ, переходите к блоку 5.
+--    Если CatalogID нет — выполните блок 4 целиком.
+-- ===========================================================================
 
--- Unique FK names for the staging table (avoids #1022 vs old table constraints)
-SET @sql_aog_rebuild := IF(
-    @aog_has_catalog = 0,
-    'CREATE TABLE CloudStreaming_AccountOwnedGames_new (
-        ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        AccountID BIGINT UNSIGNED NOT NULL,
-        CatalogID BIGINT UNSIGNED NOT NULL,
-        GameID BIGINT UNSIGNED NULL,
-        CreatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-        PRIMARY KEY (ID),
-        UNIQUE KEY uq_cs_aog_mig (AccountID, CatalogID),
-        CONSTRAINT fk_cs_aog_mig_account FOREIGN KEY (AccountID) REFERENCES CloudStreaming_Accounts(ID) ON DELETE CASCADE,
-        CONSTRAINT fk_cs_aog_mig_catalog FOREIGN KEY (CatalogID) REFERENCES CloudStreaming_Catalog(ID) ON DELETE CASCADE,
-        CONSTRAINT fk_cs_aog_mig_game FOREIGN KEY (GameID) REFERENCES CloudStreaming_Games(ID) ON DELETE SET NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
-    'SELECT ''CloudStreaming_AccountOwnedGames already has CatalogID — skip rebuild'' AS info'
-);
-PREPARE stmt_aog_create FROM @sql_aog_rebuild;
-EXECUTE stmt_aog_create;
-DEALLOCATE PREPARE stmt_aog_create;
+CREATE TABLE CloudStreaming_AccountOwnedGames_new (
+    ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    AccountID       BIGINT UNSIGNED NOT NULL,
+    CatalogID       BIGINT UNSIGNED NOT NULL,
+    GameID          BIGINT UNSIGNED NULL,
+    CreatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (ID),
+    UNIQUE KEY uq_cs_aog_mig (AccountID, CatalogID),
+    CONSTRAINT fk_cs_aog_mig_account FOREIGN KEY (AccountID) REFERENCES CloudStreaming_Accounts(ID) ON DELETE CASCADE,
+    CONSTRAINT fk_cs_aog_mig_catalog FOREIGN KEY (CatalogID) REFERENCES CloudStreaming_Catalog(ID) ON DELETE CASCADE,
+    CONSTRAINT fk_cs_aog_mig_game FOREIGN KEY (GameID) REFERENCES CloudStreaming_Games(ID) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-SET @sql_aog_copy := IF(
-    @aog_has_catalog = 0,
-    'INSERT INTO CloudStreaming_AccountOwnedGames_new (AccountID, CatalogID, GameID, CreatedAt)
-     SELECT aog.AccountID, c.ID, aog.GameID, aog.CreatedAt
-     FROM CloudStreaming_AccountOwnedGames aog
-     JOIN CloudStreaming_Games g ON g.ID = aog.GameID
-     JOIN CloudStreaming_Catalog c ON c.StreamIdentifier = g.GameIdentifier AND c.ServiceType = g.ServiceType',
-    'SELECT ''skip copy'' AS info'
-);
-PREPARE stmt_aog_copy FROM @sql_aog_copy;
-EXECUTE stmt_aog_copy;
-DEALLOCATE PREPARE stmt_aog_copy;
+INSERT INTO CloudStreaming_AccountOwnedGames_new (AccountID, CatalogID, GameID, CreatedAt)
+SELECT aog.AccountID, c.ID, aog.GameID, aog.CreatedAt
+FROM CloudStreaming_AccountOwnedGames aog
+JOIN CloudStreaming_Games g ON g.ID = aog.GameID
+JOIN CloudStreaming_Catalog c ON c.StreamIdentifier = g.GameIdentifier AND c.ServiceType = g.ServiceType;
 
-SET @sql_aog_swap := IF(
-    @aog_has_catalog = 0,
-    'DROP TABLE CloudStreaming_AccountOwnedGames',
-    'SELECT ''skip drop'' AS info'
-);
-PREPARE stmt_aog_drop FROM @sql_aog_swap;
-EXECUTE stmt_aog_drop;
-DEALLOCATE PREPARE stmt_aog_drop;
+DROP TABLE CloudStreaming_AccountOwnedGames;
 
-SET @sql_aog_rename := IF(
-    @aog_has_catalog = 0,
-    'RENAME TABLE CloudStreaming_AccountOwnedGames_new TO CloudStreaming_AccountOwnedGames',
-    'SELECT ''skip rename'' AS info'
-);
-PREPARE stmt_aog_rename FROM @sql_aog_rename;
-EXECUTE stmt_aog_rename;
-DEALLOCATE PREPARE stmt_aog_rename;
+RENAME TABLE CloudStreaming_AccountOwnedGames_new TO CloudStreaming_AccountOwnedGames;
 
--- ---------------------------------------------------------------------------
--- 4) Admin views
--- ---------------------------------------------------------------------------
+-- ===========================================================================
+-- 5) Представления для phpMyAdmin
+-- ===========================================================================
 CREATE OR REPLACE VIEW v_cs_catalog_picker AS
 SELECT
     c.ID AS CatalogID,
@@ -193,25 +137,9 @@ JOIN CloudStreaming_Catalog c ON c.ID = aog.CatalogID;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
--- ---------------------------------------------------------------------------
--- 5) Sanity check (should return 3 rows with cnt=1)
--- ---------------------------------------------------------------------------
-SELECT 'CloudStreaming_Games.CatalogID' AS check_name,
-       COUNT(*) AS cnt
-FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME = 'CloudStreaming_Games'
-  AND COLUMN_NAME = 'CatalogID'
-UNION ALL
-SELECT 'CloudStreaming_AccountOwnedGames.CatalogID',
-       COUNT(*)
-FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME = 'CloudStreaming_AccountOwnedGames'
-  AND COLUMN_NAME = 'CatalogID'
-UNION ALL
-SELECT 'CloudStreaming_Catalog table',
-       COUNT(*)
-FROM information_schema.TABLES
-WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME = 'CloudStreaming_Catalog';
+-- ===========================================================================
+-- 6) Проверка (без information_schema)
+-- ===========================================================================
+SHOW COLUMNS FROM CloudStreaming_Games LIKE 'CatalogID';
+SHOW COLUMNS FROM CloudStreaming_AccountOwnedGames LIKE 'CatalogID';
+SELECT COUNT(*) AS catalog_rows FROM CloudStreaming_Catalog;
