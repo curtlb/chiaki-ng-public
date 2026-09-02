@@ -32,6 +32,10 @@ public:
 	static Result heartbeat(const QString &host, quint16 port, const QString &session_token, bool streaming);
 	static Result renew(const QString &host, quint16 port, const QString &email, const QString &session_token);
 	static Result endStream(const QString &host, quint16 port, const QString &session_token);
+	/** Full game catalog from CloudStreaming_Catalog (no player NPSSO). */
+	static Result fetchCatalog(const QString &host, quint16 port,
+		const QString &service_type = QString(), const QString &platform = QString(),
+		bool only_billable = false);
 };
 
 #endif

@@ -7,7 +7,7 @@ JSON over UDP (request/response share the same "id" field).
 Default bind: 0.0.0.0:13750
 
 Actions:
-  ping, quote, start, confirm_stream, heartbeat, renew, end_stream, status
+  ping, catalog, quote, start, confirm_stream, heartbeat, renew, end_stream, status
 
 Deploy:
   cp .env.example .env   # fill in secrets locally (never commit .env)
@@ -802,6 +802,108 @@ def session_payload(conn, sess):
     }
 
 
+def catalog_title_key(name):
+    if not name:
+        return ""
+    name = name.lower().replace("(playstation plus)", "")
+    return "".join(ch for ch in name if ch.isalnum())
+
+
+def catalog_row_to_game(row):
+    st = row["ServiceType"]
+    stream_id = row["StreamIdentifier"]
+    product_id = (row.get("ProductId") or stream_id or "").strip()
+    platform = (row.get("Platform") or "unknown").lower()
+    if platform == "unknown":
+        platform = "ps4" if st == "psnow" else "ps5"
+    category = (row.get("Category") or "streamable").lower()
+    image = (row.get("ImageUrl") or "").strip()
+    game = {
+        "productId": product_id,
+        "name": row["Name"],
+        "imageUrl": image,
+        "landscapeImageUrl": image,
+        "conceptId": row.get("ConceptId") or "",
+        "category": category,
+        "serviceType": st,
+        "platform": platform,
+        "isOwned": False,
+        "streamServiceType": st,
+        "streamIdentifier": stream_id,
+        "entitlementId": row.get("EntitlementId") or "",
+        "storeProductId": product_id,
+        "conceptUrl": "",
+        "plusCatalog": category == "streamable",
+    }
+    if row.get("ID") is not None:
+        game["catalogDbId"] = int(row["ID"])
+    return game
+
+
+def dedupe_catalog_games(rows):
+    """Prefer psnow over pscloud when the normalized title matches (hourly rental)."""
+    picked = {}
+    extras = []
+    for row in rows:
+        game = catalog_row_to_game(row)
+        key = catalog_title_key(game.get("name"))
+        if not key:
+            extras.append(game)
+            continue
+        prev = picked.get(key)
+        if not prev:
+            picked[key] = game
+        elif prev.get("serviceType") == "pscloud" and game.get("serviceType") == "psnow":
+            picked[key] = game
+    games = list(picked.values()) + extras
+    games.sort(key=lambda g: (g.get("name") or "").lower())
+    return games
+
+
+def handle_catalog(conn, req):
+    """Return the synced Sony catalog from MySQL (no player NPSSO required)."""
+    req_id = req.get("id")
+    service_type = (req.get("service_type") or "").strip().lower()
+    platform = (req.get("platform") or "").strip().lower()
+    only_billable = bool(req.get("only_billable"))
+
+    sql = "SELECT c.* FROM CloudStreaming_Catalog c "
+    if only_billable:
+        sql += (
+            "INNER JOIN CloudStreaming_Games g "
+            "ON g.CatalogID = c.ID AND g.IsActive = 1 "
+        )
+    sql += "WHERE c.IsVisible = 1 "
+    params = []
+    if service_type in ("psnow", "pscloud"):
+        sql += "AND c.ServiceType = %s "
+        params.append(service_type)
+    if platform in ("ps3", "ps4", "ps5", "unknown"):
+        sql += "AND c.Platform = %s "
+        params.append(platform)
+    sql += "ORDER BY c.Name ASC"
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params or None)
+        rows = cur.fetchall()
+
+    games = dedupe_catalog_games(rows)
+    log.info(
+        "catalog: returning %s games (filters: service=%s platform=%s only_billable=%s)",
+        len(games),
+        service_type or "*",
+        platform or "*",
+        only_billable,
+    )
+    return reply(
+        req_id,
+        True,
+        games=games,
+        totalGames=len(games),
+        catalog_source="billing_db",
+    )
+
+
 def handle_quote(conn, req):
     email = (req.get("email") or "").strip().lower()
     service_type = (req.get("service_type") or "").strip().lower()
@@ -1323,6 +1425,8 @@ def dispatch(payload):
     try:
         if action == "quote":
             out = handle_quote(conn, payload)
+        elif action == "catalog":
+            out = handle_catalog(conn, payload)
         elif action == "confirm_stream":
             out = handle_confirm_stream(conn, payload)
         elif action == "start":

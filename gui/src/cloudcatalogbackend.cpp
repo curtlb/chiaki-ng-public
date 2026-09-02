@@ -4,6 +4,7 @@
 #ifdef CHIAKI_GUI_ENABLE_STEAM_SHORTCUT
 #include "steamtools.h"
 #endif
+#include "cloudbillingclient.h"
 #include <cloudlog.h>
 #include <chiaki/cloudcatalog.h>
 #include <chiaki/log.h>
@@ -203,11 +204,31 @@ void CloudCatalogBackend::setCachedData(const QString &key, const QJsonDocument 
 
 QString CloudCatalogBackend::getNpSsoToken()
 {
-    // Hourly billing uses a rented PS account NPSSO (secondary / provision token)
-    // for catalog + streaming; personal login may be absent.
-    if (settings && settings->GetCloudBillingEnabled() && !settings->GetFourCloudEmail().isEmpty())
-        return settings->GetNpssoTokenForCloudProvision();
     return settings->GetNpssoToken();
+}
+
+static bool useBillingCatalogSource(const Settings *settings)
+{
+    if (!settings || !settings->GetCloudBillingEnabled())
+        return false;
+    if (settings->GetFourCloudEmail().trimmed().isEmpty())
+        return false;
+    return !settings->GetCloudBillingHost().trimmed().isEmpty();
+}
+
+static QJsonObject billingCatalogEnvelope(const QJsonArray &games, const QString &locale)
+{
+    QJsonObject root;
+    root[QStringLiteral("schemaVersion")] = 11;
+    root[QStringLiteral("total")] = games.size();
+    root[QStringLiteral("nativeMode")] = false;
+    root[QStringLiteral("fallbackRegion")] = QString();
+    root[QStringLiteral("resolvedStoreLang")] = QString();
+    root[QStringLiteral("settledLocale")] = locale.isEmpty() ? QStringLiteral("en-US") : locale;
+    root[QStringLiteral("warning")] = QString();
+    root[QStringLiteral("catalogSource")] = QStringLiteral("billing_db");
+    root[QStringLiteral("games")] = games;
+    return root;
 }
 
 static QString pickImageUrl(const QJsonObject &g)
@@ -458,17 +479,58 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
     // discards this fetch's result and restarts with the then-current inputs.
     const quint64 gen = catalogGeneration;
 
-    const QByteArray npsso = getNpSsoToken().toUtf8();
+    const bool billingCatalog = useBillingCatalogSource(settings);
+    const QByteArray npsso = billingCatalog ? QByteArray() : getNpSsoToken().toUtf8();
     const QByteArray locale =
         (settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-US")).toUtf8();
     const QByteArray cacheDir = cacheDirectory.toUtf8();
+    const QString billingHost = billingCatalog && settings ? settings->GetCloudBillingHost() : QString();
+    const quint16 billingPort = billingCatalog && settings ? settings->GetCloudBillingPort() : 0;
     {
-        const QString startMsg = QStringLiteral("fetch start locale=%1 npsso=%2")
-            .arg(QString::fromUtf8(locale), npsso.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"));
+        const QString startMsg = billingCatalog
+            ? QStringLiteral("fetch start billing_db host=%1").arg(billingHost)
+            : QStringLiteral("fetch start locale=%1 npsso=%2")
+                  .arg(QString::fromUtf8(locale), npsso.isEmpty() ? QStringLiteral("missing") : QStringLiteral("present"));
         CloudLogMessage(QStringLiteral("Catalog"), startMsg);
     }
 
-    std::thread([self, reqId, gen, npsso, locale, cacheDir]() mutable {
+    std::thread([self, reqId, gen, billingCatalog, billingHost, billingPort, npsso, locale, cacheDir]() mutable {
+        bool success = false;
+        QString message;
+        QString json;
+
+        if (billingCatalog) {
+            CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("billing catalog fetch started"));
+            const qint64 cacheTtlMs = 60 * 60 * 1000;
+            if (self) {
+                const QString cached = self->getCachedData(QStringLiteral("billing_catalog_v1"), cacheTtlMs);
+                if (!cached.isEmpty()) {
+                    json = cached;
+                    success = true;
+                    message = QStringLiteral("Cached");
+                    CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("[CACHE HIT] billing_catalog_v1"));
+                }
+            }
+            if (!success) {
+                const auto res = CloudBillingClient::fetchCatalog(billingHost, billingPort);
+                if (res.ok) {
+                    const QJsonArray games = res.data.value(QStringLiteral("games")).toArray();
+                    const QJsonObject root = billingCatalogEnvelope(
+                        games, QString::fromUtf8(locale));
+                    json = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+                    success = true;
+                    message = QStringLiteral("Success");
+                    if (self)
+                        self->setCachedData(QStringLiteral("billing_catalog_v1"), QJsonDocument(root));
+                    CloudLogMessage(QStringLiteral("Catalog"),
+                        QStringLiteral("billing catalog fetch finished: %1 games").arg(games.size()));
+                } else {
+                    message = res.ui_message.isEmpty() ? res.error : res.ui_message;
+                    CloudLogMessage(QStringLiteral("Catalog"),
+                        QStringLiteral("billing catalog fetch failed: %1").arg(message));
+                }
+            }
+        } else {
         CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, "Catalog");
         ChiakiLog *log = file_log.GetChiakiLog();
         CHIAKI_LOGI(log, "unified fetch started (locale=%s, npsso=%s)",
@@ -483,12 +545,13 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
 
         ChiakiCloudCatalogResult res;
         ChiakiErrorCode err = chiaki_cloudcatalog_fetch_unified(&cfg, &res, log);
-        const bool success = (err == CHIAKI_ERR_SUCCESS && res.json);
-        const QString json = res.json ? QString::fromUtf8(res.json) : QString();
-        const QString message = success
+        success = (err == CHIAKI_ERR_SUCCESS && res.json);
+        json = res.json ? QString::fromUtf8(res.json) : QString();
+        message = success
             ? QStringLiteral("Success")
             : QString::fromUtf8(res.error_message ? res.error_message : "Failed to fetch cloud catalog");
         chiaki_cloudcatalog_result_fini(&res);
+        }
 
         // QJSValue must be invoked on the engine (main) thread. Route through qApp so
         // the callback is fetched and invoked on the GUI thread even if `self` is
@@ -513,6 +576,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             if (self->catalogGeneration != gen) {
                 const QByteArray staleCacheDir = self->cacheDirectory.toUtf8();
                 chiaki_cloudcatalog_invalidate_cache(staleCacheDir.constData());
+                QFile::remove(self->getCacheFilePath(QStringLiteral("billing_catalog_v1")));
                 qInfo() << "[CACHE] Discarding stale unified fetch (generation"
                         << gen << "!=" << self->catalogGeneration << "); refetching";
                 if (cb.isCallable())
@@ -1000,6 +1064,7 @@ void CloudCatalogBackend::invalidateCache()
     // the client from drifting out of sync when the cache schema/version bumps.
     const QByteArray cacheDir = cacheDirectory.toUtf8();
     chiaki_cloudcatalog_invalidate_cache(cacheDir.constData());
+    QFile::remove(getCacheFilePath(QStringLiteral("billing_catalog_v1")));
     qInfo() << "[CACHE INVALIDATED] Delegated cache invalidation to libchiaki for" << cacheDirectory;
     // Tell the cloud view to drop its stale in-memory list and re-fetch (the cache files are gone,
     // so the next fetch is a guaranteed network refresh for the now-current account).

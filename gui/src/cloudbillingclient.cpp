@@ -138,3 +138,16 @@ CloudBillingClient::Result CloudBillingClient::endStream(const QString &host, qu
 	o[QStringLiteral("session_token")] = session_token;
 	return request(o);
 }
+
+CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host, quint16 port,
+	const QString &service_type, const QString &platform, bool only_billable)
+{
+	QJsonObject o = baseReq(host, port, QStringLiteral("catalog"));
+	if(!service_type.trimmed().isEmpty())
+		o[QStringLiteral("service_type")] = service_type.trimmed().toLower();
+	if(!platform.trimmed().isEmpty())
+		o[QStringLiteral("platform")] = platform.trimmed().toLower();
+	if(only_billable)
+		o[QStringLiteral("only_billable")] = true;
+	return request(o, 30000);
+}
