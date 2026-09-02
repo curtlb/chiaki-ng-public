@@ -183,10 +183,28 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_cloudcatalog_fetch_unified(
 	}
 	else if(nr == CC_NATIVE_AUTH_ERROR)
 	{
-		auth_error = true;
-		warning = WARNING_EXPIRED;
-		apollo = json_object_new_array();
-		CHIAKI_LOGW(log, "[UNIFIED] native probe auth error; prompting re-login");
+		// Missing or expired NPSSO must not yield an empty Apollo universe: billing
+		// users often browse the catalog before a rental NPSSO exists, and an expired
+		// personal token should still show the public PS Now classics list.
+		if(npsso && *npsso)
+		{
+			auth_error = true;
+			warning = WARNING_EXPIRED;
+			CHIAKI_LOGW(log, "[UNIFIED] native probe auth error; using public Apollo fallback");
+		}
+		else
+			CHIAKI_LOGI(log, "[UNIFIED] no npsso; using public Apollo fallback for PS Now catalog");
+		char cc[8];
+		if(acct_country[0])
+			snprintf(cc, sizeof(cc), "%s", acct_country);
+		else
+			account_country_from_locale(locale, cc, sizeof(cc));
+		bool fallback_complete = true;
+		apollo = cc_fetch_apollo_fallback(log, cc, &fallback_complete);
+		snprintf(fallback_region, sizeof(fallback_region), "%s", cc);
+		CHIAKI_LOGI(log, "[UNIFIED] resolvedStoreCountry=%s (auth-error fallback account country)", fallback_region);
+		if(!fallback_complete)
+			apollo_complete = false;
 	}
 	else // region unsupported / fatal -> public fallback
 	{

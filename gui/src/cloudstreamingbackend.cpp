@@ -163,6 +163,8 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
     billing_session_token = start.data.value(QStringLiteral("session_token")).toString();
     *out_npsso = start.data.value(QStringLiteral("npsso")).toString();
     billing_npsso = *out_npsso;
+    if (!billing_npsso.isEmpty())
+        settings->SetNpssoTokenSecondary(billing_npsso);
     billing_payment_pending = start.data.value(QStringLiteral("payment_pending")).toBool(false);
     setBillingStatus(start.ui_message,
         billingMinutesFromResponse(start.data));

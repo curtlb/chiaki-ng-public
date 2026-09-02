@@ -203,7 +203,10 @@ void CloudCatalogBackend::setCachedData(const QString &key, const QJsonDocument 
 
 QString CloudCatalogBackend::getNpSsoToken()
 {
-    // Get NPSSO token from settings (saved during login)
+    // Hourly billing uses a rented PS account NPSSO (secondary / provision token)
+    // for catalog + streaming; personal login may be absent.
+    if (settings && settings->GetCloudBillingEnabled() && !settings->GetFourCloudEmail().isEmpty())
+        return settings->GetNpssoTokenForCloudProvision();
     return settings->GetNpssoToken();
 }
 

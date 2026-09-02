@@ -43,7 +43,7 @@ extern "C" {
  *     fallback regions; invalidates v5-v7 caches that held only the PS3 child.
  * v9: when the same title exists on PS Now and PS5 cloud, keep the PS Now row for
  *     hourly rental (PS5 cloud PPSA ids fail on rented accounts). */
-#define CHIAKI_CLOUDCATALOG_SCHEMA_VERSION 9
+#define CHIAKI_CLOUDCATALOG_SCHEMA_VERSION 10
 
 typedef struct chiaki_cloudcatalog_config_t
 {
