@@ -256,6 +256,18 @@ static QString pickImageUrl(const QJsonObject &g)
         if (!u.isEmpty())
             return u;
     }
+    // Billing DB catalog omits imageUrl on the wire; synthesize Chihiro cover.
+    QString pid = g.value(QStringLiteral("productId")).toString();
+    if (pid.isEmpty())
+        pid = g.value(QStringLiteral("streamIdentifier")).toString();
+    if (!pid.isEmpty()) {
+        QString country = QStringLiteral("US");
+        const QString prefix = pid.left(2).toUpper();
+        if (prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC"))
+            country = QStringLiteral("GB");
+        return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/en/999/%2/image")
+            .arg(country, pid);
+    }
     return QString();
 }
 
@@ -503,12 +515,12 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("billing catalog fetch started"));
             const qint64 cacheTtlMs = 60 * 60 * 1000;
             if (self) {
-                const QString cached = self->getCachedData(QStringLiteral("billing_catalog_v2"), cacheTtlMs);
+                const QString cached = self->getCachedData(QStringLiteral("billing_catalog_v3"), cacheTtlMs);
                 if (!cached.isEmpty()) {
                     json = cached;
                     success = true;
                     message = QStringLiteral("Cached");
-                    CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("[CACHE HIT] billing_catalog_v2"));
+                    CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("[CACHE HIT] billing_catalog_v3"));
                 }
             }
             if (!success) {
@@ -521,7 +533,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                     success = true;
                     message = QStringLiteral("Success");
                     if (self)
-                        self->setCachedData(QStringLiteral("billing_catalog_v2"), QJsonDocument(root));
+                        self->setCachedData(QStringLiteral("billing_catalog_v3"), QJsonDocument(root));
                     CloudLogMessage(QStringLiteral("Catalog"),
                         QStringLiteral("billing catalog fetch finished: %1 games").arg(games.size()));
                 } else {
@@ -576,7 +588,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             if (self->catalogGeneration != gen) {
                 const QByteArray staleCacheDir = self->cacheDirectory.toUtf8();
                 chiaki_cloudcatalog_invalidate_cache(staleCacheDir.constData());
-                QFile::remove(self->getCacheFilePath(QStringLiteral("billing_catalog_v2")));
+                QFile::remove(self->getCacheFilePath(QStringLiteral("billing_catalog_v3")));
                 qInfo() << "[CACHE] Discarding stale unified fetch (generation"
                         << gen << "!=" << self->catalogGeneration << "); refetching";
                 if (cb.isCallable())
@@ -1064,7 +1076,7 @@ void CloudCatalogBackend::invalidateCache()
     // the client from drifting out of sync when the cache schema/version bumps.
     const QByteArray cacheDir = cacheDirectory.toUtf8();
     chiaki_cloudcatalog_invalidate_cache(cacheDir.constData());
-    QFile::remove(getCacheFilePath(QStringLiteral("billing_catalog_v2")));
+    QFile::remove(getCacheFilePath(QStringLiteral("billing_catalog_v3")));
     qInfo() << "[CACHE INVALIDATED] Delegated cache invalidation to libchiaki for" << cacheDirectory;
     // Tell the cloud view to drop its stale in-memory list and re-fetch (the cache files are gone,
     // so the next fetch is a guaranteed network refresh for the now-current account).

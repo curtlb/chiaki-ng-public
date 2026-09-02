@@ -33,7 +33,7 @@ public:
 	static Result renew(const QString &host, quint16 port, const QString &email, const QString &session_token);
 	static Result endStream(const QString &host, quint16 port, const QString &session_token);
 	/** Full game catalog from CloudStreaming_Catalog (no player NPSSO).
-	 *  Fetches paged UDP responses and merges them (catalog is too large for one datagram). */
+	 *  Uses chunked qCompress UDP transfer (MTU-safe); covers synthesized from productId. */
 	static Result fetchCatalog(const QString &host, quint16 port,
 		const QString &service_type = QString(), const QString &platform = QString(),
 		bool only_billable = false);

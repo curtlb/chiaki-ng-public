@@ -24,9 +24,12 @@ import os
 import random
 import re
 import socket
+import struct
 import sys
 import threading
 import time
+import base64
+import zlib
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, date
@@ -809,24 +812,8 @@ def catalog_title_key(name):
     return "".join(ch for ch in name if ch.isalnum())
 
 
-def fallback_store_image_url(product_id):
-    """Chihiro cover URL when CloudStreaming_Catalog.ImageUrl was never synced."""
-    pid = (product_id or "").strip()
-    if not pid:
-        return ""
-    # EU SKUs use EP/EE/EC; US-style UP / bare CUSA/PPSA → US store.
-    if pid.upper().startswith(("EP", "EE", "EC")):
-        country, lang = "GB", "en"
-    else:
-        country, lang = "US", "en"
-    return (
-        "https://store.playstation.com/store/api/chihiro/00_09_000/container/"
-        "%s/%s/999/%s/image" % (country, lang, pid)
-    )
-
-
 def catalog_row_to_game(row):
-    """Compact game object — must fit many rows in one UDP datagram (<= ~48KB)."""
+    """Compact game object for UDP transfer (no imageUrl — client builds Chihiro URL)."""
     st = row["ServiceType"]
     stream_id = row["StreamIdentifier"]
     product_id = (row.get("ProductId") or stream_id or "").strip()
@@ -834,20 +821,14 @@ def catalog_row_to_game(row):
     if platform == "unknown":
         platform = "ps4" if st == "psnow" else "ps5"
     category = (row.get("Category") or "streamable").lower()
-    image = (row.get("ImageUrl") or "").strip()
-    if not image:
-        image = fallback_store_image_url(product_id)
     return {
         "productId": product_id,
         "name": row["Name"],
-        "imageUrl": image,
         "category": category,
         "serviceType": st,
         "platform": platform,
-        "isOwned": False,
-        "streamServiceType": st,
         "streamIdentifier": stream_id,
-        "entitlementId": (row.get("EntitlementId") or ""),
+        "streamServiceType": st,
     }
 
 
@@ -871,13 +852,13 @@ def dedupe_catalog_games(rows):
     return games
 
 
-# Full catalog list is too large for one UDP datagram (EMSGSIZE / 64KB cap).
-# Clients page with offset+limit; server caches the assembled list briefly.
+# Full catalog cannot fit in one UDP datagram. One catalog request -> many MTU-safe
+# qCompress chunks (Qt-compatible: 4-byte BE size + zlib).
 _CATALOG_MEM = {"key": None, "ts": 0.0, "games": None}
 CATALOG_MEM_TTL_SEC = int(os.environ.get("CS_CATALOG_CACHE_SEC", "300"))
-CATALOG_DEFAULT_LIMIT = 80
-CATALOG_MAX_LIMIT = 120
-CATALOG_MAX_UDP_BYTES = 48000
+# Raw compressed slice size before base64; keeps each datagram under ~1200 bytes.
+CATALOG_CHUNK_RAW = int(os.environ.get("CS_CATALOG_CHUNK_RAW", "650"))
+CATALOG_SEND_PACE_SEC = float(os.environ.get("CS_CATALOG_SEND_PACE_SEC", "0.002"))
 
 
 def load_catalog_games(conn, service_type, platform, only_billable):
@@ -919,56 +900,81 @@ def load_catalog_games(conn, service_type, platform, only_billable):
 
 
 def handle_catalog(conn, req):
-    """Paged catalog from MySQL (no player NPSSO). UDP cannot carry the full list."""
+    """Build full catalog and return a qCompress blob for chunked UDP send."""
     req_id = req.get("id")
     service_type = (req.get("service_type") or "").strip().lower()
     platform = (req.get("platform") or "").strip().lower()
     only_billable = bool(req.get("only_billable"))
-    try:
-        offset = max(0, int(req.get("offset") or 0))
-    except (TypeError, ValueError):
-        offset = 0
-    try:
-        limit = int(req.get("limit") or CATALOG_DEFAULT_LIMIT)
-    except (TypeError, ValueError):
-        limit = CATALOG_DEFAULT_LIMIT
-    limit = max(1, min(limit, CATALOG_MAX_LIMIT))
 
     games = load_catalog_games(conn, service_type, platform, only_billable)
-    total = len(games)
-
-    # Shrink page until the JSON fits a safe UDP payload size.
-    page_limit = limit
-    while True:
-        page = games[offset : offset + page_limit]
-        out = reply(
-            req_id,
-            True,
-            games=page,
-            totalGames=total,
-            offset=offset,
-            limit=page_limit,
-            has_more=(offset + len(page)) < total,
-            catalog_source="billing_db",
-        )
-        raw_len = len(json.dumps(out, ensure_ascii=False).encode("utf-8"))
-        if raw_len <= CATALOG_MAX_UDP_BYTES or page_limit <= 10 or len(page) <= 10:
-            break
-        page_limit = max(10, page_limit // 2)
-
+    body = {
+        "games": games,
+        "totalGames": len(games),
+        "catalog_source": "billing_db",
+    }
+    raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    # Qt QByteArray::qUncompress expects big-endian uncompressed length + zlib.
+    blob = struct.pack(">I", len(raw)) + zlib.compress(raw, 6)
     log.info(
-        "catalog: page offset=%s limit=%s size=%s/%s "
-        "(filters: service=%s platform=%s only_billable=%s bytes=%s)",
-        offset,
-        page_limit,
-        len(out.get("games") or []),
-        total,
+        "catalog: prepared %s games (%s bytes json -> %s bytes qcompress) "
+        "filters service=%s platform=%s only_billable=%s",
+        len(games),
+        len(raw),
+        len(blob),
         service_type or "*",
         platform or "*",
         only_billable,
-        raw_len,
     )
-    return out
+    return {
+        "id": req_id,
+        "ok": True,
+        "transfer": "qcompress_chunks",
+        "totalGames": len(games),
+        "_blob": blob,
+    }
+
+
+def send_udp_reply(sock, out, addr):
+    """Send a normal JSON reply, or MTU-safe catalog chunks."""
+    blob = out.pop("_blob", None) if isinstance(out, dict) else None
+    if isinstance(out, dict) and out.get("transfer") == "qcompress_chunks" and blob is not None:
+        req_id = out.get("id")
+        step = max(200, CATALOG_CHUNK_RAW)
+        pieces = [blob[i : i + step] for i in range(0, len(blob), step)]
+        n = len(pieces)
+        log.info(
+            "catalog: sending %s chunks (%s bytes) totalGames=%s to %s",
+            n,
+            len(blob),
+            out.get("totalGames"),
+            addr,
+        )
+        for i, piece in enumerate(pieces):
+            msg = {
+                "id": req_id,
+                "ok": True,
+                "transfer": "qcompress_chunks",
+                "part": i,
+                "parts": n,
+                "totalGames": out.get("totalGames"),
+                "data": base64.b64encode(piece).decode("ascii"),
+            }
+            raw = json.dumps(msg, separators=(",", ":")).encode("utf-8")
+            try:
+                sock.sendto(raw, addr)
+            except OSError as e:
+                log.error("catalog chunk %s/%s sendto %s failed: %s (bytes=%s)", i + 1, n, addr, e, len(raw))
+                return
+            if CATALOG_SEND_PACE_SEC > 0:
+                time.sleep(CATALOG_SEND_PACE_SEC)
+        log.info("catalog: finished sending %s chunks to %s", n, addr)
+        return
+
+    raw = json.dumps(out, ensure_ascii=False).encode("utf-8")
+    try:
+        sock.sendto(raw, addr)
+    except OSError as e:
+        log.error("sendto %s failed: %s (bytes=%s)", addr, e, len(raw))
 
 
 def handle_quote(conn, req):
@@ -1623,9 +1629,9 @@ def main():
         log.info("REQ %s from %s action=%s", payload.get("id"), addr, payload.get("action"))
         out = dispatch(payload)
         try:
-            sock.sendto(json.dumps(out, ensure_ascii=False).encode("utf-8"), addr)
+            send_udp_reply(sock, out, addr)
         except Exception as e:
-            log.error("sendto %s: %s", addr, e)
+            log.error("send reply %s: %s", addr, e)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,11 @@
 
 #include <QEventLoop>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QMap>
 #include <QNetworkDatagram>
+#include <QAbstractSocket>
 #include <QUdpSocket>
 #include <QTimer>
 #include <QUuid>
@@ -139,49 +142,163 @@ CloudBillingClient::Result CloudBillingClient::endStream(const QString &host, qu
 	return request(o);
 }
 
+static QString chihiroImageUrl(const QString &product_id)
+{
+	const QString pid = product_id.trimmed();
+	if(pid.isEmpty())
+		return {};
+	QString country = QStringLiteral("US");
+	const QString prefix = pid.left(2).toUpper();
+	if(prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC"))
+		country = QStringLiteral("GB");
+	return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/en/999/%2/image")
+		.arg(country, pid);
+}
+
 CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host, quint16 port,
 	const QString &service_type, const QString &platform, bool only_billable)
 {
-	// Catalog is ~thousands of titles; one UDP datagram cannot carry it (EMSGSIZE).
-	// Page with offset/limit until has_more is false.
-	const int page_limit = 80;
-	int offset = 0;
-	int expected_total = -1;
-	QJsonArray all_games;
-	Result last;
+	// Server replies with many MTU-safe qCompress chunks for one catalog request.
+	Result result;
+	QUdpSocket socket;
+	socket.setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 8 * 1024 * 1024);
 
-	for(int page = 0; page < 500; ++page) {
-		QJsonObject o = baseReq(host, port, QStringLiteral("catalog"));
-		if(!service_type.trimmed().isEmpty())
-			o[QStringLiteral("service_type")] = service_type.trimmed().toLower();
-		if(!platform.trimmed().isEmpty())
-			o[QStringLiteral("platform")] = platform.trimmed().toLower();
-		if(only_billable)
-			o[QStringLiteral("only_billable")] = true;
-		o[QStringLiteral("offset")] = offset;
-		o[QStringLiteral("limit")] = page_limit;
-
-		last = request(o, 20000);
-		if(!last.ok)
-			return last;
-
-		const QJsonArray page_games = last.data.value(QStringLiteral("games")).toArray();
-		expected_total = last.data.value(QStringLiteral("totalGames")).toInt(expected_total);
-		for(const QJsonValue &v : page_games)
-			all_games.append(v);
-
-		const bool has_more = last.data.value(QStringLiteral("has_more")).toBool(false);
-		const int returned = page_games.size();
-		if(!has_more || returned <= 0)
-			break;
-		offset += returned;
-		if(expected_total >= 0 && all_games.size() >= expected_total)
-			break;
+	const QHostAddress addr(host);
+	if(host.trimmed().isEmpty() || addr.isNull()) {
+		result.error = QStringLiteral("Не задан адрес сервера биллинга (cloud_billing_host)");
+		return result;
 	}
 
-	last.data.insert(QStringLiteral("games"), all_games);
-	last.data.insert(QStringLiteral("totalGames"), all_games.size());
-	last.data.insert(QStringLiteral("has_more"), false);
-	last.ok = true;
-	return last;
+	QJsonObject o = baseReq(host, port, QStringLiteral("catalog"));
+	o.remove(QStringLiteral("_host"));
+	o.remove(QStringLiteral("_port"));
+	if(!service_type.trimmed().isEmpty())
+		o[QStringLiteral("service_type")] = service_type.trimmed().toLower();
+	if(!platform.trimmed().isEmpty())
+		o[QStringLiteral("platform")] = platform.trimmed().toLower();
+	if(only_billable)
+		o[QStringLiteral("only_billable")] = true;
+	o[QStringLiteral("transfer")] = QStringLiteral("qcompress_chunks");
+
+	const QString req_id = o.value(QStringLiteral("id")).toString();
+	const QByteArray send_data = QJsonDocument(o).toJson(QJsonDocument::Compact);
+	if(socket.writeDatagram(send_data, addr, port) < 0) {
+		result.error = QStringLiteral("Не удалось отправить запрос каталога: %1").arg(socket.errorString());
+		return result;
+	}
+
+	QMap<int, QByteArray> parts;
+	int expected_parts = -1;
+	int total_games = -1;
+	QString error;
+
+	QEventLoop loop;
+	QTimer idle;
+	idle.setSingleShot(true);
+	QTimer hard;
+	hard.setSingleShot(true);
+	QObject::connect(&idle, &QTimer::timeout, &loop, &QEventLoop::quit);
+	QObject::connect(&hard, &QTimer::timeout, &loop, &QEventLoop::quit);
+	QObject::connect(&socket, &QUdpSocket::readyRead, &loop, [&]() {
+		while(socket.hasPendingDatagrams()) {
+			const QNetworkDatagram dg = socket.receiveDatagram();
+			const QJsonDocument doc = QJsonDocument::fromJson(dg.data());
+			if(!doc.isObject())
+				continue;
+			const QJsonObject obj = doc.object();
+			if(obj.value(QStringLiteral("id")).toString() != req_id)
+				continue;
+
+			if(!obj.value(QStringLiteral("ok")).toBool(true)) {
+				error = obj.value(QStringLiteral("ui_message")).toString();
+				if(error.isEmpty())
+					error = obj.value(QStringLiteral("error")).toString();
+				loop.quit();
+				return;
+			}
+
+			// Legacy single-page / paged JSON (older server) — accept and stop.
+			if(obj.contains(QStringLiteral("games")) && !obj.contains(QStringLiteral("transfer"))) {
+				result.ok = true;
+				result.data = obj;
+				loop.quit();
+				return;
+			}
+
+			if(obj.value(QStringLiteral("transfer")).toString() != QStringLiteral("qcompress_chunks"))
+				continue;
+
+			const int part = obj.value(QStringLiteral("part")).toInt(-1);
+			expected_parts = obj.value(QStringLiteral("parts")).toInt(expected_parts);
+			total_games = obj.value(QStringLiteral("totalGames")).toInt(total_games);
+			const QByteArray piece = QByteArray::fromBase64(obj.value(QStringLiteral("data")).toString().toLatin1());
+			if(part < 0 || piece.isEmpty())
+				continue;
+			parts.insert(part, piece);
+			idle.start(8000); // reset idle watchdog while chunks arrive
+			if(expected_parts > 0 && parts.size() >= expected_parts) {
+				loop.quit();
+				return;
+			}
+		}
+	});
+
+	idle.start(15000);
+	hard.start(120000);
+	loop.exec();
+
+	if(!result.data.isEmpty() && result.data.contains(QStringLiteral("games"))) {
+		// Legacy path already filled result.data
+	} else if(!error.isEmpty()) {
+		result.error = error;
+		return result;
+	} else if(expected_parts <= 0 || parts.size() < expected_parts) {
+		result.error = QStringLiteral(
+			"Таймаут каталога биллинга (%1:%2): получено %3/%4 чанков")
+			.arg(host).arg(port).arg(parts.size()).arg(qMax(0, expected_parts));
+		return result;
+	} else {
+		QByteArray blob;
+		blob.reserve(parts.size() * 700);
+		for(int i = 0; i < expected_parts; ++i) {
+			if(!parts.contains(i)) {
+				result.error = QStringLiteral("Каталог биллинга: потерян чанк %1/%2").arg(i).arg(expected_parts);
+				return result;
+			}
+			blob.append(parts.value(i));
+		}
+		const QByteArray json = qUncompress(blob);
+		if(json.isEmpty()) {
+			result.error = QStringLiteral("Не удалось распаковать каталог биллинга");
+			return result;
+		}
+		const QJsonDocument doc = QJsonDocument::fromJson(json);
+		if(!doc.isObject()) {
+			result.error = QStringLiteral("Некорректный JSON каталога биллинга");
+			return result;
+		}
+		result.data = doc.object();
+		result.ok = true;
+	}
+
+	QJsonArray games = result.data.value(QStringLiteral("games")).toArray();
+	for(int i = 0; i < games.size(); ++i) {
+		QJsonObject g = games.at(i).toObject();
+		if(g.value(QStringLiteral("imageUrl")).toString().isEmpty()) {
+			const QString pid = g.value(QStringLiteral("productId")).toString();
+			const QString url = chihiroImageUrl(pid.isEmpty() ? g.value(QStringLiteral("streamIdentifier")).toString() : pid);
+			if(!url.isEmpty())
+				g.insert(QStringLiteral("imageUrl"), url);
+		}
+		if(g.value(QStringLiteral("streamServiceType")).toString().isEmpty())
+			g.insert(QStringLiteral("streamServiceType"), g.value(QStringLiteral("serviceType")).toString());
+		games.replace(i, g);
+	}
+	result.data.insert(QStringLiteral("games"), games);
+	if(!result.data.contains(QStringLiteral("totalGames")))
+		result.data.insert(QStringLiteral("totalGames"), games.size());
+	else if(total_games > 0)
+		result.data.insert(QStringLiteral("totalGames"), total_games);
+	result.ok = true;
+	return result;
 }
