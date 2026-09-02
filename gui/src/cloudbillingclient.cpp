@@ -6,9 +6,8 @@
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QMap>
 #include <QNetworkDatagram>
-#include <QAbstractSocket>
+#include <QTcpSocket>
 #include <QUdpSocket>
 #include <QTimer>
 #include <QUuid>
@@ -155,117 +154,110 @@ static QString chihiroImageUrl(const QString &product_id)
 		.arg(country, pid);
 }
 
+static bool readTcpLine(QTcpSocket &tcp, QByteArray *out_line, int timeout_ms)
+{
+	out_line->clear();
+	while(!out_line->contains('\n')) {
+		if(tcp.bytesAvailable() <= 0) {
+			if(!tcp.waitForReadyRead(timeout_ms))
+				return false;
+		}
+		out_line->append(tcp.readLine(1024 * 1024));
+		if(out_line->isEmpty() && tcp.state() != QAbstractSocket::ConnectedState)
+			return false;
+	}
+	return true;
+}
+
+static bool readTcpExact(QTcpSocket &tcp, qint64 nbytes, QByteArray *out, int timeout_ms)
+{
+	out->clear();
+	out->reserve(static_cast<int>(nbytes));
+	while(out->size() < nbytes) {
+		if(tcp.bytesAvailable() <= 0) {
+			if(!tcp.waitForReadyRead(timeout_ms))
+				return false;
+		}
+		const QByteArray chunk = tcp.read(nbytes - out->size());
+		if(chunk.isEmpty() && tcp.state() != QAbstractSocket::ConnectedState)
+			return false;
+		out->append(chunk);
+	}
+	return out->size() == nbytes;
+}
+
 CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host, quint16 port,
 	const QString &service_type, const QString &platform, bool only_billable)
 {
-	// Server replies with many MTU-safe qCompress chunks for one catalog request.
+	// Catalog is ~hundreds of KB — UDP chunk floods are dropped by NAT/firewall (0/0).
+	// Use TCP on billing_port+1 (default 13751).
 	Result result;
-	QUdpSocket socket;
-	socket.setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 8 * 1024 * 1024);
-
-	const QHostAddress addr(host);
-	if(host.trimmed().isEmpty() || addr.isNull()) {
+	const quint16 tcp_port = static_cast<quint16>(port + 1);
+	if(host.trimmed().isEmpty()) {
 		result.error = QStringLiteral("Не задан адрес сервера биллинга (cloud_billing_host)");
 		return result;
 	}
 
-	QJsonObject o = baseReq(host, port, QStringLiteral("catalog"));
-	o.remove(QStringLiteral("_host"));
-	o.remove(QStringLiteral("_port"));
+	QJsonObject o;
+	o[QStringLiteral("id")] = QUuid::createUuid().toString(QUuid::WithoutBraces);
+	o[QStringLiteral("action")] = QStringLiteral("catalog");
 	if(!service_type.trimmed().isEmpty())
 		o[QStringLiteral("service_type")] = service_type.trimmed().toLower();
 	if(!platform.trimmed().isEmpty())
 		o[QStringLiteral("platform")] = platform.trimmed().toLower();
 	if(only_billable)
 		o[QStringLiteral("only_billable")] = true;
-	o[QStringLiteral("transfer")] = QStringLiteral("qcompress_chunks");
 
-	const QString req_id = o.value(QStringLiteral("id")).toString();
-	const QByteArray send_data = QJsonDocument(o).toJson(QJsonDocument::Compact);
-	if(socket.writeDatagram(send_data, addr, port) < 0) {
-		result.error = QStringLiteral("Не удалось отправить запрос каталога: %1").arg(socket.errorString());
+	QTcpSocket tcp;
+	tcp.connectToHost(host, tcp_port);
+	if(!tcp.waitForConnected(10000)) {
+		result.error = QStringLiteral("Не удалось подключиться к каталогу биллинга %1:%2 — %3")
+			.arg(host).arg(tcp_port).arg(tcp.errorString());
 		return result;
 	}
 
-	QMap<int, QByteArray> parts;
-	int expected_parts = -1;
-	int total_games = -1;
-	QString error;
-
-	QEventLoop loop;
-	QTimer idle;
-	idle.setSingleShot(true);
-	QTimer hard;
-	hard.setSingleShot(true);
-	QObject::connect(&idle, &QTimer::timeout, &loop, &QEventLoop::quit);
-	QObject::connect(&hard, &QTimer::timeout, &loop, &QEventLoop::quit);
-	QObject::connect(&socket, &QUdpSocket::readyRead, &loop, [&]() {
-		while(socket.hasPendingDatagrams()) {
-			const QNetworkDatagram dg = socket.receiveDatagram();
-			const QJsonDocument doc = QJsonDocument::fromJson(dg.data());
-			if(!doc.isObject())
-				continue;
-			const QJsonObject obj = doc.object();
-			if(obj.value(QStringLiteral("id")).toString() != req_id)
-				continue;
-
-			if(!obj.value(QStringLiteral("ok")).toBool(true)) {
-				error = obj.value(QStringLiteral("ui_message")).toString();
-				if(error.isEmpty())
-					error = obj.value(QStringLiteral("error")).toString();
-				loop.quit();
-				return;
-			}
-
-			// Legacy single-page / paged JSON (older server) — accept and stop.
-			if(obj.contains(QStringLiteral("games")) && !obj.contains(QStringLiteral("transfer"))) {
-				result.ok = true;
-				result.data = obj;
-				loop.quit();
-				return;
-			}
-
-			if(obj.value(QStringLiteral("transfer")).toString() != QStringLiteral("qcompress_chunks"))
-				continue;
-
-			const int part = obj.value(QStringLiteral("part")).toInt(-1);
-			expected_parts = obj.value(QStringLiteral("parts")).toInt(expected_parts);
-			total_games = obj.value(QStringLiteral("totalGames")).toInt(total_games);
-			const QByteArray piece = QByteArray::fromBase64(obj.value(QStringLiteral("data")).toString().toLatin1());
-			if(part < 0 || piece.isEmpty())
-				continue;
-			parts.insert(part, piece);
-			idle.start(8000); // reset idle watchdog while chunks arrive
-			if(expected_parts > 0 && parts.size() >= expected_parts) {
-				loop.quit();
-				return;
-			}
-		}
-	});
-
-	idle.start(15000);
-	hard.start(120000);
-	loop.exec();
-
-	if(!result.data.isEmpty() && result.data.contains(QStringLiteral("games"))) {
-		// Legacy path already filled result.data
-	} else if(!error.isEmpty()) {
-		result.error = error;
+	const QByteArray req = QJsonDocument(o).toJson(QJsonDocument::Compact) + '\n';
+	if(tcp.write(req) != req.size() || !tcp.waitForBytesWritten(10000)) {
+		result.error = QStringLiteral("Не удалось отправить запрос каталога по TCP");
 		return result;
-	} else if(expected_parts <= 0 || parts.size() < expected_parts) {
-		result.error = QStringLiteral(
-			"Таймаут каталога биллинга (%1:%2): получено %3/%4 чанков")
-			.arg(host).arg(port).arg(parts.size()).arg(qMax(0, expected_parts));
+	}
+
+	QByteArray header_line;
+	if(!readTcpLine(tcp, &header_line, 60000)) {
+		result.error = QStringLiteral("Таймаут заголовка каталога биллинга (%1:%2)").arg(host).arg(tcp_port);
 		return result;
+	}
+
+	const QJsonDocument header_doc = QJsonDocument::fromJson(header_line.trimmed());
+	if(!header_doc.isObject()) {
+		result.error = QStringLiteral("Некорректный заголовок каталога биллинга");
+		return result;
+	}
+	const QJsonObject header = header_doc.object();
+	if(!header.value(QStringLiteral("ok")).toBool(false)) {
+		result.error = header.value(QStringLiteral("ui_message")).toString();
+		if(result.error.isEmpty())
+			result.error = header.value(QStringLiteral("error")).toString();
+		if(result.error.isEmpty())
+			result.error = QStringLiteral("Ошибка каталога биллинга");
+		return result;
+	}
+
+	// Legacy: whole JSON in one TCP line (no binary blob).
+	if(header.contains(QStringLiteral("games")) && !header.contains(QStringLiteral("nbytes"))) {
+		result.data = header;
+		result.ok = true;
 	} else {
+		const qint64 nbytes = static_cast<qint64>(header.value(QStringLiteral("nbytes")).toDouble(-1));
+		if(nbytes <= 0 || nbytes > 50 * 1024 * 1024) {
+			result.error = QStringLiteral("Некорректный размер каталога биллинга");
+			return result;
+		}
 		QByteArray blob;
-		blob.reserve(parts.size() * 700);
-		for(int i = 0; i < expected_parts; ++i) {
-			if(!parts.contains(i)) {
-				result.error = QStringLiteral("Каталог биллинга: потерян чанк %1/%2").arg(i).arg(expected_parts);
-				return result;
-			}
-			blob.append(parts.value(i));
+		if(!readTcpExact(tcp, nbytes, &blob, 60000)) {
+			result.error = QStringLiteral("Таймаут загрузки каталога биллинга (%1/%2 байт)")
+				.arg(blob.size()).arg(nbytes);
+			return result;
 		}
 		const QByteArray json = qUncompress(blob);
 		if(json.isEmpty()) {
@@ -279,6 +271,8 @@ CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host,
 		}
 		result.data = doc.object();
 		result.ok = true;
+		if(header.contains(QStringLiteral("totalGames")))
+			result.data.insert(QStringLiteral("totalGames"), header.value(QStringLiteral("totalGames")));
 	}
 
 	QJsonArray games = result.data.value(QStringLiteral("games")).toArray();
@@ -297,8 +291,6 @@ CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host,
 	result.data.insert(QStringLiteral("games"), games);
 	if(!result.data.contains(QStringLiteral("totalGames")))
 		result.data.insert(QStringLiteral("totalGames"), games.size());
-	else if(total_games > 0)
-		result.data.insert(QStringLiteral("totalGames"), total_games);
 	result.ok = true;
 	return result;
 }

@@ -104,6 +104,7 @@ OPSTATE_URL = "https://auth.robokassa.ru/Merchant/WebService/Service.asmx/OpStat
 
 UDP_HOST = os.environ.get("CS_BILLING_UDP_HOST", "0.0.0.0")
 UDP_PORT = int(os.environ.get("CS_BILLING_UDP_PORT", "13750"))
+TCP_PORT = int(os.environ.get("CS_BILLING_TCP_PORT", str(UDP_PORT + 1)))
 RETENTION_DAYS = int(os.environ.get("CS_RETENTION_DAYS", "3"))
 RENEW_LEAD = timedelta(minutes=int(os.environ.get("CS_RENEW_LEAD_MINUTES", "10")))
 HEARTBEAT_TIMEOUT = int(os.environ.get("CS_HEARTBEAT_TIMEOUT_SEC", "180"))
@@ -935,39 +936,23 @@ def handle_catalog(conn, req):
 
 
 def send_udp_reply(sock, out, addr):
-    """Send a normal JSON reply, or MTU-safe catalog chunks."""
-    blob = out.pop("_blob", None) if isinstance(out, dict) else None
-    if isinstance(out, dict) and out.get("transfer") == "qcompress_chunks" and blob is not None:
+    """Send a normal JSON reply. Catalog blobs must use TCP (UDP floods are dropped)."""
+    if isinstance(out, dict) and out.get("transfer") == "qcompress_chunks" and out.get("_blob") is not None:
+        # Do not blast hundreds of UDP datagrams — NATs/firewalls drop them (client sees 0/0).
         req_id = out.get("id")
-        step = max(200, CATALOG_CHUNK_RAW)
-        pieces = [blob[i : i + step] for i in range(0, len(blob), step)]
-        n = len(pieces)
-        log.info(
-            "catalog: sending %s chunks (%s bytes) totalGames=%s to %s",
-            n,
-            len(blob),
-            out.get("totalGames"),
-            addr,
+        msg = reply(
+            req_id,
+            False,
+            error="catalog_use_tcp",
+            ui_message="Каталог нужно загрузить по TCP (порт %s)." % TCP_PORT,
+            tcp_port=TCP_PORT,
+            totalGames=out.get("totalGames") or 0,
         )
-        for i, piece in enumerate(pieces):
-            msg = {
-                "id": req_id,
-                "ok": True,
-                "transfer": "qcompress_chunks",
-                "part": i,
-                "parts": n,
-                "totalGames": out.get("totalGames"),
-                "data": base64.b64encode(piece).decode("ascii"),
-            }
-            raw = json.dumps(msg, separators=(",", ":")).encode("utf-8")
-            try:
-                sock.sendto(raw, addr)
-            except OSError as e:
-                log.error("catalog chunk %s/%s sendto %s failed: %s (bytes=%s)", i + 1, n, addr, e, len(raw))
-                return
-            if CATALOG_SEND_PACE_SEC > 0:
-                time.sleep(CATALOG_SEND_PACE_SEC)
-        log.info("catalog: finished sending %s chunks to %s", n, addr)
+        raw = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+        try:
+            sock.sendto(raw, addr)
+        except OSError as e:
+            log.error("sendto %s failed: %s", addr, e)
         return
 
     raw = json.dumps(out, ensure_ascii=False).encode("utf-8")
@@ -975,6 +960,65 @@ def send_udp_reply(sock, out, addr):
         sock.sendto(raw, addr)
     except OSError as e:
         log.error("sendto %s failed: %s (bytes=%s)", addr, e, len(raw))
+
+
+def handle_tcp_client(conn, addr):
+    """One JSON line request; catalog replies with header line + raw qCompress blob."""
+    conn.settimeout(120)
+    try:
+        f = conn.makefile("rwb")
+        line = f.readline(1024 * 1024)
+        if not line:
+            return
+        try:
+            payload = json.loads(line.decode("utf-8"))
+        except Exception as e:
+            log.warning("bad TCP json from %s: %s", addr, e)
+            return
+        log.info("TCP REQ %s from %s action=%s", payload.get("id"), addr, payload.get("action"))
+        out = dispatch(payload)
+        blob = None
+        if isinstance(out, dict):
+            blob = out.pop("_blob", None)
+        if blob is not None:
+            header = {
+                "id": out.get("id"),
+                "ok": True,
+                "transfer": "qcompress",
+                "totalGames": out.get("totalGames"),
+                "nbytes": len(blob),
+                "catalog_source": "billing_db",
+            }
+            f.write((json.dumps(header, separators=(",", ":")) + "\n").encode("utf-8"))
+            f.write(blob)
+            f.flush()
+            log.info(
+                "TCP catalog: sent header + %s bytes to %s (games=%s)",
+                len(blob),
+                addr,
+                out.get("totalGames"),
+            )
+        else:
+            f.write((json.dumps(out, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+            f.flush()
+    except Exception as e:
+        log.exception("TCP client %s failed: %s", addr, e)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def tcp_server_loop():
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((UDP_HOST, TCP_PORT))
+    srv.listen(32)
+    log.info("Cloud billing TCP listening on %s:%s (catalog)", UDP_HOST, TCP_PORT)
+    while True:
+        conn, addr = srv.accept()
+        threading.Thread(target=handle_tcp_client, args=(conn, addr), daemon=True).start()
 
 
 def handle_quote(conn, req):
@@ -1618,6 +1662,7 @@ def main():
 
     threading.Thread(target=expire_leases_job, daemon=True).start()
     threading.Thread(target=auto_renew_job, daemon=True).start()
+    threading.Thread(target=tcp_server_loop, daemon=True).start()
 
     while True:
         data, addr = sock.recvfrom(65535)

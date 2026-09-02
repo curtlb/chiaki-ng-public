@@ -14,9 +14,9 @@ cloud_catalog_sync (separate pm2)  --hourly-->  CloudStreaming_Catalog (same MyS
 
 Catalog sync is a **separate service**: `../cloud_catalog_sync/` — see its `DEPLOY.md`.
 
-**Hourly billing clients** load the game grid from the billing server (`action: catalog`) via **chunked UDP** (`transfer=qcompress_chunks`): one request, many MTU-safe (~1KB) zlib/qCompress packets, then client gunzips. Players do **not** need a personal NPSSO for browsing; sync uses a server-side NPSSO hourly. Cover URLs are synthesized on the client from `productId`.
+**Hourly billing clients** load the game grid over **TCP port `billing_udp_port+1` (default 13751)**: one JSON line request, then a header line + qCompress blob. UDP cannot carry the catalog (NAT/firewall drops multi-packet floods → client `0/0` chunks). Open **TCP 13751** in the VM firewall. Players do **not** need a personal NPSSO for browsing.
 
-Optional catalog request filters: `service_type` (`psnow`/`pscloud`), `platform`, `only_billable` (join `CloudStreaming_Games` where `IsActive=1`). Default: entire visible catalog, PS Now preferred over PS5 cloud for duplicate titles.
+Optional catalog request filters: `service_type` (`psnow`/`pscloud`), `platform`, `only_billable`. Default: entire visible catalog, PS Now preferred over PS5 cloud for duplicate titles. Cover URLs are synthesized on the client from `productId`.
 
 ## 1. MySQL
 

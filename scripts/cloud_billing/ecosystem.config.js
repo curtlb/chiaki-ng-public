@@ -12,6 +12,7 @@ module.exports = {
       env: {
         CS_BILLING_UDP_HOST: "0.0.0.0",
         CS_BILLING_UDP_PORT: "13750",
+        CS_BILLING_TCP_PORT: "13751",
         CS_RETENTION_DAYS: "3",
         CS_RENEW_LEAD_MINUTES: "10",
         CS_HEARTBEAT_TIMEOUT_SEC: "180",
