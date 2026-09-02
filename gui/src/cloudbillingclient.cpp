@@ -142,12 +142,46 @@ CloudBillingClient::Result CloudBillingClient::endStream(const QString &host, qu
 CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host, quint16 port,
 	const QString &service_type, const QString &platform, bool only_billable)
 {
-	QJsonObject o = baseReq(host, port, QStringLiteral("catalog"));
-	if(!service_type.trimmed().isEmpty())
-		o[QStringLiteral("service_type")] = service_type.trimmed().toLower();
-	if(!platform.trimmed().isEmpty())
-		o[QStringLiteral("platform")] = platform.trimmed().toLower();
-	if(only_billable)
-		o[QStringLiteral("only_billable")] = true;
-	return request(o, 30000);
+	// Catalog is ~thousands of titles; one UDP datagram cannot carry it (EMSGSIZE).
+	// Page with offset/limit until has_more is false.
+	const int page_limit = 80;
+	int offset = 0;
+	int expected_total = -1;
+	QJsonArray all_games;
+	Result last;
+
+	for(int page = 0; page < 500; ++page) {
+		QJsonObject o = baseReq(host, port, QStringLiteral("catalog"));
+		if(!service_type.trimmed().isEmpty())
+			o[QStringLiteral("service_type")] = service_type.trimmed().toLower();
+		if(!platform.trimmed().isEmpty())
+			o[QStringLiteral("platform")] = platform.trimmed().toLower();
+		if(only_billable)
+			o[QStringLiteral("only_billable")] = true;
+		o[QStringLiteral("offset")] = offset;
+		o[QStringLiteral("limit")] = page_limit;
+
+		last = request(o, 20000);
+		if(!last.ok)
+			return last;
+
+		const QJsonArray page_games = last.data.value(QStringLiteral("games")).toArray();
+		expected_total = last.data.value(QStringLiteral("totalGames")).toInt(expected_total);
+		for(const QJsonValue &v : page_games)
+			all_games.append(v);
+
+		const bool has_more = last.data.value(QStringLiteral("has_more")).toBool(false);
+		const int returned = page_games.size();
+		if(!has_more || returned <= 0)
+			break;
+		offset += returned;
+		if(expected_total >= 0 && all_games.size() >= expected_total)
+			break;
+	}
+
+	last.data.insert(QStringLiteral("games"), all_games);
+	last.data.insert(QStringLiteral("totalGames"), all_games.size());
+	last.data.insert(QStringLiteral("has_more"), false);
+	last.ok = true;
+	return last;
 }

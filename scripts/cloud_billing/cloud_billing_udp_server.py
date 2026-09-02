@@ -810,6 +810,7 @@ def catalog_title_key(name):
 
 
 def catalog_row_to_game(row):
+    """Compact game object — must fit many rows in one UDP datagram (<= ~48KB)."""
     st = row["ServiceType"]
     stream_id = row["StreamIdentifier"]
     product_id = (row.get("ProductId") or stream_id or "").strip()
@@ -818,26 +819,18 @@ def catalog_row_to_game(row):
         platform = "ps4" if st == "psnow" else "ps5"
     category = (row.get("Category") or "streamable").lower()
     image = (row.get("ImageUrl") or "").strip()
-    game = {
+    return {
         "productId": product_id,
         "name": row["Name"],
         "imageUrl": image,
-        "landscapeImageUrl": image,
-        "conceptId": row.get("ConceptId") or "",
         "category": category,
         "serviceType": st,
         "platform": platform,
         "isOwned": False,
         "streamServiceType": st,
         "streamIdentifier": stream_id,
-        "entitlementId": row.get("EntitlementId") or "",
-        "storeProductId": product_id,
-        "conceptUrl": "",
-        "plusCatalog": category == "streamable",
+        "entitlementId": (row.get("EntitlementId") or ""),
     }
-    if row.get("ID") is not None:
-        game["catalogDbId"] = int(row["ID"])
-    return game
 
 
 def dedupe_catalog_games(rows):
@@ -860,12 +853,25 @@ def dedupe_catalog_games(rows):
     return games
 
 
-def handle_catalog(conn, req):
-    """Return the synced Sony catalog from MySQL (no player NPSSO required)."""
-    req_id = req.get("id")
-    service_type = (req.get("service_type") or "").strip().lower()
-    platform = (req.get("platform") or "").strip().lower()
-    only_billable = bool(req.get("only_billable"))
+# Full catalog list is too large for one UDP datagram (EMSGSIZE / 64KB cap).
+# Clients page with offset+limit; server caches the assembled list briefly.
+_CATALOG_MEM = {"key": None, "ts": 0.0, "games": None}
+CATALOG_MEM_TTL_SEC = int(os.environ.get("CS_CATALOG_CACHE_SEC", "300"))
+CATALOG_DEFAULT_LIMIT = 80
+CATALOG_MAX_LIMIT = 120
+CATALOG_MAX_UDP_BYTES = 48000
+
+
+def load_catalog_games(conn, service_type, platform, only_billable):
+    key = (service_type or "*", platform or "*", bool(only_billable))
+    now = time.time()
+    cached = _CATALOG_MEM
+    if (
+        cached["games"] is not None
+        and cached["key"] == key
+        and (now - cached["ts"]) < CATALOG_MEM_TTL_SEC
+    ):
+        return cached["games"]
 
     sql = "SELECT c.* FROM CloudStreaming_Catalog c "
     if only_billable:
@@ -888,20 +894,63 @@ def handle_catalog(conn, req):
         rows = cur.fetchall()
 
     games = dedupe_catalog_games(rows)
+    _CATALOG_MEM["key"] = key
+    _CATALOG_MEM["ts"] = now
+    _CATALOG_MEM["games"] = games
+    return games
+
+
+def handle_catalog(conn, req):
+    """Paged catalog from MySQL (no player NPSSO). UDP cannot carry the full list."""
+    req_id = req.get("id")
+    service_type = (req.get("service_type") or "").strip().lower()
+    platform = (req.get("platform") or "").strip().lower()
+    only_billable = bool(req.get("only_billable"))
+    try:
+        offset = max(0, int(req.get("offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(req.get("limit") or CATALOG_DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        limit = CATALOG_DEFAULT_LIMIT
+    limit = max(1, min(limit, CATALOG_MAX_LIMIT))
+
+    games = load_catalog_games(conn, service_type, platform, only_billable)
+    total = len(games)
+
+    # Shrink page until the JSON fits a safe UDP payload size.
+    page_limit = limit
+    while True:
+        page = games[offset : offset + page_limit]
+        out = reply(
+            req_id,
+            True,
+            games=page,
+            totalGames=total,
+            offset=offset,
+            limit=page_limit,
+            has_more=(offset + len(page)) < total,
+            catalog_source="billing_db",
+        )
+        raw_len = len(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+        if raw_len <= CATALOG_MAX_UDP_BYTES or page_limit <= 10 or len(page) <= 10:
+            break
+        page_limit = max(10, page_limit // 2)
+
     log.info(
-        "catalog: returning %s games (filters: service=%s platform=%s only_billable=%s)",
-        len(games),
+        "catalog: page offset=%s limit=%s size=%s/%s "
+        "(filters: service=%s platform=%s only_billable=%s bytes=%s)",
+        offset,
+        page_limit,
+        len(out.get("games") or []),
+        total,
         service_type or "*",
         platform or "*",
         only_billable,
+        raw_len,
     )
-    return reply(
-        req_id,
-        True,
-        games=games,
-        totalGames=len(games),
-        catalog_source="billing_db",
-    )
+    return out
 
 
 def handle_quote(conn, req):
