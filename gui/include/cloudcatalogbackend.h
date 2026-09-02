@@ -33,8 +33,9 @@
  * The entire catalog fetch / merge / ownership cross-reference / assemble
  * pipeline (and every cache file) now lives in libchiaki and is shared verbatim
  * with Android and iOS. This class only:
- *   - forwards fetchUnifiedCatalog() to chiaki_cloudcatalog_fetch_unified() and
- *     hands the returned display-and-stream-ready JSON straight to QML, and
+ *   - forwards fetchUnifiedCatalog() to chiaki_cloudcatalog_fetch_unified() (personal PSN)
+ *     or to the billing UDP catalog action (hourly rental — MySQL CloudStreaming_Catalog),
+ *     and hands the returned display-and-stream-ready JSON straight to QML, and
  *   - keeps the per-game details fetch + Steam-shortcut / image utilities that
  *     are GUI-only concerns and not part of the catalog contract.
  *
