@@ -706,7 +706,7 @@ def handle_start(conn, req):
     token = str(uuid.uuid4())
     now = datetime.now()
     paid_until = now + timedelta(hours=1)
-    renew_at = paid_until - RENE_LEAD
+    renew_at = paid_until - RENEW_LEAD
     ui_msg = (
         "Оплата за 1 час игры «%s». Списание %s ₽ с привязанной карты…"
         % (game["Name"], int(price))
@@ -875,7 +875,7 @@ def handle_renew(conn, req):
 
     now = datetime.now()
     paid_until = now + timedelta(hours=1)
-    renew_at = paid_until - RENE_LEAD
+    renew_at = paid_until - RENEW_LEAD
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET BlockNo=%s, BlockStartedAt=%s, "
