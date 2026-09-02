@@ -37,6 +37,9 @@ Pane {
 
     readonly property var tagFilterCategories: ["owned", "streamable", "purchaseable"]
     readonly property var tagFilterLabels: [qsTr("Owned"), qsTr("Streamable"), qsTr("Store")]
+    readonly property int maxGridGames: 1500
+    property bool gridTruncated: false
+    property var catalogFetchToken: null
     
     // Clean blue background
     CleanBlueBackground {
@@ -183,12 +186,18 @@ Pane {
             setTagFilters(current);
     }
 
-    function isPlayableNow(game) {
-        if (!game) return false;
-        if (game.category !== "purchaseable") return true;
+    function isCloudBillingActive() {
+        if (!Chiaki || !Chiaki.settings)
+            return false;
         return Chiaki.settings.cloudBillingEnabled
             && (Chiaki.settings.fourCloudEmail || "").length > 0
             && (Chiaki.settings.cloudBillingHost || "").length > 0;
+    }
+
+    function isPlayableNow(game) {
+        if (!game) return false;
+        if (game.category !== "purchaseable") return true;
+        return isCloudBillingActive();
     }
 
     function sortGames(games) {
@@ -210,19 +219,23 @@ Pane {
 
     function gameName(game) {
         if (!game) return "";
-        if (game.name) return game.name;
-        if (game.game_meta && game.game_meta.name) return game.game_meta.name;
+        if (game.name) return String(game.name);
+        if (game.game_meta && game.game_meta.name) return String(game.game_meta.name);
         return "";
     }
 
     function loadUnifiedCatalog() {
         console.log("[CloudPlayView] loadUnifiedCatalog()");
-        let npssoToken = Chiaki.settings.psnNpssoToken;
-        if (!npssoToken || npssoToken.trim().length === 0) {
+        let billingActive = isCloudBillingActive();
+        let npssoToken = Chiaki.settings ? Chiaki.settings.psnNpssoToken : "";
+        if (!billingActive && (!npssoToken || npssoToken.trim().length === 0)) {
             authErrorMessage = qsTr("NPSSO token is required for cloud games. Please login and enter a valid NPSSO token. You also need a valid PS Plus subscription.");
-        } else {
+        } else if (billingActive || (npssoToken && npssoToken.trim().length > 0)) {
             authErrorMessage = "";
         }
+
+        let fetchToken = {};
+        catalogFetchToken = fetchToken;
 
         // The grid is about to be emptied. If it currently holds focus, its cards
         // vanish and the (now empty) grid swallows arrow keys, leaving focus
@@ -238,6 +251,8 @@ Pane {
         isLoading = true;
 
         Chiaki.cloudCatalog.fetchUnifiedCatalog(function(success, message, jsonData) {
+            if (catalogFetchToken !== fetchToken)
+                return;
             isLoading = false;
             if (!success || !jsonData) {
                 allGames = [];
@@ -247,20 +262,22 @@ Pane {
                 return;
             }
             try {
-                let data = JSON.parse(jsonData);
+                let data = (typeof jsonData === "string") ? JSON.parse(jsonData) : jsonData;
                 if (data.games && Array.isArray(data.games)) {
                     allGames = data.games;
                     fallbackRegion = data.fallbackRegion || "";
                     catalogNativeMode = data.nativeMode !== false;
-                    Chiaki.settings.cloudResolvedStoreCountry = fallbackRegion;
-                    Chiaki.settings.cloudCatalogNativeMode = catalogNativeMode;
-                    if (data.warning)
+                    if (Chiaki.settings) {
+                        Chiaki.settings.cloudResolvedStoreCountry = fallbackRegion;
+                        Chiaki.settings.cloudCatalogNativeMode = catalogNativeMode;
+                    }
+                    if (data.warning && !billingActive)
                         authErrorMessage = data.warning;
-                    else if (npssoToken && npssoToken.trim().length > 0)
+                    else if (billingActive || (npssoToken && npssoToken.trim().length > 0))
                         authErrorMessage = "";
                     if (message && message !== "Success" && message !== "Cached")
                         showErrorToast(qsTr("Partial Catalog"), message);
-                    applySearchFilter();
+                    Qt.callLater(applySearchFilter);
                     Qt.callLater(() => {
                         if (gamesGrid.count > 0
                                 && !searchField.activeFocus
@@ -280,42 +297,55 @@ Pane {
     }
 
     function applySearchFilter() {
-        let hadFocus = searchField && searchField.activeFocus;
-        
-        let gamesToFilter = allGames.slice();
+        try {
+            let hadFocus = searchField && searchField.activeFocus;
 
-        if (activeTagFilters && activeTagFilters.length > 0) {
-            gamesToFilter = gamesToFilter.filter(function(game) {
-                return game.category && activeTagFilters.indexOf(game.category) !== -1;
-            });
-        }
+            let gamesToFilter = allGames.slice();
 
-        if (showFavoritesOnly) {
-            gamesToFilter = gamesToFilter.filter(function(game) {
-                let productId = game.productId || game.product_id || game.id;
-                return favoriteProductIds.indexOf(productId) !== -1;
-            });
-        }
+            if (activeTagFilters && activeTagFilters.length > 0) {
+                gamesToFilter = gamesToFilter.filter(function(game) {
+                    return game && game.category && activeTagFilters.indexOf(game.category) !== -1;
+                });
+            }
 
-        if (searchQuery && searchQuery.trim() !== "") {
-            let query = searchQuery.toLowerCase().trim();
-            gamesToFilter = gamesToFilter.filter(function(game) {
-                let name = gameName(game).toLowerCase();
-                let pid = (game.productId || game.product_id || "").toLowerCase();
-                return name.includes(query) || pid.includes(query);
-            });
-        }
+            if (showFavoritesOnly) {
+                gamesToFilter = gamesToFilter.filter(function(game) {
+                    let productId = game.productId || game.product_id || game.id;
+                    return favoriteProductIds.indexOf(productId) !== -1;
+                });
+            }
 
-        filteredGames = sortGames(gamesToFilter);
-        currentPageGames = filteredGames.slice();
-        
-        // If user was typing, restore focus immediately after model update
-        if (hadFocus) {
-            Qt.callLater(() => {
-                if (searchField) {
-                    searchField.forceActiveFocus();
-                }
-            });
+            if (searchQuery && searchQuery.trim() !== "") {
+                let query = searchQuery.toLowerCase().trim();
+                gamesToFilter = gamesToFilter.filter(function(game) {
+                    let name = gameName(game).toLowerCase();
+                    let pid = (game.productId || game.product_id || "").toLowerCase();
+                    return name.includes(query) || pid.includes(query);
+                });
+            }
+
+            filteredGames = sortGames(gamesToFilter);
+            if (filteredGames.length > maxGridGames) {
+                currentPageGames = filteredGames.slice(0, maxGridGames);
+                gridTruncated = true;
+            } else {
+                currentPageGames = filteredGames.slice();
+                gridTruncated = false;
+            }
+
+            if (hadFocus) {
+                Qt.callLater(() => {
+                    if (searchField) {
+                        searchField.forceActiveFocus();
+                    }
+                });
+            }
+        } catch (e) {
+            console.error("applySearchFilter failed:", e);
+            filteredGames = [];
+            currentPageGames = [];
+            gridTruncated = false;
+            showErrorToast(qsTr("Catalog Error"), qsTr("Failed to display catalog: %1").arg(e.toString()));
         }
     }
     
@@ -939,6 +969,8 @@ Pane {
                     text: {
                         if (searchQuery && searchQuery.trim() !== "") {
                             return filteredGames.length > 0 ? qsTr("%1 of %2").arg(filteredGames.length).arg(allGames.length) : qsTr("No games");
+                        } else if (gridTruncated) {
+                            return qsTr("%1 of %2").arg(currentPageGames.length).arg(filteredGames.length);
                         } else {
                             return filteredGames.length > 0 ? qsTr("%1 games").arg(filteredGames.length) : qsTr("No games");
                         }
@@ -1168,12 +1200,7 @@ Pane {
                         onToggleFavorite: (productId) => {
                             root.toggleFavorite(productId);
                         }
-                        
-                        Component.onCompleted: {
-                            console.log("[CloudPlayView] CloudGameCard created, qrCodeDialog property:", qrCodeDialog);
-                            console.log("[CloudPlayView] root.qrCodeDialogRef:", root ? root.qrCodeDialogRef : "root is null");
-                        }
-                        
+
                         onStreamGame: (streamingId, platform, serviceType) => {
                             console.log("Stream game:", streamingId, platform, serviceType);
                             let gameName = "";
@@ -1206,9 +1233,7 @@ Pane {
                                 );
                             }
 
-                            let useBilling = Chiaki.settings.cloudBillingEnabled
-                                && (Chiaki.settings.fourCloudEmail || "").length > 0
-                                && (Chiaki.settings.cloudBillingHost || "").length > 0;
+                            let useBilling = root.isCloudBillingActive();
 
                             if (!useBilling) {
                                 launchCloudStream();
@@ -1428,6 +1453,18 @@ Pane {
                     }
                 }
             }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            Layout.leftMargin: 20
+            Layout.rightMargin: 20
+            visible: gridTruncated && !isLoading
+            opacity: 0.75
+            font.pixelSize: 12
+            color: "#FFC107"
+            wrapMode: Text.Wrap
+            text: qsTr("Showing the first %1 games. Use search or filters to narrow the list.").arg(maxGridGames)
         }
 
         Label {

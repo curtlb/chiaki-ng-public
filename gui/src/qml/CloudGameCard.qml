@@ -19,11 +19,15 @@ Rectangle {
     property var qrCodeDialog: null // Reference to QR code dialog
     // With 4cloud hourly billing, PS5 cloud titles marked "purchaseable" in the user's
     // catalog are played via a rented PS account NPSSO after payment — not the user's library.
-    readonly property bool cloudBillingRental: Chiaki.settings.cloudBillingEnabled
-        && (Chiaki.settings.fourCloudEmail || "").length > 0
-        && (Chiaki.settings.cloudBillingHost || "").length > 0
+    function isCloudBillingRentalActive() {
+        if (!Chiaki || !Chiaki.settings)
+            return false;
+        return Chiaki.settings.cloudBillingEnabled
+            && (Chiaki.settings.fourCloudEmail || "").length > 0
+            && (Chiaki.settings.cloudBillingHost || "").length > 0;
+    }
     readonly property bool needsAddToLibrary: gameData && gameData.category === "purchaseable"
-        && !cloudBillingRental
+        && !isCloudBillingRentalActive()
     property bool isFavorite: false // Whether this game is favorited
     
     // Steam library shortcut: shown when a Steam install is detected on this device (steam-shortcut build only)
@@ -288,6 +292,8 @@ Rectangle {
                         if (!gameData || !gameData.category) return "";
                         if (gameData.category === "owned") return qsTr("OWNED");
                         if (gameData.category === "streamable") return qsTr("STREAMABLE");
+                        if (gameData.category === "purchaseable" && isCloudBillingRentalActive())
+                            return qsTr("PLAY");
                         return qsTr("ADD GAME");
                     }
                     font.pixelSize: 10

@@ -8,6 +8,9 @@ import org.streetpea.chiaking
 Pane {
     padding: 0
     id: consolePane
+    // Keep CloudPlayView alive after the first visit so an in-flight catalog fetch
+    // cannot call back into a destroyed QML object when the user leaves the tab.
+    property bool cloudPlayPinned: false
     StackView.onActivated: {
         forceActiveFocus(Qt.TabFocusReason);
         Chiaki.ensureFourcloudPolling();
@@ -203,6 +206,10 @@ Pane {
         }
         TabButton { text: qsTr("Remote Play") }
         TabButton { text: qsTr("Облако") }
+        onCurrentIndexChanged: {
+            if (currentIndex === 1)
+                consolePane.cloudPlayPinned = true
+        }
     }
 
     ListView {
@@ -489,7 +496,8 @@ Pane {
             right: parent.right
             bottom: parent.bottom
         }
-        active: mainTabBar.currentIndex === 1
+        active: consolePane.cloudPlayPinned
+        visible: mainTabBar.currentIndex === 1
         source: "CloudPlayView.qml"
         onStatusChanged: {
             if (status === Loader.Error) {

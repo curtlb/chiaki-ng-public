@@ -29,6 +29,8 @@
 #include <QPainter>
 #include <QPixmap>
 #include <climits>
+#include <QQmlEngine>
+#include <QJSEngine>
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
@@ -311,8 +313,10 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             // Mirrors iOS noteSettledLocale / Android noteCloudStoreLocaleSettled. Uses the core
             // Settings setter (NOT QmlSettings), so it does NOT invalidate the cache the lib
             // just wrote; otherwise an international account would thrash the catalog.
+            QJsonObject root;
+            if (success)
+                root = QJsonDocument::fromJson(json.toUtf8()).object();
             if (success && self->settings) {
-                const QJsonObject root = QJsonDocument::fromJson(json.toUtf8()).object();
                 const QString settled = root.value(QStringLiteral("settledLocale")).toString();
                 if (!settled.isEmpty() && settled != self->settings->GetCloudStoreLocale())
                     self->settings->SetCloudStoreLocale(settled);
@@ -321,7 +325,13 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                 self->settings->SetCloudCatalogNativeMode(root.value(QStringLiteral("nativeMode")).toBool(true));
             }
 
-            const QJSValue payload = success ? QJSValue(json) : QJSValue();
+            QJSValue payload;
+            if (success) {
+                if (QQmlEngine *eng = qjsEngine(self.data()))
+                    payload = eng->toScriptValue(root);
+                else
+                    payload = QJSValue(json);
+            }
             if (cb.isCallable())
                 cb.call({ success, message, payload });
             for (QJSValue &pcb : parked)
