@@ -60,6 +60,9 @@ public:
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback);
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
 
+    /** Fetch hourly billing quote (no charge). Callback: ok, message, hourlyPrice. */
+    Q_INVOKABLE void fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
+
     /** Re-run Gaikai allocation for the last-started cloud game (e.g. after bitrate change). */
     Q_INVOKABLE void reconnectCurrentSession();
 

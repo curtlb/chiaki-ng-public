@@ -1178,35 +1178,63 @@ Pane {
                                 if (!gameName && modelData.game_meta && modelData.game_meta.name)
                                     gameName = modelData.game_meta.name;
                             }
-                            
-                            // Show StreamView immediately with loading spinner
-                            // Find Main component by traversing parent chain
-                            let mainComp = root;
-                            while (mainComp && !mainComp.showStreamView) {
-                                mainComp = mainComp.parent;
+
+                            function launchCloudStream() {
+                                let mainComp = root;
+                                while (mainComp && !mainComp.showStreamView) {
+                                    mainComp = mainComp.parent;
+                                }
+                                if (mainComp && mainComp.showStreamView) {
+                                    mainComp.showStreamView();
+                                }
+                                Chiaki.cloudStreaming.startCompleteCloudSession(
+                                    serviceType,
+                                    streamingId,
+                                    gameName,
+                                    function(success, message, serverIp) {
+                                        console.log("Cloud streaming:", success ? "SUCCESS" : "FAILED");
+                                        if (!success) {
+                                            let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));
+                                            let toastDuration = isOAuthError ? 10000 : 3000;
+                                            Chiaki.error(qsTr("Cloud Streaming Failed"), message, toastDuration);
+                                        }
+                                    }
+                                );
                             }
-                            if (mainComp && mainComp.showStreamView) {
-                                mainComp.showStreamView();
+
+                            let useBilling = Chiaki.settings.cloudBillingEnabled
+                                && (Chiaki.settings.fourCloudEmail || "").length > 0
+                                && (Chiaki.settings.cloudBillingHost || "").length > 0;
+
+                            if (!useBilling) {
+                                launchCloudStream();
+                                return;
                             }
-                            
-                            // CloudGameCard now sends the correct identifier directly
-                            // (entitlement ID for PSCloud, product ID for PSNOW)
-                            Chiaki.cloudStreaming.startCompleteCloudSession(
+
+                            Chiaki.cloudStreaming.fetchBillingQuote(
                                 serviceType,
                                 streamingId,
                                 gameName,
-                                function(success, message, serverIp) {
-                                    console.log("Cloud streaming:", success ? "SUCCESS" : "FAILED");
-                                    console.log("Result:", message);
-                                    if (success) {
-                                        console.log("Allocated Server IP:", serverIp);
+                                function(ok, message, hourlyPrice) {
+                                    if (!ok) {
+                                        Chiaki.error(qsTr("Оплата"), message || qsTr("Не удалось получить информацию об оплате"), 8000);
+                                        return;
+                                    }
+                                    let priceLine = hourlyPrice > 0
+                                        ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
+                                        : "";
+                                    let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine
+                                        + "\n\n" + qsTr("Нажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
+                                    if (showConfirmDialogFunc) {
+                                        showConfirmDialogFunc(
+                                            qsTr("Оплата за час игры"),
+                                            confirmText,
+                                            launchCloudStream,
+                                            null,
+                                            true
+                                        );
                                     } else {
-                                        // Error is handled by backend emitting sessionError signal
-                                        // StreamView will automatically show error and return to main view
-                                        // Check if it's an OAuth error for longer toast duration
-                                        let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));
-                                        let toastDuration = isOAuthError ? 10000 : 3000; // 10 seconds for OAuth errors, 3 seconds otherwise
-                                        Chiaki.error(qsTr("Cloud Streaming Failed"), message, toastDuration);
+                                        launchCloudStream();
                                     }
                                 }
                             );

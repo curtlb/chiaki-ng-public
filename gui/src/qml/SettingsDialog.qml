@@ -2569,6 +2569,74 @@ DialogView {
                     }
 
                     Label {
+                        Layout.topMargin: 8
+                        text: qsTr("Почасовая оплата (4cloud)")
+                        font.bold: true
+                        font.pixelSize: 14
+                    }
+
+                    C.CheckBox {
+                        text: qsTr("Включить почасовую оплату при запуске облачных игр")
+                        checked: Chiaki.settings.cloudBillingEnabled
+                        onToggled: Chiaki.settings.cloudBillingEnabled = checked
+                    }
+
+                    Label {
+                        wrapMode: Text.Wrap
+                        opacity: 0.85
+                        font.pixelSize: 12
+                        text: {
+                            let email = Chiaki.settings.fourCloudEmail || "";
+                            return email.length > 0
+                                ? qsTr("Аккаунт 4cloud: %1").arg(email)
+                                : qsTr("Аккаунт 4cloud: не выполнен вход (нужен для оплаты и аренды PS-аккаунта)");
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Label {
+                            text: qsTr("Сервер биллинга (UDP):")
+                        }
+
+                        C.TextField {
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 220
+                            placeholderText: "5.183.190.150"
+                            text: Chiaki.settings.cloudBillingHost
+                            onTextChanged: {
+                                if (text.trim() !== Chiaki.settings.cloudBillingHost)
+                                    Chiaki.settings.cloudBillingHost = text.trim();
+                            }
+                        }
+
+                        Label {
+                            text: qsTr("Порт:")
+                        }
+
+                        C.TextField {
+                            Layout.preferredWidth: 80
+                            text: String(Chiaki.settings.cloudBillingPort)
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            onTextChanged: {
+                                let p = parseInt(text, 10);
+                                if (!isNaN(p) && p > 0 && p <= 65535 && p !== Chiaki.settings.cloudBillingPort)
+                                    Chiaki.settings.cloudBillingPort = p;
+                            }
+                        }
+                    }
+
+                    Label {
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
+                        font.pixelSize: 12
+                        text: qsTr("Перед запуском игры показывается сумма за 1 час. Списание с привязанной карты (autobilling). PS-аккаунт сохраняется 3 дня для ваших сохранений.")
+                    }
+
+                    Label {
+                        Layout.topMargin: 16
                         text: qsTr("NPSSO токен (каталог облака)")
                         wrapMode: Text.Wrap
                     }

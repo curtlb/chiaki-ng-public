@@ -136,15 +136,6 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
         return false;
     const quint16 port = settings->GetCloudBillingPort();
 
-    setAllocationProgress(tr("Проверка оплаты и аренды PS-аккаунта…"));
-    const auto quote = CloudBillingClient::quote(host, port, email, serviceType, gameIdentifier, gameName);
-    if(!quote.ok) {
-        *out_error = quote.ui_message.isEmpty() ? quote.error : quote.ui_message;
-        return true;
-    }
-    setBillingStatus(quote.ui_message);
-    setAllocationProgress(quote.ui_message);
-
     setAllocationProgress(tr("Списание с привязанной карты…"));
     const auto start = CloudBillingClient::start(host, port, email, serviceType, gameIdentifier, gameName);
     if(!start.ok) {
@@ -165,6 +156,37 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
 void CloudStreamingBackend::onBillingHeartbeatTick()
 {
     sendBillingHeartbeat(true);
+}
+
+void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback)
+{
+    if(!settings || !settings->GetCloudBillingEnabled()) {
+        if(callback.isCallable())
+            callback.call({false, tr("Почасовая оплата отключена в настройках")});
+        return;
+    }
+    const QString email = settings->GetFourCloudEmail();
+    if(email.isEmpty()) {
+        if(callback.isCallable())
+            callback.call({false, tr("Войдите в аккаунт 4cloud.pro (меню входа)")});
+        return;
+    }
+    const QString host = settings->GetCloudBillingHost();
+    if(host.isEmpty()) {
+        if(callback.isCallable())
+            callback.call({false, tr("Укажите адрес сервера биллинга в настройках облака")});
+        return;
+    }
+
+    setAllocationProgress(tr("Получение информации об оплате…"));
+    const auto quote = CloudBillingClient::quote(
+        host, settings->GetCloudBillingPort(), email, serviceType, gameIdentifier, gameName);
+    const QString message = quote.ok
+        ? quote.ui_message
+        : (quote.ui_message.isEmpty() ? quote.error : quote.ui_message);
+    const double price = quote.data.value(QStringLiteral("hourly_price")).toDouble(0);
+    if(callback.isCallable())
+        callback.call({quote.ok, message, price});
 }
 
 // ============================================================================
