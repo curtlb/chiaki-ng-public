@@ -809,6 +809,22 @@ def catalog_title_key(name):
     return "".join(ch for ch in name if ch.isalnum())
 
 
+def fallback_store_image_url(product_id):
+    """Chihiro cover URL when CloudStreaming_Catalog.ImageUrl was never synced."""
+    pid = (product_id or "").strip()
+    if not pid:
+        return ""
+    # EU SKUs use EP/EE/EC; US-style UP / bare CUSA/PPSA → US store.
+    if pid.upper().startswith(("EP", "EE", "EC")):
+        country, lang = "GB", "en"
+    else:
+        country, lang = "US", "en"
+    return (
+        "https://store.playstation.com/store/api/chihiro/00_09_000/container/"
+        "%s/%s/999/%s/image" % (country, lang, pid)
+    )
+
+
 def catalog_row_to_game(row):
     """Compact game object — must fit many rows in one UDP datagram (<= ~48KB)."""
     st = row["ServiceType"]
@@ -819,6 +835,8 @@ def catalog_row_to_game(row):
         platform = "ps4" if st == "psnow" else "ps5"
     category = (row.get("Category") or "streamable").lower()
     image = (row.get("ImageUrl") or "").strip()
+    if not image:
+        image = fallback_store_image_url(product_id)
     return {
         "productId": product_id,
         "name": row["Name"],
