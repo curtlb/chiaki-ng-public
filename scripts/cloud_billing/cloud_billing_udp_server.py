@@ -166,6 +166,52 @@ PAYMENT_SETUP_MSG = (
     "(не путать с арендой консоли)."
 )
 
+SCHEMA_MIGRATION_MSG = (
+    "База данных не обновлена: отсутствует колонка CatalogID. "
+    "На сервере выполните migrate_catalog.sql (см. scripts/cloud_billing/DEPLOY.md) "
+    "и перезапустите: pm2 restart cloud-billing-udp"
+)
+
+
+def friendly_db_error(exc):
+    msg = str(exc)
+    if "1054" in msg and "CatalogID" in msg:
+        return SCHEMA_MIGRATION_MSG
+    if "1146" in msg and "CloudStreaming_Catalog" in msg:
+        return (
+            "Таблица CloudStreaming_Catalog не найдена. "
+            "Выполните migrate_catalog.sql и запустите catalog sync (scripts/cloud_catalog_sync/)."
+        )
+    if "1146" in msg and "CloudStreaming_PaymentMethods" in msg:
+        return PAYMENT_SETUP_MSG
+    return msg
+
+
+def verify_schema(conn):
+    """Fail fast at startup when the catalog migration was not applied."""
+    required = [
+        ("CloudStreaming_Catalog", "ID"),
+        ("CloudStreaming_Games", "CatalogID"),
+        ("CloudStreaming_AccountOwnedGames", "CatalogID"),
+        ("CloudStreaming_PaymentMethods", "StartPaymentID"),
+    ]
+    missing = []
+    with conn.cursor() as cur:
+        for table, column in required:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                (DB_NAME, table, column),
+            )
+            if int(cur.fetchone()["n"]) == 0:
+                missing.append("%s.%s" % (table, column))
+    if missing:
+        raise RuntimeError(
+            "Cloud billing schema is outdated (missing: %s). Run migrate_catalog.sql "
+            "and migrate_payment_methods.sql, then pm2 restart cloud-billing-udp."
+            % ", ".join(missing)
+        )
+
 
 def ensure_user(conn, email):
     with conn.cursor() as cur:
@@ -925,7 +971,7 @@ def dispatch(payload):
             conn.rollback()
         except Exception:
             pass
-        return reply(req_id, False, error=str(e))
+        return reply(req_id, False, error=friendly_db_error(e))
     finally:
         conn.close()
 
@@ -1001,6 +1047,14 @@ def init_config():
 
 def main():
     init_config()
+    try:
+        conn = db_connect()
+        verify_schema(conn)
+        conn.close()
+        log.info("Database schema OK")
+    except Exception as e:
+        log.error("Schema check failed: %s", e)
+        raise SystemExit(1) from e
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_HOST, UDP_PORT))
     log.info("Cloud billing UDP listening on %s:%s", UDP_HOST, UDP_PORT)
