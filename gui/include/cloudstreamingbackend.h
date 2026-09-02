@@ -126,6 +126,9 @@ private:
     QString last_game_name;
     QString billing_session_token;
     QString billing_npsso;
+    QString billing_game_identifier;
+    QString billing_store_country;
+    QString billing_store_lang;
     bool billing_payment_pending = false;
     QString billing_status_message;
     int billing_minutes_left = 0;

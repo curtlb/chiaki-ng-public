@@ -773,6 +773,7 @@ def session_payload(conn, sess):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.*, g.Name AS GameName, g.HourlyPrice, a.NPSSO, a.Label AS AccountLabel, "
+            "a.Region AS AccountRegion, "
             "l.RetentionUntil, "
             + sql_minutes_left_expr()
             + " AS MinutesLeft "
@@ -789,10 +790,17 @@ def session_payload(conn, sess):
     paid_until = parse_db_datetime(row["PaidUntil"])
     minutes_left = int(row.get("MinutesLeft") or 0)
     renew_at = parse_db_datetime(row["RenewAt"])
+    region = (row.get("AccountRegion") or "PL").strip().upper() or "PL"
+    store_country = "US" if region in AMERICAS_REGIONS else region
     return {
         "session_token": row["SessionToken"],
         "npsso": row["NPSSO"],
         "account_label": row.get("AccountLabel"),
+        "account_region": region,
+        "store_country": store_country,
+        "store_lang": "en",
+        "service_type": row.get("ServiceType"),
+        "game_identifier": row.get("GameIdentifier"),
         "game_name": row.get("GameName"),
         "hourly_price": float(row.get("HourlyPrice") or DEFAULT_HOURLY),
         "paid_until": fmt_dt(paid_until) if paid_until else "",
@@ -807,14 +815,51 @@ def session_payload(conn, sess):
 
 
 def catalog_title_key(name):
+    """Normalize titles so Director's Cut / Plus suffixes still match for dedupe."""
     if not name:
         return ""
-    name = name.lower().replace("(playstation plus)", "")
+    name = name.lower()
+    for junk in (
+        "(playstation plus)",
+        "playstation plus",
+        "director's cut",
+        "directors cut",
+        "director´s cut",
+        "digital deluxe edition",
+        "digital deluxe",
+        "deluxe edition",
+        "standard edition",
+        "game of the year edition",
+        "game of the year",
+        "goty",
+        "remastered",
+    ):
+        name = name.replace(junk, "")
     return "".join(ch for ch in name if ch.isalnum())
 
 
+AMERICAS_REGIONS = {
+    "US", "CA", "MX", "BR", "AR", "CL", "CO", "PE", "EC", "BO",
+    "PY", "UY", "CR", "GT", "HN", "NI", "PA", "SV", "DO",
+}
+
+
+def preferred_sku_prefix(account_region):
+    cc = (account_region or "PL").strip().upper()
+    return "UP" if cc in AMERICAS_REGIONS else "EP"
+
+
+def sku_prefix(product_or_stream_id):
+    pid = (product_or_stream_id or "").strip().upper()
+    if pid.startswith(("EP", "EE", "EC")):
+        return "EP"
+    if pid.startswith("UP"):
+        return "UP"
+    return ""
+
+
 def catalog_row_to_game(row):
-    """Compact game object for UDP transfer (no imageUrl — client builds Chihiro URL)."""
+    """Compact game object (no imageUrl — client builds Chihiro URL)."""
     st = row["ServiceType"]
     stream_id = row["StreamIdentifier"]
     product_id = (row.get("ProductId") or stream_id or "").strip()
@@ -833,8 +878,30 @@ def catalog_row_to_game(row):
     }
 
 
-def dedupe_catalog_games(rows):
-    """Prefer psnow over pscloud when the normalized title matches (hourly rental)."""
+def _catalog_pick_score(game, prefer_prefix="EP"):
+    """Higher is better for hourly rental catalog display."""
+    score = 0
+    st = game.get("serviceType")
+    if st == "psnow":
+        score += 100
+    elif st == "pscloud":
+        score += 10
+    pid = game.get("productId") or game.get("streamIdentifier") or ""
+    pref = sku_prefix(pid)
+    if prefer_prefix and pref == prefer_prefix:
+        score += 50
+    elif pref:
+        score += 20
+    # Prefer known-good Ghost PS Now SKU (CUSA32709) over CUSA32708 when both exist.
+    if "CUSA32709" in pid.upper():
+        score += 5
+    if game.get("platform") == "ps4" and st == "psnow":
+        score += 2
+    return score
+
+
+def dedupe_catalog_games(rows, prefer_prefix="EP"):
+    """Prefer psnow over pscloud; prefer regional SKU prefix (default EP for EU rental)."""
     picked = {}
     extras = []
     for row in rows:
@@ -844,20 +911,69 @@ def dedupe_catalog_games(rows):
             extras.append(game)
             continue
         prev = picked.get(key)
-        if not prev:
-            picked[key] = game
-        elif prev.get("serviceType") == "pscloud" and game.get("serviceType") == "psnow":
+        if not prev or _catalog_pick_score(game, prefer_prefix) > _catalog_pick_score(prev, prefer_prefix):
             picked[key] = game
     games = list(picked.values()) + extras
     games.sort(key=lambda g: (g.get("name") or "").lower())
     return games
 
 
-# Full catalog cannot fit in one UDP datagram. One catalog request -> many MTU-safe
-# qCompress chunks (Qt-compatible: 4-byte BE size + zlib).
+def resolve_regional_stream_id(conn, service_type, game_identifier, account_region):
+    """Map catalog id to the SKU region of the rented PS account (EP for EU, UP for US)."""
+    st = (service_type or "").lower().strip()
+    gid = (game_identifier or "").strip()
+    prefer = preferred_sku_prefix(account_region)
+    catalog = find_catalog_match(conn, st, gid)
+    if not catalog:
+        return gid, None
+
+    current = (catalog.get("ProductId") or catalog.get("StreamIdentifier") or gid).strip()
+    if sku_prefix(current) == prefer:
+        return (catalog.get("StreamIdentifier") or current), catalog
+
+    title_key = catalog_title_key(catalog.get("Name"))
+    best = None
+    best_score = -1
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Catalog "
+            "WHERE ServiceType = %s AND IsVisible = 1",
+            (st,),
+        )
+        candidates = cur.fetchall()
+    for row in candidates:
+        if catalog_title_key(row.get("Name")) != title_key:
+            continue
+        cand_id = (row.get("ProductId") or row.get("StreamIdentifier") or "").strip()
+        if sku_prefix(cand_id) != prefer:
+            continue
+        score = _catalog_pick_score(catalog_row_to_game(row), prefer)
+        if score > best_score:
+            best_score = score
+            best = row
+    if best:
+        out = (best.get("StreamIdentifier") or best.get("ProductId") or gid).strip()
+        log.info(
+            "regional SKU remap %s -> %s (account region=%s prefer=%s)",
+            gid,
+            out,
+            account_region,
+            prefer,
+        )
+        return out, best
+    log.warning(
+        "no %s SKU for title key=%s (requested %s, region=%s); using original",
+        prefer,
+        title_key,
+        gid,
+        account_region,
+    )
+    return (catalog.get("StreamIdentifier") or current), catalog
+
+
+# Catalog is served over TCP as one qCompress blob (UDP floods never arrive).
 _CATALOG_MEM = {"key": None, "ts": 0.0, "games": None}
 CATALOG_MEM_TTL_SEC = int(os.environ.get("CS_CATALOG_CACHE_SEC", "300"))
-# Raw compressed slice size before base64; keeps each datagram under ~1200 bytes.
 CATALOG_CHUNK_RAW = int(os.environ.get("CS_CATALOG_CHUNK_RAW", "650"))
 CATALOG_SEND_PACE_SEC = float(os.environ.get("CS_CATALOG_SEND_PACE_SEC", "0.002"))
 
@@ -893,7 +1009,7 @@ def load_catalog_games(conn, service_type, platform, only_billable):
         cur.execute(sql, params or None)
         rows = cur.fetchall()
 
-    games = dedupe_catalog_games(rows)
+    games = dedupe_catalog_games(rows, prefer_prefix="EP")
     _CATALOG_MEM["key"] = key
     _CATALOG_MEM["ts"] = now
     _CATALOG_MEM["games"] = games
@@ -1148,6 +1264,27 @@ def handle_start(conn, req):
         )
         with conn.cursor() as cur:
             cur.execute(
+                "SELECT Region FROM CloudStreaming_Accounts WHERE ID=%s LIMIT 1",
+                (resumable["AccountID"],),
+            )
+            acc_row = cur.fetchone() or {}
+        region = (acc_row.get("Region") or "PL").strip().upper()
+        play_id, _ = resolve_regional_stream_id(
+            conn, service_type, game_identifier, region
+        )
+        if play_id and play_id != (resumable.get("GameIdentifier") or ""):
+            game = ensure_game(conn, service_type, play_id, game_name)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE CloudStreaming_Sessions SET GameID=%s, GameIdentifier=%s, "
+                    "ServiceType=%s WHERE ID=%s",
+                    (game["ID"], play_id, service_type, resumable["ID"]),
+                )
+            resumable = dict(resumable)
+            resumable["GameID"] = game["ID"]
+            resumable["GameIdentifier"] = play_id
+        with conn.cursor() as cur:
+            cur.execute(
                 "UPDATE CloudStreaming_Sessions SET StreamActive=1, Status='active', "
                 "LastHeartbeatAt=NOW(3) WHERE ID=%s",
                 (resumable["ID"],),
@@ -1217,6 +1354,13 @@ def handle_start(conn, req):
             )
             cur.execute("SELECT * FROM CloudStreaming_Leases WHERE ID=%s", (lease_id,))
             lease = cur.fetchone()
+
+    # Bind stream id to the rented account's store region (EP for PL/EU, UP for US).
+    region = (account.get("Region") or "PL").strip().upper()
+    play_id, _ = resolve_regional_stream_id(conn, service_type, game_identifier, region)
+    if play_id and play_id != game_identifier:
+        game_identifier = play_id
+        game = ensure_game(conn, service_type, game_identifier, game_name)
 
     token = str(uuid.uuid4())
     now = datetime.now()

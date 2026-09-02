@@ -137,6 +137,9 @@ void CloudStreamingBackend::notifyStreamStopped()
         billing_session_token);
     billing_session_token.clear();
     billing_npsso.clear();
+    billing_game_identifier.clear();
+    billing_store_country.clear();
+    billing_store_lang.clear();
     billing_payment_pending = false;
 }
 
@@ -165,6 +168,11 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
     billing_npsso = *out_npsso;
     if (!billing_npsso.isEmpty())
         settings->SetNpssoTokenSecondary(billing_npsso);
+    billing_game_identifier = start.data.value(QStringLiteral("game_identifier")).toString().trimmed();
+    billing_store_country = start.data.value(QStringLiteral("store_country")).toString().trimmed().toUpper();
+    billing_store_lang = start.data.value(QStringLiteral("store_lang")).toString().trimmed().toLower();
+    if (billing_store_lang.isEmpty())
+        billing_store_lang = QStringLiteral("en");
     billing_payment_pending = start.data.value(QStringLiteral("payment_pending")).toBool(false);
     setBillingStatus(start.ui_message,
         billingMinutesFromResponse(start.data));
@@ -207,6 +215,9 @@ void CloudStreamingBackend::abandonBillingReservation()
             billing_session_token);
         billing_session_token.clear();
         billing_npsso.clear();
+        billing_game_identifier.clear();
+        billing_store_country.clear();
+        billing_store_lang.clear();
         billing_payment_pending = false;
         stopBillingHeartbeat();
     }
@@ -303,6 +314,14 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
                 callback.call({false, billing_error});
             return;
         }
+        if(!billing_game_identifier.isEmpty() && billing_game_identifier != gameIdentifier) {
+            CloudLogMessage(QStringLiteral("Session"),
+                QStringLiteral("billing remapped game %1 -> %2 (store %3/%4)")
+                    .arg(gameIdentifier, billing_game_identifier,
+                         billing_store_country, billing_store_lang));
+            gameIdentifier = billing_game_identifier;
+            last_game_identifier = gameIdentifier;
+        }
         qInfo() << "Cloud billing: using rented PS account NPSSO";
     } else if (npssoToken.isEmpty()) {
         qWarning() << "NPSSO token is empty - cloud play may not work";
@@ -343,7 +362,12 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     const QString resolvedCountry = settings->GetCloudResolvedStoreCountry();
     const QString resolvedLang = settings->GetCloudResolvedStoreLang();
     QString cc, cl;
-    if (!resolvedCountry.isEmpty()) {
+    // Hourly rental: store locale must follow the rented account region, not the
+    // player's personal catalog locale (US UP* SKUs fail on PL/EU NPSSO).
+    if(!billing_store_country.isEmpty()) {
+        cc = billing_store_country;
+        cl = billing_store_lang.isEmpty() ? QStringLiteral("en") : billing_store_lang;
+    } else if (!resolvedCountry.isEmpty()) {
         cc = resolvedCountry;
         cl = !resolvedLang.isEmpty() ? resolvedLang : localeLang;
     } else {
