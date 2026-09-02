@@ -356,8 +356,8 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
         });
     }
 
-    const int cap = limit > 0 ? limit : matches.size();
-    const int take = std::min(matches.size(), cap);
+    const int cap = limit > 0 ? limit : static_cast<int>(matches.size());
+    const int take = std::min(static_cast<int>(matches.size()), cap);
 
     QVariantList out;
     out.reserve(take);

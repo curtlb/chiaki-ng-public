@@ -1190,19 +1190,24 @@ Pane {
                                 serviceType,
                                 streamingId,
                                 gameName,
-                                function(ok, message, hourlyPrice) {
+                                function(ok, message, hourlyPrice, resumeSession) {
                                     if (!ok) {
                                         Chiaki.error(qsTr("Оплата"), message || qsTr("Не удалось получить информацию об оплате"), 8000);
                                         return;
                                     }
-                                    let priceLine = hourlyPrice > 0
+                                    let title = resumeSession
+                                        ? qsTr("Продолжить игру")
+                                        : qsTr("Оплата за час игры");
+                                    let priceLine = (!resumeSession && hourlyPrice > 0)
                                         ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
                                         : "";
-                                    let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine
-                                        + "\n\n" + qsTr("Нажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
+                                    let actionLine = resumeSession
+                                        ? qsTr("\n\nНажмите «Да» — стрим продолжится без списания.")
+                                        : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
+                                    let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
                                     if (showConfirmDialogFunc) {
                                         showConfirmDialogFunc(
-                                            qsTr("Оплата за час игры"),
+                                            title,
                                             confirmText,
                                             launchCloudStream,
                                             null,

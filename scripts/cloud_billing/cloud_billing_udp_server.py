@@ -346,6 +346,34 @@ def find_active_lease(conn, user_id, game):
     return None
 
 
+def find_resumable_session(conn, user_id, game_id):
+    """Paid session for the same game that still has time left (after stream stop or app close)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Sessions "
+            "WHERE UserID = %s AND GameID = %s "
+            "AND Status IN ('active','grace_no_stream','renewal_pending') "
+            "AND PaidUntil > NOW(3) "
+            "ORDER BY PaidUntil DESC LIMIT 1",
+            (user_id, game_id),
+        )
+        return cur.fetchone()
+
+
+def find_other_active_session(conn, user_id, game_id):
+    """Another game with remaining paid time (switching forfeits that time)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Sessions "
+            "WHERE UserID = %s AND GameID != %s "
+            "AND Status IN ('active','grace_no_stream','renewal_pending') "
+            "AND PaidUntil > NOW(3) "
+            "ORDER BY PaidUntil DESC LIMIT 1",
+            (user_id, game_id),
+        )
+        return cur.fetchone()
+
+
 def allocate_account(conn, game):
     with conn.cursor() as cur:
         cur.execute(
@@ -608,16 +636,38 @@ def handle_quote(conn, req):
     conn.commit()
 
     price = float(game["HourlyPrice"])
+    resumable = find_resumable_session(conn, user["ID"], game["ID"])
+    if resumable:
+        payload = session_payload(conn, resumable)
+        mins = payload.get("minutes_left", 0)
+        return reply(
+            req_id,
+            True,
+            ui_message=(
+                "У вас осталось %s мин оплаченного времени в «%s». "
+                "Дополнительное списание не требуется — можно продолжить игру."
+                % (mins, game["Name"])
+            ),
+            hourly_price=0,
+            currency=game.get("Currency") or "RUB",
+            resume_session=True,
+            no_charge=True,
+            minutes_left=mins,
+            game_name=game["Name"],
+        )
+
     lease = find_active_lease(conn, user["ID"], game)
     reuse = lease is not None
+    other_active = find_other_active_session(conn, user["ID"], game["ID"])
 
     if reuse:
         msg = (
             "Будет использован ваш сохранённый аккаунт PS (%s). "
-            "Сейчас спишется %s ₽ за 1 час игры «%s». "
-            "Неиспользованное время с прошлой сессии не переносится."
+            "Сейчас спишется %s ₽ за 1 час игры «%s»."
             % (lease.get("AccountLabel") or "аренда", int(price), game["Name"])
         )
+        if other_active:
+            msg += " Оставшееся оплаченное время на другой игре не переносится."
     else:
         msg = (
             "Сейчас спишется %s ₽ за 1 час игры «%s». "
@@ -625,6 +675,8 @@ def handle_quote(conn, req):
             "Сохранения останутся на этом аккаунте %s дней."
             % (int(price), game["Name"], RETENTION_DAYS)
         )
+        if other_active:
+            msg += " Оставшееся оплаченное время на другой игре не переносится."
 
     return reply(
         req_id,
@@ -633,6 +685,8 @@ def handle_quote(conn, req):
         hourly_price=price,
         currency=game.get("Currency") or "RUB",
         reuse_account=reuse,
+        resume_session=False,
+        no_charge=False,
         game_name=game["Name"],
     )
 
@@ -661,6 +715,27 @@ def handle_start(conn, req):
     user = ensure_user(conn, email)
     game = ensure_game(conn, service_type, game_identifier, game_name)
     price = float(game["HourlyPrice"])
+
+    resumable = find_resumable_session(conn, user["ID"], game["ID"])
+    if resumable:
+        end_other_active_sessions(conn, user["ID"], except_session_id=resumable["ID"])
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET StreamActive=1, Status='active', "
+                "LastHeartbeatAt=NOW(3), UiMessage=%s WHERE ID=%s",
+                ("Продолжаем оплаченную сессию…", resumable["ID"]),
+            )
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (resumable["ID"],))
+            sess = cur.fetchone()
+        touch_lease(conn, resumable["LeaseID"])
+        conn.commit()
+        payload = session_payload(conn, sess)
+        payload["resumed"] = True
+        payload["ui_message"] = (
+            "Продолжение сессии «%s». Осталось %s мин оплаченного времени."
+            % (game["Name"], payload.get("minutes_left", 0))
+        )
+        return reply(req_id, True, **payload)
 
     # Switching game forfeits remaining paid time on other sessions
     end_other_active_sessions(conn, user["ID"])
@@ -915,7 +990,7 @@ def handle_end_stream(conn, req):
             "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
             "UiMessage=%s WHERE ID=%s",
             (
-                "Стрим остановлен. Оплаченное время продолжает идти до %s."
+                "Стрим приостановлен. Можно вернуться в эту же игру до %s."
                 % str(sess["PaidUntil"]),
                 sess["ID"],
             ),
@@ -928,7 +1003,11 @@ def handle_end_stream(conn, req):
     return reply(
         req_id,
         True,
-        ui_message="Стрим завершён. Оставшееся оплаченное время не переносится на другую игру.",
+        ui_message=(
+            "Стрим остановлен. Оплаченное время действует до %s — "
+            "запустите ту же игру снова, чтобы продолжить без новой оплаты."
+            % str(sess["PaidUntil"])
+        ),
     )
 
 

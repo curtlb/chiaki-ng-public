@@ -185,8 +185,9 @@ void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameI
         ? quote.ui_message
         : (quote.ui_message.isEmpty() ? quote.error : quote.ui_message);
     const double price = quote.data.value(QStringLiteral("hourly_price")).toDouble(0);
+    const bool resume = quote.data.value(QStringLiteral("resume_session")).toBool(false);
     if(callback.isCallable())
-        callback.call({quote.ok, message, price});
+        callback.call({quote.ok, message, price, resume});
 }
 
 // ============================================================================
