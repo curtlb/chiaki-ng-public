@@ -58,6 +58,9 @@ public:
     Q_INVOKABLE QVariantMap filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,
                                                  const QVariantList &favoriteIds, int sortState,
                                                  bool billingRental, int limit) const;
+    Q_INVOKABLE QVariantList recentDisplayGames(bool billingRental, int limit = 16) const;
+    Q_INVOKABLE void recordRecentPlay(const QString &streamIdentifier, const QString &serviceType,
+                                      const QString &gameName);
     Q_INVOKABLE int catalogGameCount() const;
 
     // Steam shortcut creation for cloud games
@@ -152,8 +155,9 @@ private:
         QString conceptUrl;
         bool isOwned = false;
         QString imageUrl;
+        QString sourceList;
     };
-    static CatalogDisplayRow catalogRowFromJson(const QJsonObject &g);
+    static CatalogDisplayRow catalogRowFromJson(const QJsonObject &g, const QString &storeLocale = QStringLiteral("en-GB"));
     static QVariantMap catalogRowToVariant(const CatalogDisplayRow &row);
     static QVector<CatalogDisplayRow> buildCatalogDisplayRows(const QJsonArray &games);
     QVector<CatalogDisplayRow> catalogDisplayRows_;

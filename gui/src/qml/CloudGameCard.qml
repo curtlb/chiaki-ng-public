@@ -118,57 +118,39 @@ Rectangle {
         }
         
         // For PS5 Cloud games from gameslist API - they have imageUrl directly
-        if (!isPsnow) {
-            if (gameData.imageUrl) return gameData.imageUrl;
-            if (gameData.images && Array.isArray(gameData.images) && gameData.images.length > 0) {
-                // Prefer cover (type 10) over landscape (type 12/13)
-                for (let i = 0; i < gameData.images.length; i++) {
-                    let img = gameData.images[i];
-                    if (img && img.url && img.type === 10) return img.url;
-                }
-                // Fallback to landscape if no cover
-                for (let i = 0; i < gameData.images.length; i++) {
-                    let img = gameData.images[i];
-                    if (img && img.url && (img.type === 12 || img.type === 13)) return img.url;
-                }
-                // Last resort: any image
-                for (let i = 0; i < gameData.images.length; i++) {
-                    let img = gameData.images[i];
-                    if (img && img.url) return img.url;
-                }
+        if (gameData.imageUrl) return gameData.imageUrl;
+        if (gameData.images && Array.isArray(gameData.images) && gameData.images.length > 0) {
+            for (let i = 0; i < gameData.images.length; i++) {
+                let img = gameData.images[i];
+                if (img && img.url && img.type === 10) return img.url;
             }
-        } else {
-            // For PSNOW games - catalog doesn't include images, need to fetch from details
-            // But try any available fields first
-            if (gameData.imageUrl) return gameData.imageUrl;
-            if (gameData.images && Array.isArray(gameData.images)) {
-                // Prefer cover (type 10) over landscape (type 12/13)
-                for (let i = 0; i < gameData.images.length; i++) {
-                    let img = gameData.images[i];
-                    if (img && img.url && img.type === 10) return img.url;
-                }
-                // Fallback to landscape if no cover
-                for (let i = 0; i < gameData.images.length; i++) {
-                    let img = gameData.images[i];
-                    if (img && img.url && (img.type === 12 || img.type === 13)) return img.url;
-                }
+            for (let i = 0; i < gameData.images.length; i++) {
+                let img = gameData.images[i];
+                if (img && img.url && (img.type === 12 || img.type === 13)) return img.url;
             }
+            for (let i = 0; i < gameData.images.length; i++) {
+                let img = gameData.images[i];
+                if (img && img.url) return img.url;
+            }
+        }
+        // Billing catalog may omit imageUrl; backend usually fills it — last resort from product id.
+        let pid = getProductIdForApi() || getProductId();
+        if (pid && pid.indexOf("-") > 0) {
+            let locale = (Chiaki.settings && Chiaki.settings.cloudStoreLocale) ? Chiaki.settings.cloudStoreLocale : "en-GB";
+            let parts = locale.toLowerCase().split("-");
+            let lang = parts.length >= 1 ? parts[0] : "en";
+            let country = parts.length >= 2 ? parts[1].toUpperCase() : "US";
+            if (pid.substring(0, 2).toUpperCase() === "EP" && country === "US")
+                country = "GB";
+            return `https://store.playstation.com/store/api/chihiro/00_09_000/container/${country}/${lang}/999/${pid}/image?w=440&h=440`;
         }
         return "";
     }
     
-    // Note: cachedImageUrl is bound to gameImage.source below, so it will update automatically
+    onGameDataChanged: cachedImageUrl = getImageUrl()
     
-    // Load image URL on component creation - ONLY from catalog/entitlement data, no API calls
     Component.onCompleted: {
-        // Get initial image URL from catalog/entitlement data only
-        let initialUrl = getImageUrl();
-        if (initialUrl) {
-            cachedImageUrl = initialUrl;
-        }
-        // For PSNOW games without images in catalog, show placeholder until shortcut is clicked
-        // Game details will be fetched only when shortcut button is pressed
-        // For PS5 Cloud games, images should come from the entitlements API response
+        cachedImageUrl = getImageUrl();
     }
     
     color: isHovered || isCurrentItem ? Qt.lighter(Material.dialogColor, 1.1) : Material.dialogColor
@@ -210,8 +192,8 @@ Rectangle {
                 cache: true
                 smooth: true
                 
-                // Always bind to cachedImageUrl - will update when URL is set
-                source: cachedImageUrl || ""
+                // Re-resolve when catalog row updates (covers, locale, etc.)
+                source: gameData ? getImageUrl() : ""
                 
                 // Suppress error warnings - image loading failures are non-fatal
                 // QML Image component may not support all HTTPS image formats
@@ -232,7 +214,7 @@ Rectangle {
                     font.pixelSize: 48
                     font.bold: true
                     opacity: 0.3
-                    visible: gameImage.status !== Image.Ready && !gameImage.status === Image.Loading
+                    visible: gameImage.status !== Image.Ready && gameImage.status !== Image.Loading
                 }
             }
             
@@ -292,11 +274,11 @@ Rectangle {
                     anchors.centerIn: parent
                     text: {
                         if (!gameData || !gameData.category) return "";
-                        if (gameData.category === "owned") return qsTr("OWNED");
-                        if (gameData.category === "streamable") return qsTr("STREAMABLE");
+                        if (gameData.category === "owned") return qsTr("КУПЛЕНО");
+                        if (gameData.category === "streamable") return qsTr("ПОТОК");
                         if (gameData.category === "purchaseable" && isCloudBillingRentalActive())
-                            return qsTr("PLAY");
-                        return qsTr("ADD GAME");
+                            return qsTr("ИГРАТЬ");
+                        return qsTr("ДОБАВИТЬ");
                     }
                     font.pixelSize: 10
                     font.weight: Font.Bold
@@ -500,22 +482,11 @@ Rectangle {
 
                             Label {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: needsAddToLibrary ? qsTr("Add Game") : qsTr("Play")
+                                text: needsAddToLibrary ? qsTr("Добавить в библиотеку") : qsTr("Играть")
                                 font.pixelSize: 14
                                 font.weight: Font.DemiBold
                                 color: streamMouseArea.containsMouse ? "#FFFFFF" : "#DCECF3"
                                 Behavior on color { ColorAnimation { duration: 150 } }
-                            }
-
-                            Image {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 17
-                                height: 17
-                                sourceSize: Qt.size(34, 34)
-                                source: getControllerIcon("cross")
-                                opacity: 0.9
-                                smooth: true
-                                antialiasing: true
                             }
                         }
                     }

@@ -2631,3 +2631,13 @@ void Settings::SetCloudFavorites(QString favorites)
 {
 	settings.setValue("settings/cloud_favorites", favorites);
 }
+
+QString Settings::GetCloudRecentPlays() const
+{
+	return settings.value("settings/cloud_recent_plays", "[]").toString();
+}
+
+void Settings::SetCloudRecentPlays(const QString &json)
+{
+	settings.setValue("settings/cloud_recent_plays", json);
+}

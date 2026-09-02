@@ -538,6 +538,13 @@ void CloudStreamingBackend::finishCloudSession(QString serviceType, QString serv
 {
     qInfo() << "=== COMPLETE CLOUD SESSION SUCCESS ===";
     qInfo() << "  IP:" << serverIp << " Port:" << serverPort << " SessionId len:" << sessionId.length();
+
+    if (QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent())) {
+        if (CloudCatalogBackend *catalog = qmlBackend->cloudCatalog()) {
+            catalog->recordRecentPlay(last_game_identifier, serviceType, last_game_name);
+        }
+    }
+
     qInfo() << "  handshake len:" << handshakeKey.length() << " launchSpec len:" << launchSpec.length();
 
     // PSCLOUD streams as PS5, PSNOW (PS3 + PS4) as PS4.

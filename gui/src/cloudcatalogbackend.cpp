@@ -235,7 +235,28 @@ static QJsonObject billingCatalogEnvelope(const QJsonArray &games, const QString
     return root;
 }
 
-static QString pickImageUrl(const QJsonObject &g)
+static QString chihiroCoverUrl(const QString &product_id, const QString &locale = QStringLiteral("en-GB"))
+{
+    const QString pid = product_id.trimmed();
+    if (pid.isEmpty())
+        return {};
+    QString country = QStringLiteral("US");
+    QString lang = QStringLiteral("en");
+    const QStringList parts = locale.toLower().split(QLatin1Char('-'));
+    if (parts.size() >= 2) {
+        lang = parts.at(0);
+        country = parts.at(1).toUpper();
+    }
+    const QString prefix = pid.left(2).toUpper();
+    if (prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC")) {
+        if (country == QStringLiteral("US"))
+            country = QStringLiteral("GB");
+    }
+    return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
+        .arg(country, lang, pid);
+}
+
+static QString pickImageUrl(const QJsonObject &g, const QString &locale = QStringLiteral("en-GB"))
 {
     const QJsonObject extracted = g.value(QStringLiteral("extracted_images")).toObject();
     QString url = extracted.value(QStringLiteral("cover")).toString();
@@ -264,18 +285,21 @@ static QString pickImageUrl(const QJsonObject &g)
     QString pid = g.value(QStringLiteral("productId")).toString();
     if (pid.isEmpty())
         pid = g.value(QStringLiteral("streamIdentifier")).toString();
-    if (!pid.isEmpty()) {
-        QString country = QStringLiteral("US");
-        const QString prefix = pid.left(2).toUpper();
-        if (prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC"))
-            country = QStringLiteral("GB");
-        return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/en/999/%2/image")
-            .arg(country, pid);
-    }
+    if (!pid.isEmpty())
+        return chihiroCoverUrl(pid, locale);
     return QString();
 }
 
-CloudCatalogBackend::CatalogDisplayRow CloudCatalogBackend::catalogRowFromJson(const QJsonObject &g)
+static QString rowLookupKey(const CloudCatalogBackend::CatalogDisplayRow &row)
+{
+    if (!row.streamIdentifier.isEmpty())
+        return row.streamIdentifier;
+    if (!row.productId.isEmpty())
+        return row.productId;
+    return row.id;
+}
+
+CloudCatalogBackend::CatalogDisplayRow CloudCatalogBackend::catalogRowFromJson(const QJsonObject &g, const QString &storeLocale)
 {
     CatalogDisplayRow row;
     row.name = g.value(QStringLiteral("name")).toString();
@@ -296,7 +320,10 @@ CloudCatalogBackend::CatalogDisplayRow CloudCatalogBackend::catalogRowFromJson(c
     if (row.conceptUrl.isEmpty())
         row.conceptUrl = g.value(QStringLiteral("concept_url")).toString();
     row.isOwned = g.value(QStringLiteral("isOwned")).toBool(false);
-    row.imageUrl = pickImageUrl(g);
+    row.sourceList = g.value(QStringLiteral("sourceList")).toString();
+    if (row.sourceList.isEmpty())
+        row.sourceList = g.value(QStringLiteral("source_list")).toString();
+    row.imageUrl = pickImageUrl(g, storeLocale);
     return row;
 }
 
@@ -317,17 +344,20 @@ QVariantMap CloudCatalogBackend::catalogRowToVariant(const CatalogDisplayRow &ro
     m[QStringLiteral("isOwned")] = row.isOwned;
     if (!row.imageUrl.isEmpty())
         m[QStringLiteral("imageUrl")] = row.imageUrl;
+    if (!row.sourceList.isEmpty())
+        m[QStringLiteral("sourceList")] = row.sourceList;
     return m;
 }
 
 QVector<CloudCatalogBackend::CatalogDisplayRow> CloudCatalogBackend::buildCatalogDisplayRows(const QJsonArray &games)
 {
+    const QString locale = settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-GB");
     QVector<CatalogDisplayRow> rows;
     rows.reserve(games.size());
     for (const QJsonValue &v : games) {
         if (!v.isObject())
             continue;
-        rows.append(catalogRowFromJson(v.toObject()));
+        rows.append(catalogRowFromJson(v.toObject(), locale));
     }
     return rows;
 }
@@ -365,6 +395,65 @@ static QString catalogTitleKey(QString name)
     return out;
 }
 
+static bool isLegacyClassicStreamId(const QString &pid)
+{
+    const int dash = pid.indexOf(QLatin1Char('-'));
+    if (dash < 0)
+        return true;
+    const QString title = pid.mid(dash + 1);
+    return !title.startsWith(QLatin1String("CUSA"), Qt::CaseInsensitive)
+        && !title.startsWith(QLatin1String("PPSA"), Qt::CaseInsensitive);
+}
+
+static bool isBillingRentalPlayableRow(const CatalogDisplayRow &row)
+{
+    if (row.category == QLatin1String("owned"))
+        return true;
+    if (row.category == QLatin1String("purchaseable"))
+        return false;
+    if (row.category != QLatin1String("streamable"))
+        return false;
+    if (row.serviceType == QLatin1String("pscloud")) {
+        if (row.category == QLatin1String("owned"))
+            return true;
+        return row.sourceList == QLatin1String("free-to-play-list");
+    }
+    if (row.serviceType != QLatin1String("psnow"))
+        return false;
+    const QString pid = row.productId.isEmpty() ? row.streamIdentifier : row.productId;
+    if (isLegacyClassicStreamId(pid))
+        return false;
+    const QString pref = pid.left(2).toUpper();
+    if (pref == QLatin1String("UP") || pref == QLatin1String("HP") || pref == QLatin1String("HN"))
+        return false;
+    if (pid.startsWith(QLatin1String("NPUB"), Qt::CaseInsensitive)
+        || pid.startsWith(QLatin1String("NPUG"), Qt::CaseInsensitive)
+        || pid.startsWith(QLatin1String("NPUA"), Qt::CaseInsensitive))
+        return false;
+    return true;
+}
+
+static void purgeStaleBillingCatalogCaches(CloudCatalogBackend *self)
+{
+    if (!self)
+        return;
+    const QStringList stale = {
+        QStringLiteral("billing_catalog_v6"),
+        QStringLiteral("billing_catalog_v7"),
+        QStringLiteral("billing_catalog_v8"),
+        QStringLiteral("billing_catalog_v9"),
+        QStringLiteral("billing_catalog_v10"),
+        QStringLiteral("billing_catalog_v11"),
+    };
+    for (const QString &key : stale)
+        QFile::remove(self->getCacheFilePath(key));
+}
+
+static const QString billingCatalogCacheKey()
+{
+    return QStringLiteral("billing_catalog_v12");
+}
+
 QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,
                                                       const QVariantList &favoriteIds, int sortState,
                                                       bool billingRental, int limit) const
@@ -383,37 +472,15 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     const bool filterFavorites = !favorites.isEmpty();
     const bool filterSearch = !q.isEmpty();
 
-    QSet<QString> psnowTitleKeys;
-    if (billingRental) {
-        for (const CatalogDisplayRow &row : catalogDisplayRows_) {
-            if (row.serviceType == QLatin1String("psnow")) {
-                const QString tk = catalogTitleKey(row.name);
-                if (!tk.isEmpty())
-                    psnowTitleKeys.insert(tk);
-            }
-        }
-    }
-
     QVector<const CatalogDisplayRow *> matches;
     matches.reserve(catalogDisplayRows_.size());
     for (const CatalogDisplayRow &row : catalogDisplayRows_) {
-        // Hourly rental streams through PS Now on the allocated account; PS5 cloud SKUs
-        // (PPSA…) need an owned entitlement and fail with noGameForEntitlementId.
-        if (billingRental && row.serviceType == QLatin1String("pscloud")) {
-            const QString tk = catalogTitleKey(row.name);
-            if (!tk.isEmpty() && psnowTitleKeys.contains(tk))
-                continue;
-        }
+        if (billingRental && !isBillingRentalPlayableRow(row))
+            continue;
         if (filterCategories) {
             bool category_ok = false;
             for (const QString &cat : categories) {
                 if (row.category == cat) {
-                    category_ok = true;
-                    break;
-                }
-                // Hourly rental: PS5 "Add Game" titles are playable without store purchase.
-                if (billingRental && cat == QLatin1String("streamable")
-                    && row.category == QLatin1String("purchaseable")) {
                     category_ok = true;
                     break;
                 }
@@ -434,9 +501,13 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     }
 
     const auto playable = [billingRental](const CatalogDisplayRow &row) {
-        if (row.category != QLatin1String("purchaseable"))
-            return true;
-        return billingRental;
+        if (billingRental)
+            return isBillingRentalPlayableRow(row);
+        return row.category != QLatin1String("purchaseable");
+    };
+
+    const auto hasCover = [](const CatalogDisplayRow &row) {
+        return !row.imageUrl.isEmpty();
     };
 
     if (sortState == 1) {
@@ -449,6 +520,10 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
         });
     } else {
         std::stable_sort(matches.begin(), matches.end(), [&](const CatalogDisplayRow *a, const CatalogDisplayRow *b) {
+            const bool ca = hasCover(*a);
+            const bool cb = hasCover(*b);
+            if (ca != cb)
+                return ca > cb;
             const bool pa = playable(*a);
             const bool pb = playable(*b);
             if (pa != pb)
@@ -477,6 +552,67 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     result[QStringLiteral("truncated")] = matches.size() > cap;
     result[QStringLiteral("totalGames")] = catalogTotalGames_;
     return result;
+}
+
+void CloudCatalogBackend::recordRecentPlay(const QString &streamIdentifier, const QString &serviceType,
+                                           const QString &gameName)
+{
+    if (!settings || streamIdentifier.trimmed().isEmpty())
+        return;
+    const QString sid = streamIdentifier.trimmed();
+    QJsonArray recent = QJsonDocument::fromJson(settings->GetCloudRecentPlays().toUtf8()).array();
+    QJsonArray next;
+    next.append(QJsonObject{
+        {QStringLiteral("streamIdentifier"), sid},
+        {QStringLiteral("serviceType"), serviceType.trimmed().toLower()},
+        {QStringLiteral("name"), gameName.trimmed()},
+        {QStringLiteral("playedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+    });
+    for (const QJsonValue &v : recent) {
+        if (!v.isObject())
+            continue;
+        const QJsonObject o = v.toObject();
+        if (o.value(QStringLiteral("streamIdentifier")).toString() == sid)
+            continue;
+        next.append(o);
+        if (next.size() >= 24)
+            break;
+    }
+    settings->SetCloudRecentPlays(QString::fromUtf8(QJsonDocument(next).toJson(QJsonDocument::Compact)));
+}
+
+QVariantList CloudCatalogBackend::recentDisplayGames(bool billingRental, int limit) const
+{
+    if (!settings || limit <= 0)
+        return {};
+    const QJsonArray recent = QJsonDocument::fromJson(settings->GetCloudRecentPlays().toUtf8()).array();
+    if (recent.isEmpty())
+        return {};
+
+    QHash<QString, const CatalogDisplayRow *> byStream;
+    byStream.reserve(catalogDisplayRows_.size());
+    for (const CatalogDisplayRow &row : catalogDisplayRows_) {
+        const QString key = rowLookupKey(row);
+        if (!key.isEmpty())
+            byStream.insert(key, &row);
+    }
+
+    QVariantList out;
+    out.reserve(qMin(limit, recent.size()));
+    for (const QJsonValue &v : recent) {
+        if (out.size() >= limit)
+            break;
+        if (!v.isObject())
+            continue;
+        const QString sid = v.toObject().value(QStringLiteral("streamIdentifier")).toString();
+        const CatalogDisplayRow *row = byStream.value(sid);
+        if (!row)
+            continue;
+        if (billingRental && !isBillingRentalPlayableRow(*row))
+            continue;
+        out.append(catalogRowToVariant(*row));
+    }
+    return out;
 }
 
 void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
@@ -536,14 +672,18 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
 
         if (billingCatalog) {
             CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("billing catalog fetch started"));
+            if (self)
+                purgeStaleBillingCatalogCaches(self.data());
             const qint64 cacheTtlMs = 60 * 60 * 1000;
+            const QString cacheKey = billingCatalogCacheKey();
             if (self) {
-                const QString cached = self->getCachedData(QStringLiteral("billing_catalog_v6"), cacheTtlMs);
+                const QString cached = self->getCachedData(cacheKey, cacheTtlMs);
                 if (!cached.isEmpty()) {
                     json = cached;
                     success = true;
                     message = QStringLiteral("Cached");
-                    CloudLogMessage(QStringLiteral("Catalog"), QStringLiteral("[CACHE HIT] billing_catalog_v6"));
+                    CloudLogMessage(QStringLiteral("Catalog"),
+                        QStringLiteral("[CACHE HIT] %1").arg(cacheKey));
                 }
             }
             if (!success) {
@@ -556,7 +696,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
                     success = true;
                     message = QStringLiteral("Success");
                     if (self)
-                        self->setCachedData(QStringLiteral("billing_catalog_v6"), QJsonDocument(root));
+                        self->setCachedData(cacheKey, QJsonDocument(root));
                     CloudLogMessage(QStringLiteral("Catalog"),
                         QStringLiteral("billing catalog fetch finished: %1 games").arg(games.size()));
                 } else {
@@ -611,7 +751,7 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             if (self->catalogGeneration != gen) {
                 const QByteArray staleCacheDir = self->cacheDirectory.toUtf8();
                 chiaki_cloudcatalog_invalidate_cache(staleCacheDir.constData());
-                QFile::remove(self->getCacheFilePath(QStringLiteral("billing_catalog_v6")));
+                QFile::remove(self->getCacheFilePath(billingCatalogCacheKey()));
                 qInfo() << "[CACHE] Discarding stale unified fetch (generation"
                         << gen << "!=" << self->catalogGeneration << "); refetching";
                 if (cb.isCallable())
@@ -1099,7 +1239,8 @@ void CloudCatalogBackend::invalidateCache()
     // the client from drifting out of sync when the cache schema/version bumps.
     const QByteArray cacheDir = cacheDirectory.toUtf8();
     chiaki_cloudcatalog_invalidate_cache(cacheDir.constData());
-    QFile::remove(getCacheFilePath(QStringLiteral("billing_catalog_v6")));
+    purgeStaleBillingCatalogCaches(this);
+    QFile::remove(getCacheFilePath(billingCatalogCacheKey()));
     qInfo() << "[CACHE INVALIDATED] Delegated cache invalidation to libchiaki for" << cacheDirectory;
     // Tell the cloud view to drop its stale in-memory list and re-fetch (the cache files are gone,
     // so the next fetch is a guaranteed network refresh for the now-current account).

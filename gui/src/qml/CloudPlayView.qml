@@ -25,6 +25,7 @@ Pane {
     property int catalogTotalCount: 0
     property int filteredGameCount: 0
     property var filteredGames: []
+    property var recentGames: []
     property var currentPageGames: []
     property bool isLoading: false
     property string searchQuery: ""
@@ -91,6 +92,8 @@ Pane {
         if (visible) {
             if (catalogTotalCount === 0)
                 loadUnifiedCatalog();
+            else
+                applySearchFilter();
             initialFocusTimer.restart();
         }
     }
@@ -203,9 +206,83 @@ Pane {
         return (Chiaki.settings.fourCloudEmail || "").length > 0;
     }
 
+    function launchCloudGameFromCard(modelData, streamingId, platform, serviceType) {
+        let gameName = "";
+        if (modelData) {
+            gameName = modelData.name || "";
+            if (!gameName && modelData.game_meta && modelData.game_meta.name)
+                gameName = modelData.game_meta.name;
+        }
+
+        function launchCloudStream() {
+            let mainComp = root;
+            while (mainComp && !mainComp.showStreamView) {
+                mainComp = mainComp.parent;
+            }
+            if (mainComp && mainComp.showStreamView) {
+                mainComp.showStreamView();
+            }
+            Chiaki.cloudStreaming.startCompleteCloudSession(
+                serviceType,
+                streamingId,
+                gameName,
+                function(success, message, serverIp) {
+                    if (!success) {
+                        let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));
+                        Chiaki.error(qsTr("Ошибка облачного стрима"), message, isOAuthError ? 10000 : 3000);
+                    } else {
+                        applySearchFilter();
+                    }
+                }
+            );
+        }
+
+        let useBilling = isCloudBillingActive();
+        if (isCloudBillingServerConfigured() && !useBilling) {
+            Chiaki.error(
+                qsTr("4cloud.pro"),
+                qsTr("Войдите в аккаунт 4cloud.pro в приложении, затем повторите запуск."),
+                10000
+            );
+            return;
+        }
+        if (!useBilling) {
+            launchCloudStream();
+            return;
+        }
+        Chiaki.cloudStreaming.fetchBillingQuote(
+            serviceType,
+            streamingId,
+            gameName,
+            function(ok, message, hourlyPrice, resumeSession) {
+                if (!ok) {
+                    Chiaki.error(qsTr("Оплата"), message || qsTr("Не удалось получить информацию об оплате"), 8000);
+                    return;
+                }
+                let title = resumeSession ? qsTr("Продолжить игру") : qsTr("Оплата за час игры");
+                let priceLine = (!resumeSession && hourlyPrice > 0)
+                    ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
+                    : "";
+                let actionLine = resumeSession
+                    ? qsTr("\n\nНажмите «Да» — стрим продолжится без списания.")
+                    : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
+                let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
+                if (showConfirmDialogFunc) {
+                    showConfirmDialogFunc(title, confirmText, launchCloudStream, null, true);
+                } else {
+                    launchCloudStream();
+                }
+            }
+        );
+    }
+
     function applySearchFilter() {
         try {
             let hadFocus = searchField && searchField.activeFocus;
+            recentGames = Chiaki.cloudCatalog.recentDisplayGames(
+                isCloudBillingServerConfigured(),
+                16
+            ) || [];
             let result = Chiaki.cloudCatalog.filterDisplayCatalog(
                 searchQuery || "",
                 activeTagFilters || [],
@@ -888,7 +965,7 @@ Pane {
                         Text {
                             id: sortToggleText
                             anchors.verticalCenter: parent.verticalCenter
-                            text: sortState === 1 ? qsTr("A → Z") : (sortState === 2 ? qsTr("Z → A") : qsTr("Playable"))
+                            text: sortState === 1 ? qsTr("А → Я") : (sortState === 2 ? qsTr("Я → А") : qsTr("С обложкой"))
                             font.pixelSize: 13
                             font.weight: Font.Medium
                             color: "#00d4ff"
@@ -1055,65 +1132,113 @@ Pane {
             }
         }
         
-        // Games Grid
-        Item {
+        // Games grid (single Flickable — mouse wheel scrolls the whole catalog)
+        Flickable {
+            id: catalogFlickable
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            
-            ScrollView {
-                id: scrollView
-                anchors.fill: parent
-                anchors.leftMargin: 20
-                anchors.rightMargin: 20
-                anchors.bottomMargin: 0
-                clip: true
-                
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                contentWidth: availableWidth
-                focus: false  // Don't take focus, let GridView handle it
-                
+            boundsBehavior: Flickable.StopAtBounds
+            contentWidth: width
+            contentHeight: catalogColumn.implicitHeight
+            focus: false
+
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
+
+            WheelHandler {
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: (event) => {
+                    if (event.angleDelta.y === 0)
+                        return;
+                    const step = event.angleDelta.y * 0.85;
+                    catalogFlickable.flick(0, -step);
+                    event.accepted = true;
+                }
+            }
+
+            Column {
+                id: catalogColumn
+                width: catalogFlickable.width
+                spacing: 12
+
+                // Recently played on this profile
+                Column {
+                    width: parent.width
+                    visible: recentGames.length > 0 && !isLoading
+                    spacing: 8
+
+                    Label {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 20
+                        text: qsTr("Недавние")
+                        font.pixelSize: 16
+                        font.bold: true
+                        color: "white"
+                    }
+
+                    ListView {
+                        id: recentList
+                        width: parent.width
+                        height: 260
+                        orientation: ListView.Horizontal
+                        spacing: 12
+                        leftMargin: 20
+                        rightMargin: 20
+                        clip: true
+                        model: recentGames
+                        delegate: CloudGameCard {
+                            required property int index
+                            required property var modelData
+                            width: 180
+                            height: 250
+                            gameData: modelData
+                            qrCodeDialog: root.qrCodeDialogRef
+                            onStreamGame: (streamingId, platform, serviceType) => {
+                                root.launchCloudGameFromCard(modelData, streamingId, platform, serviceType);
+                            }
+                            onToggleFavorite: (productId) => root.toggleFavorite(productId)
+                        }
+                    }
+                }
+
                 GridView {
                     id: gamesGrid
-                    
-                    // Property to force binding recalculation when needed
+
+                    property int gridAvailWidth: catalogColumn.width - 40
                     property int _layoutVersion: 0
                     
                     width: {
-                        // Include count to ensure recalculation when model changes
                         let modelCount = count;
                         let version = _layoutVersion;
-                        let availableWidth = scrollView.availableWidth;
+                        let availableWidth = gridAvailWidth;
                         let cols = Math.floor(availableWidth / cellWidth);
                         if (cols === 0) cols = 1;
-                        // Return width for exactly that many columns (centered), but never exceed availableWidth
                         return Math.min(cols * cellWidth, availableWidth);
                     }
-                    // Center the grid horizontally using x positioning
-                    // Include count to ensure recalculation when model changes
+                    height: {
+                        let cols = Math.max(1, Math.floor(gridAvailWidth / cellWidth));
+                        let rows = Math.ceil(Math.max(count, 1) / cols);
+                        return rows * cellHeight + 20;
+                    }
                     x: {
-                        let modelCount = count;
-                        let version = _layoutVersion;
-                        let availableWidth = scrollView.availableWidth;
+                        let availableWidth = gridAvailWidth;
                         let gridWidth = width;
-                        return Math.max(0, (availableWidth - gridWidth) / 2);
+                        return Math.max(20, (catalogColumn.width - gridWidth) / 2);
                     }
                     
-                    // Force recalculation when availableWidth changes (e.g., window maximize/resize)
                     Connections {
-                        target: scrollView
-                        function onAvailableWidthChanged() {
-                            Qt.callLater(() => {
-                                gamesGrid._layoutVersion++;
-                            });
+                        target: catalogColumn
+                        function onWidthChanged() {
+                            Qt.callLater(() => { gamesGrid._layoutVersion++; });
                         }
                     }
                     cellWidth: 200
                     cellHeight: 280
                     focus: true
-                    clip: true
-                    flickableDirection: Flickable.VerticalFlick
-                    boundsBehavior: Flickable.StopAtBounds
+                    clip: false
+                    interactive: false
                     
                     KeyNavigation.up: filterToggle
                     
@@ -1156,85 +1281,7 @@ Pane {
                         }
 
                         onStreamGame: (streamingId, platform, serviceType) => {
-                            console.log("Stream game:", streamingId, platform, serviceType);
-                            let gameName = "";
-                            if (modelData) {
-                                gameName = modelData.name || "";
-                                if (!gameName && modelData.game_meta && modelData.game_meta.name)
-                                    gameName = modelData.game_meta.name;
-                            }
-
-                            function launchCloudStream() {
-                                let mainComp = root;
-                                while (mainComp && !mainComp.showStreamView) {
-                                    mainComp = mainComp.parent;
-                                }
-                                if (mainComp && mainComp.showStreamView) {
-                                    mainComp.showStreamView();
-                                }
-                                Chiaki.cloudStreaming.startCompleteCloudSession(
-                                    serviceType,
-                                    streamingId,
-                                    gameName,
-                                    function(success, message, serverIp) {
-                                        console.log("Cloud streaming:", success ? "SUCCESS" : "FAILED");
-                                        if (!success) {
-                                            let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));
-                                            let toastDuration = isOAuthError ? 10000 : 3000;
-                                            Chiaki.error(qsTr("Cloud Streaming Failed"), message, toastDuration);
-                                        }
-                                    }
-                                );
-                            }
-
-                            let useBilling = root.isCloudBillingActive();
-
-                            if (root.isCloudBillingServerConfigured() && !useBilling) {
-                                Chiaki.error(
-                                    qsTr("4cloud.pro"),
-                                    qsTr("Войдите в аккаунт 4cloud.pro в приложении, затем повторите запуск."),
-                                    10000
-                                );
-                                return;
-                            }
-
-                            if (!useBilling) {
-                                launchCloudStream();
-                                return;
-                            }
-
-                            Chiaki.cloudStreaming.fetchBillingQuote(
-                                serviceType,
-                                streamingId,
-                                gameName,
-                                function(ok, message, hourlyPrice, resumeSession) {
-                                    if (!ok) {
-                                        Chiaki.error(qsTr("Оплата"), message || qsTr("Не удалось получить информацию об оплате"), 8000);
-                                        return;
-                                    }
-                                    let title = resumeSession
-                                        ? qsTr("Продолжить игру")
-                                        : qsTr("Оплата за час игры");
-                                    let priceLine = (!resumeSession && hourlyPrice > 0)
-                                        ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
-                                        : "";
-                                    let actionLine = resumeSession
-                                        ? qsTr("\n\nНажмите «Да» — стрим продолжится без списания.")
-                                        : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
-                                    let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
-                                    if (showConfirmDialogFunc) {
-                                        showConfirmDialogFunc(
-                                            title,
-                                            confirmText,
-                                            launchCloudStream,
-                                            null,
-                                            true
-                                        );
-                                    } else {
-                                        launchCloudStream();
-                                    }
-                                }
-                            );
+                            root.launchCloudGameFromCard(modelData, streamingId, platform, serviceType);
                         }
                         
                         onCreateShortcut: (productId, entitlementId, platform, serviceType, gameName) => {
@@ -1267,7 +1314,7 @@ Pane {
                         if (event.modifiers)
                             return;
                         
-                        let cols = Math.floor(scrollView.availableWidth / cellWidth);
+                        let cols = Math.floor(gamesGrid.gridAvailWidth / cellWidth);
                         if (cols === 0) cols = 1;
                         
                         if (event.key === Qt.Key_Left) {
@@ -1350,14 +1397,14 @@ Pane {
                         
                         switch (event.key) {
                         case Qt.Key_PageDown:
-                            let visibleRows = Math.floor(scrollView.availableHeight / cellHeight);
+                            let visibleRows = Math.floor(catalogFlickable.height / cellHeight);
                             let jumpIndex = Math.min(currentIndex + (visibleRows * cols), model.length - 1);
                             currentIndex = jumpIndex;
                             positionViewAtIndex(currentIndex, GridView.Contain);
                             event.accepted = true;
                             break;
                         case Qt.Key_PageUp:
-                            let visibleRowsUp = Math.floor(scrollView.availableHeight / cellHeight);
+                            let visibleRowsUp = Math.floor(catalogFlickable.height / cellHeight);
                             let jumpIndexUp = Math.max(currentIndex - (visibleRowsUp * cols), 0);
                             currentIndex = jumpIndexUp;
                             positionViewAtIndex(currentIndex, GridView.Contain);

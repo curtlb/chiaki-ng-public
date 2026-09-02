@@ -448,6 +448,8 @@ class Settings : public QObject
 	void SetCloudSortState(int sortState);
 	QString GetCloudFavorites() const;
 	void SetCloudFavorites(QString favorites);
+	QString GetCloudRecentPlays() const;
+	void SetCloudRecentPlays(const QString &json);
 
 	// Yandex Cloud OCR Translation settings
 	QString GetYandexIamToken() const			{ return settings.value("settings/yandex_iam_token", "").toString(); }

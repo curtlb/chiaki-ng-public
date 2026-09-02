@@ -141,17 +141,25 @@ CloudBillingClient::Result CloudBillingClient::endStream(const QString &host, qu
 	return request(o);
 }
 
-static QString chihiroImageUrl(const QString &product_id)
+static QString chihiroImageUrl(const QString &product_id, const QString &locale = QStringLiteral("en-GB"))
 {
 	const QString pid = product_id.trimmed();
 	if(pid.isEmpty())
 		return {};
 	QString country = QStringLiteral("US");
+	QString lang = QStringLiteral("en");
+	const QStringList parts = locale.toLower().split(QLatin1Char('-'));
+	if(parts.size() >= 2) {
+		lang = parts.at(0);
+		country = parts.at(1).toUpper();
+	}
 	const QString prefix = pid.left(2).toUpper();
-	if(prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC"))
-		country = QStringLiteral("GB");
-	return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/en/999/%2/image")
-		.arg(country, pid);
+	if(prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC")) {
+		if(country == QStringLiteral("US"))
+			country = QStringLiteral("GB");
+	}
+	return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
+		.arg(country, lang, pid);
 }
 
 static bool readTcpLine(QTcpSocket &tcp, QByteArray *out_line, int timeout_ms)
@@ -273,6 +281,8 @@ CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host,
 		result.ok = true;
 		if(header.contains(QStringLiteral("totalGames")))
 			result.data.insert(QStringLiteral("totalGames"), header.value(QStringLiteral("totalGames")));
+		if(header.contains(QStringLiteral("catalog_filter_version")))
+			result.data.insert(QStringLiteral("catalog_filter_version"), header.value(QStringLiteral("catalog_filter_version")));
 	}
 
 	QJsonArray games = result.data.value(QStringLiteral("games")).toArray();

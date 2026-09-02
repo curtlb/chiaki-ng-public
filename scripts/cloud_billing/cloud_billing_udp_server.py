@@ -480,11 +480,56 @@ def _session_same_game(row, st, identifiers, catalog_ids, game_id=None):
     return False
 
 
+def game_billing_pool(conn, account_id, game):
+    """Plus/F2P/free catalog vs per-title owned (CloudStreaming_AccountOwnedGames)."""
+    if not game:
+        return "plus"
+    if game.get("ID"):
+        game = refresh_game_access_type(conn, game)
+    if account_id and account_owns_game(
+        conn,
+        account_id,
+        game["ServiceType"],
+        game["GameIdentifier"],
+        game.get("ID"),
+    ):
+        return "owned"
+    return "plus"
+
+
+def session_billing_pool(conn, session_row):
+    account_id = session_row.get("AccountID")
+    game_id = session_row.get("GameID")
+    if not game_id:
+        return "plus"
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM CloudStreaming_Games WHERE ID=%s LIMIT 1", (game_id,))
+        game = cur.fetchone()
+    if not game:
+        return "plus"
+    return game_billing_pool(conn, account_id, game)
+
+
+def _billing_pool_account_id(conn, user_id, game):
+    lease = find_active_lease(conn, user_id, game) if game else None
+    if not lease:
+        lease = find_any_user_lease(conn, user_id)
+    return lease["AccountID"] if lease else None
+
+
+def _session_matches_resumable(conn, row, target_pool, st, identifiers, catalog_ids, game_id):
+    if target_pool == "plus":
+        return session_billing_pool(conn, row) == "plus"
+    return _session_same_game(row, st, identifiers, catalog_ids, game_id)
+
+
 def find_resumable_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
-    """Paid session for the same game that still has time left (after stream stop or app close)."""
+    """Paid session with time left: shared plus pool, or same owned title."""
     st, identifiers, catalog_ids = collect_game_identity(
         conn, service_type, game_identifier, game
     )
+    account_id = _billing_pool_account_id(conn, user_id, game)
+    target_pool = game_billing_pool(conn, account_id, game) if game else "plus"
     active_statuses = ("active", "grace_no_stream", "renewal_pending")
     status_ph = ",".join(["%s"] * len(active_statuses))
 
@@ -499,7 +544,9 @@ def find_resumable_session(conn, user_id, service_type, game_identifier, game_id
         rows = cur.fetchall()
 
     for row in rows:
-        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
+        if _session_matches_resumable(
+            conn, row, target_pool, st, identifiers, catalog_ids, game_id
+        ):
             return row
 
     # Recover session wrongly ended (e.g. old billing ended same game on re-entry).
@@ -517,29 +564,34 @@ def find_resumable_session(conn, user_id, service_type, game_identifier, game_id
         rows = cur.fetchall()
 
     for row in rows:
-        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE CloudStreaming_Sessions SET Status='grace_no_stream', "
-                    "StreamActive=0, EndedAt=NULL, EndReason=NULL, "
-                    "UiMessage=%s WHERE ID=%s",
-                    ("Восстановлена оплаченная сессия…", row["ID"]),
-                )
-                cur.execute(
-                    "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
-                    "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-                    "WHERE s.ID = %s LIMIT 1",
-                    (row["ID"],),
-                )
-                return cur.fetchone()
+        if not _session_matches_resumable(
+            conn, row, target_pool, st, identifiers, catalog_ids, game_id
+        ):
+            continue
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET Status='grace_no_stream', "
+                "StreamActive=0, EndedAt=NULL, EndReason=NULL, "
+                "UiMessage=%s WHERE ID=%s",
+                ("Восстановлена оплаченная сессия…", row["ID"]),
+            )
+            cur.execute(
+                "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
+                "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+                "WHERE s.ID = %s LIMIT 1",
+                (row["ID"],),
+            )
+            return cur.fetchone()
     return None
 
 
 def find_other_active_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
-    """Another game with remaining paid time (switching forfeits that time)."""
+    """Another session whose paid time is forfeited when starting the requested title."""
     st, identifiers, catalog_ids = collect_game_identity(
         conn, service_type, game_identifier, game
     )
+    account_id = _billing_pool_account_id(conn, user_id, game)
+    target_pool = game_billing_pool(conn, account_id, game) if game else "plus"
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
@@ -554,6 +606,14 @@ def find_other_active_session(conn, user_id, service_type, game_identifier, game
     for row in rows:
         if _session_same_game(row, st, identifiers, catalog_ids, game_id):
             continue
+        row_pool = session_billing_pool(conn, row)
+        # Plus and owned pools bill separately — switching across pools does not forfeit.
+        if target_pool != row_pool:
+            continue
+        if target_pool == "plus":
+            # Any plus-pool session is reused, not forfeited.
+            continue
+        # owned → different owned title: remaining time on the other title is lost.
         return row
     return None
 
@@ -741,16 +801,21 @@ def end_other_active_sessions(
     game_identifier=None,
     game_id=None,
     game=None,
+    target_account_id=None,
 ):
     st, identifiers, catalog_ids = (None, set(), set())
+    target_pool = None
     if service_type and game_identifier:
         st, identifiers, catalog_ids = collect_game_identity(
             conn, service_type, game_identifier, game
         )
+    if game:
+        acc_id = target_account_id or _billing_pool_account_id(conn, user_id, game)
+        target_pool = game_billing_pool(conn, acc_id, game)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.ID, s.SessionToken, s.ServiceType, s.GameIdentifier, s.GameID, "
-            "g.CatalogID FROM CloudStreaming_Sessions s "
+            "s.AccountID, g.CatalogID FROM CloudStreaming_Sessions s "
             "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
             "WHERE s.UserID = %s AND s.Status IN ('active','grace_no_stream','renewal_pending')",
             (user_id,),
@@ -760,6 +825,11 @@ def end_other_active_sessions(
         if except_session_id and row["ID"] == except_session_id:
             continue
         if st and _session_same_game(row, st, identifiers, catalog_ids, game_id):
+            continue
+        row_pool = session_billing_pool(conn, row)
+        if target_pool and target_pool != row_pool:
+            continue
+        if target_pool == "plus" and row_pool == "plus":
             continue
         with conn.cursor() as cur:
             cur.execute(
@@ -843,6 +913,41 @@ AMERICAS_REGIONS = {
     "PY", "UY", "CR", "GT", "HN", "NI", "PA", "SV", "DO",
 }
 
+# Regional SKU prefix for rented PS accounts (EP for EU/PL, UP for US).
+RENTAL_SKU_PREFIX = os.environ.get("CS_RENTAL_SKU_PREFIX", "EP").strip().upper() or "EP"
+RENTAL_INCLUDE_PS3 = os.environ.get("CS_RENTAL_INCLUDE_PS3", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+# Bumped when rental catalog filter rules change — clients invalidate old caches.
+CATALOG_FILTER_VERSION = int(os.environ.get("CS_CATALOG_FILTER_VERSION", "12"))
+
+# Non-rental-store product id prefixes (e.g. HP = Hong Kong).
+FOREIGN_SKU_PREFIXES = frozenset(
+    {
+        "UP",
+        "HP",
+        "HN",
+        "JA",
+        "KF",
+        "KR",
+        "AS",
+        "IP",
+    }
+)
+
+# pscloud streamable rows from these imagic lists may work on PS5 cloud (Plus / F2P).
+PSCLOUD_RENTAL_SOURCE_LISTS = frozenset(
+    (
+        "plus-games-list",
+        "ubisoft-classics-list",
+        "plus-classics-list",
+        "plus-monthly-games-list",
+        "free-to-play-list",
+    )
+)
+
 
 def preferred_sku_prefix(account_region):
     cc = (account_region or "PL").strip().upper()
@@ -858,7 +963,104 @@ def sku_prefix(product_or_stream_id):
     return ""
 
 
-def catalog_row_to_game(row):
+def owned_catalog_ids(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT CatalogID FROM CloudStreaming_AccountOwnedGames")
+        return {int(r["CatalogID"]) for r in cur.fetchall() if r.get("CatalogID")}
+
+
+def catalog_stable_key(product_id):
+    """Match chiaki stable-key: EP9000-CUSA… and UP9000-CUSA… share a suffix."""
+    pid = (product_id or "").strip().upper()
+    if len(pid) > 4 and pid[4] == "-":
+        return pid[4:]
+    return pid
+
+
+def catalog_row_primary_id(row):
+    return (row.get("StreamIdentifier") or row.get("ProductId") or "").strip().upper()
+
+
+def catalog_row_is_legacy_classic(row):
+    """PS3/PS1/PSP-style ids (NPEA…), not CUSA/PPSA modern segments."""
+    pid = catalog_row_primary_id(row)
+    dash = pid.find("-")
+    if dash < 0:
+        return True
+    title = pid[dash + 1 :]
+    return not (title.startswith("CUSA") or title.startswith("PPSA"))
+
+
+def catalog_row_rental_region_ok(row):
+    """Keep EU rental SKUs; drop US/HK/etc. modern and foreign legacy store ids."""
+    pid = catalog_row_primary_id(row)
+    if not pid:
+        return True
+    if pid.startswith(("UP", "NPUB", "NPUG", "NPUA", "NPUJ", "NPUH")):
+        return False
+    if catalog_row_is_legacy_classic(row):
+        return True
+    pref = sku_prefix(pid)
+    if pref:
+        return pref == RENTAL_SKU_PREFIX
+    if len(pid) >= 2 and pid[:2] in FOREIGN_SKU_PREFIXES:
+        return False
+    return True
+
+
+def filter_rental_playable_catalog(conn, rows):
+    """Hourly rental: psnow streamable on PS+ accounts; pscloud only when purchased."""
+    owned_ids = owned_catalog_ids(conn)
+    kept = []
+    dropped_purchaseable = 0
+    dropped_pscloud = 0
+    dropped_legacy = 0
+    dropped_region = 0
+    for row in rows:
+        catalog_id = row.get("ID")
+        if catalog_id in owned_ids:
+            kept.append(row)
+            continue
+
+        cat = (row.get("Category") or "streamable").lower()
+        st = (row.get("ServiceType") or "").lower()
+        if cat == "purchaseable":
+            dropped_purchaseable += 1
+            continue
+        if cat not in ("streamable", "owned"):
+            continue
+
+        if st == "pscloud":
+            source = (row.get("SourceList") or "").strip()
+            if cat == "streamable" and source == "free-to-play-list":
+                if catalog_row_rental_region_ok(row):
+                    kept.append(row)
+                continue
+            dropped_pscloud += 1
+            continue
+
+        if st == "psnow":
+            # PS3/PSP/PS1 classics (NPEA/NPEB/…) need PSNW01 — not on rental PS+.
+            if catalog_row_is_legacy_classic(row) and not RENTAL_INCLUDE_PS3:
+                dropped_legacy += 1
+                continue
+            if not catalog_row_rental_region_ok(row):
+                dropped_region += 1
+                continue
+            kept.append(row)
+    log.info(
+        "catalog rental filter v%s: kept=%s drop purchaseable=%s pscloud=%s legacy=%s region=%s",
+        CATALOG_FILTER_VERSION,
+        len(kept),
+        dropped_purchaseable,
+        dropped_pscloud,
+        dropped_legacy,
+        dropped_region,
+    )
+    return kept
+
+
+def catalog_row_to_game(row, owned_ids=None):
     """Compact game object (no imageUrl — client builds Chihiro URL)."""
     st = row["ServiceType"]
     stream_id = row["StreamIdentifier"]
@@ -867,7 +1069,10 @@ def catalog_row_to_game(row):
     if platform == "unknown":
         platform = "ps4" if st == "psnow" else "ps5"
     category = (row.get("Category") or "streamable").lower()
-    return {
+    if owned_ids and row.get("ID") in owned_ids:
+        category = "owned"
+    image_url = (row.get("ImageUrl") or "").strip()
+    out = {
         "productId": product_id,
         "name": row["Name"],
         "category": category,
@@ -875,7 +1080,11 @@ def catalog_row_to_game(row):
         "platform": platform,
         "streamIdentifier": stream_id,
         "streamServiceType": st,
+        "sourceList": (row.get("SourceList") or "").strip(),
     }
+    if image_url:
+        out["imageUrl"] = image_url
+    return out
 
 
 def _catalog_pick_score(game, prefer_prefix="EP"):
@@ -900,12 +1109,12 @@ def _catalog_pick_score(game, prefer_prefix="EP"):
     return score
 
 
-def dedupe_catalog_games(rows, prefer_prefix="EP"):
+def dedupe_catalog_games(rows, prefer_prefix="EP", owned_ids=None):
     """Prefer psnow over pscloud; prefer regional SKU prefix (default EP for EU rental)."""
     picked = {}
     extras = []
     for row in rows:
-        game = catalog_row_to_game(row)
+        game = catalog_row_to_game(row, owned_ids)
         key = catalog_title_key(game.get("name"))
         if not key:
             extras.append(game)
@@ -978,8 +1187,8 @@ CATALOG_CHUNK_RAW = int(os.environ.get("CS_CATALOG_CHUNK_RAW", "650"))
 CATALOG_SEND_PACE_SEC = float(os.environ.get("CS_CATALOG_SEND_PACE_SEC", "0.002"))
 
 
-def load_catalog_games(conn, service_type, platform, only_billable):
-    key = (service_type or "*", platform or "*", bool(only_billable))
+def load_catalog_games(conn, service_type, platform, only_billable, rental_playable=True):
+    key = (service_type or "*", platform or "*", bool(only_billable), bool(rental_playable))
     now = time.time()
     cached = _CATALOG_MEM
     if (
@@ -1009,7 +1218,13 @@ def load_catalog_games(conn, service_type, platform, only_billable):
         cur.execute(sql, params or None)
         rows = cur.fetchall()
 
-    games = dedupe_catalog_games(rows, prefer_prefix="EP")
+    owned_ids = owned_catalog_ids(conn)
+    if rental_playable:
+        before = len(rows)
+        rows = filter_rental_playable_catalog(conn, rows)
+        log.info("catalog rental filter: %s -> %s rows", before, len(rows))
+
+    games = dedupe_catalog_games(rows, prefer_prefix=RENTAL_SKU_PREFIX, owned_ids=owned_ids)
     _CATALOG_MEM["key"] = key
     _CATALOG_MEM["ts"] = now
     _CATALOG_MEM["games"] = games
@@ -1022,25 +1237,34 @@ def handle_catalog(conn, req):
     service_type = (req.get("service_type") or "").strip().lower()
     platform = (req.get("platform") or "").strip().lower()
     only_billable = bool(req.get("only_billable"))
+    rental_playable = req.get("rental_playable")
+    if rental_playable is None:
+        rental_playable = True
+    else:
+        rental_playable = bool(rental_playable)
 
-    games = load_catalog_games(conn, service_type, platform, only_billable)
+    games = load_catalog_games(
+        conn, service_type, platform, only_billable, rental_playable=rental_playable
+    )
     body = {
         "games": games,
         "totalGames": len(games),
         "catalog_source": "billing_db",
+        "catalog_filter_version": CATALOG_FILTER_VERSION,
     }
     raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     # Qt QByteArray::qUncompress expects big-endian uncompressed length + zlib.
     blob = struct.pack(">I", len(raw)) + zlib.compress(raw, 6)
     log.info(
         "catalog: prepared %s games (%s bytes json -> %s bytes qcompress) "
-        "filters service=%s platform=%s only_billable=%s",
+        "filters service=%s platform=%s only_billable=%s rental_playable=%s",
         len(games),
         len(raw),
         len(blob),
         service_type or "*",
         platform or "*",
         only_billable,
+        rental_playable,
     )
     return {
         "id": req_id,
@@ -1104,6 +1328,7 @@ def handle_tcp_client(conn, addr):
                 "totalGames": out.get("totalGames"),
                 "nbytes": len(blob),
                 "catalog_source": "billing_db",
+                "catalog_filter_version": CATALOG_FILTER_VERSION,
             }
             f.write((json.dumps(header, separators=(",", ":")) + "\n").encode("utf-8"))
             f.write(blob)
@@ -1171,20 +1396,39 @@ def handle_quote(conn, req):
     if resumable:
         payload = session_payload(conn, resumable)
         mins = payload.get("minutes_left", 0)
-        return reply(
-            req_id,
-            True,
-            ui_message=(
+        account_id = resumable.get("AccountID") or _billing_pool_account_id(
+            conn, user["ID"], game
+        )
+        target_pool = game_billing_pool(conn, account_id, game)
+        st, identifiers, catalog_ids = collect_game_identity(
+            conn, service_type, game_identifier, game
+        )
+        same_title = _session_same_game(
+            resumable, st, identifiers, catalog_ids, game["ID"]
+        )
+        if target_pool == "plus" and not same_title:
+            ui_msg = (
+                "У вас осталось %s мин оплаченного времени (PS Plus / бесплатные игры). "
+                "Можно переключиться на «%s» без дополнительного списания."
+                % (mins, game["Name"])
+            )
+        else:
+            ui_msg = (
                 "У вас осталось %s мин оплаченного времени в «%s». "
                 "Дополнительное списание не требуется — можно продолжить игру."
                 % (mins, game["Name"])
-            ),
+            )
+        return reply(
+            req_id,
+            True,
+            ui_message=ui_msg,
             hourly_price=0,
             currency=game.get("Currency") or "RUB",
             resume_session=True,
             no_charge=True,
             minutes_left=mins,
             game_name=game["Name"],
+            billing_pool=target_pool,
         )
 
     lease = find_active_lease(conn, user["ID"], game)
@@ -1192,6 +1436,10 @@ def handle_quote(conn, req):
     other_active = find_other_active_session(
         conn, user["ID"], service_type, game_identifier, game["ID"], game
     )
+    account_id = (lease or {}).get("AccountID") or _billing_pool_account_id(
+        conn, user["ID"], game
+    )
+    target_pool = game_billing_pool(conn, account_id, game)
 
     if reuse:
         msg = (
@@ -1200,7 +1448,11 @@ def handle_quote(conn, req):
             % (lease.get("AccountLabel") or "аренда", int(price), game["Name"])
         )
         if other_active:
-            msg += " Оставшееся оплаченное время на другой игре не переносится."
+            msg += (
+                " Оставшееся оплаченное время на другой купленной игре не переносится."
+                if target_pool == "owned"
+                else " Оставшееся оплаченное время на другой игре не переносится."
+            )
     else:
         msg = (
             "Сейчас спишется %s ₽ за 1 час игры «%s». "
@@ -1209,7 +1461,11 @@ def handle_quote(conn, req):
             % (int(price), game["Name"], RETENTION_DAYS)
         )
         if other_active:
-            msg += " Оставшееся оплаченное время на другой игре не переносится."
+            msg += (
+                " Оставшееся оплаченное время на другой купленной игре не переносится."
+                if target_pool == "owned"
+                else " Оставшееся оплаченное время на другой игре не переносится."
+            )
 
     return reply(
         req_id,
@@ -1221,6 +1477,7 @@ def handle_quote(conn, req):
         resume_session=False,
         no_charge=False,
         game_name=game["Name"],
+        billing_pool=target_pool,
     )
 
 
@@ -1253,6 +1510,9 @@ def handle_start(conn, req):
         conn, user["ID"], service_type, game_identifier, game["ID"], game
     )
     if resumable:
+        st, identifiers, catalog_ids = collect_game_identity(
+            conn, service_type, game_identifier, game
+        )
         end_other_active_sessions(
             conn,
             user["ID"],
@@ -1261,6 +1521,7 @@ def handle_start(conn, req):
             game_identifier=game_identifier,
             game_id=game["ID"],
             game=game,
+            target_account_id=resumable.get("AccountID"),
         )
         with conn.cursor() as cur:
             cur.execute(
@@ -1272,17 +1533,23 @@ def handle_start(conn, req):
         play_id, _ = resolve_regional_stream_id(
             conn, service_type, game_identifier, region
         )
-        if play_id and play_id != (resumable.get("GameIdentifier") or ""):
+        if play_id and play_id != game_identifier:
+            game_identifier = play_id
             game = ensure_game(conn, service_type, play_id, game_name)
+        need_game_update = (
+            not _session_same_game(resumable, st, identifiers, catalog_ids, game["ID"])
+            or game_identifier != (resumable.get("GameIdentifier") or "")
+        )
+        if need_game_update:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE CloudStreaming_Sessions SET GameID=%s, GameIdentifier=%s, "
                     "ServiceType=%s WHERE ID=%s",
-                    (game["ID"], play_id, service_type, resumable["ID"]),
+                    (game["ID"], game_identifier, service_type, resumable["ID"]),
                 )
             resumable = dict(resumable)
             resumable["GameID"] = game["ID"]
-            resumable["GameIdentifier"] = play_id
+            resumable["GameIdentifier"] = game_identifier
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET StreamActive=1, Status='active', "
@@ -1293,10 +1560,21 @@ def handle_start(conn, req):
         conn.commit()
         payload = session_payload(conn, resumable)
         mins = payload.get("minutes_left", 0)
-        ui_msg = (
-            "Продолжение сессии «%s». Осталось %s мин оплаченного времени."
-            % (game["Name"], mins)
+        account_id = resumable.get("AccountID")
+        target_pool = game_billing_pool(conn, account_id, game)
+        same_title = _session_same_game(
+            resumable, st, identifiers, catalog_ids, game["ID"]
         )
+        if target_pool == "plus" and not same_title:
+            ui_msg = (
+                "Переключение на «%s». Осталось %s мин (PS Plus / бесплатные игры)."
+                % (game["Name"], mins)
+            )
+        else:
+            ui_msg = (
+                "Продолжение сессии «%s». Осталось %s мин оплаченного времени."
+                % (game["Name"], mins)
+            )
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET UiMessage=%s WHERE ID=%s",
@@ -1305,9 +1583,11 @@ def handle_start(conn, req):
         conn.commit()
         payload["resumed"] = True
         payload["ui_message"] = ui_msg
+        payload["billing_pool"] = target_pool
         return reply(req_id, True, **payload)
 
-    # Switching game forfeits remaining paid time on other sessions only.
+    # New payment: only end sessions in the same billing pool (plus vs owned).
+    pre_lease = find_active_lease(conn, user["ID"], game)
     end_other_active_sessions(
         conn,
         user["ID"],
@@ -1315,6 +1595,7 @@ def handle_start(conn, req):
         game_identifier=game_identifier,
         game_id=game["ID"],
         game=game,
+        target_account_id=(pre_lease or {}).get("AccountID"),
     )
 
     lease = find_active_lease(conn, user["ID"], game)

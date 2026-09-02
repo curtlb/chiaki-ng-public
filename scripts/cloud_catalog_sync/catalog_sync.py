@@ -568,9 +568,12 @@ def fetch_all_catalog_rows():
     merged.update(imagic_rows)
     apollo_rows = fetch_apollo(CATALOG_REGION)
     merged.update(apollo_rows)
-    # Also walk US apollo when region is EU — more SKU coverage for admin reference
-    if classics_store_country(CATALOG_REGION) == "GB":
-        merged.update(fetch_apollo("US"))
+    # Optional US apollo walk pollutes EU rental catalogs with UP/HK SKUs — off by default.
+    if os.environ.get("CS_CATALOG_APOLLO_US", "0").strip().lower() in ("1", "true", "yes"):
+        if classics_store_country(CATALOG_REGION) == "GB":
+            merged.update(fetch_apollo("US"))
+    else:
+        log.info("CS_CATALOG_APOLLO_US not enabled — skipping US apollo merge for EU sync")
     if CATALOG_NPSSO:
         merged.update(fetch_owned_entitlements(CATALOG_NPSSO))
     else:
