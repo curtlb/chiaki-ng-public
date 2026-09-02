@@ -145,16 +145,27 @@ void CloudStreamingBackend::notifyStreamStopped()
 
 bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error)
 {
-    if(!settings || !settings->GetCloudBillingEnabled())
+    if(!settings || !settings->GetCloudBillingEnabled()) {
+        CloudLogMessage(QStringLiteral("Session"), QStringLiteral("billing skipped: cloud_billing_enabled=false"));
         return false;
+    }
     const QString email = settings->GetFourCloudEmail();
-    if(email.isEmpty())
+    if(email.isEmpty()) {
+        CloudLogMessage(QStringLiteral("Session"),
+            QStringLiteral("billing skipped: fourCloudEmail empty (re-login to 4cloud.pro may be required)"));
         return false;
+    }
 
     const QString host = settings->GetCloudBillingHost();
-    if(host.isEmpty())
+    if(host.isEmpty()) {
+        CloudLogMessage(QStringLiteral("Session"), QStringLiteral("billing skipped: cloud_billing_host empty"));
         return false;
+    }
     const quint16 port = settings->GetCloudBillingPort();
+
+    CloudLogMessage(QStringLiteral("Session"),
+        QStringLiteral("billing start request email=%1 host=%2:%3 game=%4/%5")
+            .arg(email, host).arg(port).arg(serviceType, gameIdentifier));
 
     setAllocationProgress(tr("Списание с привязанной карты…"));
     const auto start = CloudBillingClient::start(host, port, email, serviceType, gameIdentifier, gameName);

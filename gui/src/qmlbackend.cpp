@@ -47,6 +47,32 @@
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
+static void syncFourCloudEmailFromJwtDecode(Settings *settings, QmlSettings *qmlSettings,
+	CloudCatalogBackend *catalog, const QJsonObject &decodeObj)
+{
+	if(!settings || !settings->GetFourCloudEmail().isEmpty())
+		return;
+	QString email = decodeObj.value(QStringLiteral("Email")).toString().trimmed();
+	if(email.isEmpty())
+		email = decodeObj.value(QStringLiteral("email")).toString().trimmed();
+	if(email.isEmpty())
+		email = decodeObj.value(QStringLiteral("User")).toString().trimmed();
+	if(email.isEmpty())
+		email = decodeObj.value(QStringLiteral("user")).toString().trimmed();
+	if(email.isEmpty())
+		email = decodeObj.value(QStringLiteral("Login")).toString().trimmed();
+	if(email.isEmpty())
+		email = decodeObj.value(QStringLiteral("login")).toString().trimmed();
+	if(email.isEmpty())
+		return;
+	settings->SetFourCloudEmail(email);
+	if(qmlSettings)
+		qmlSettings->refreshFourCloudEmail();
+	if(catalog)
+		catalog->invalidateCache();
+	qCInfo(chiakiGui) << "Restored 4cloud billing email from JWT decode:" << email;
+}
+
 static void ResizeWindowForStream(QmlMainWindow *window, Settings *settings, unsigned int width, unsigned int height)
 {
 	if(!window || window->windowState() == Qt::WindowFullScreen)
@@ -3382,6 +3408,8 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
                     emit authenticationError("Нет активной подписки");
                     return;
                 }
+
+                syncFourCloudEmailFromJwtDecode(settings, settings_qml, cloud_catalog_backend, decodeObj);
                 
                 // Извлекаем Port из JWT для кастомных портов (4cloud)
                 int portVal = decodeObj.value("Port").toInt(0);
@@ -3691,6 +3719,8 @@ void QmlBackend::checkJwtToken()
 
         // Сохраняем expiry дату для локальной проверки при следующем входе без пароля.
         settings->SetSubscriptionExpiryDate(dateExpTrimmed);
+
+        syncFourCloudEmailFromJwtDecode(settings, settings_qml, cloud_catalog_backend, obj);
         
         // Обновляем Port и номер консоли (NP) из JWT для кастомных портов и статуса консоли (4cloud)
         int portVal = obj.value("Port").toInt(0);
