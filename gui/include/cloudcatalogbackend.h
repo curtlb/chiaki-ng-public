@@ -21,8 +21,11 @@
 
 #include <QHash>
 #include <QPointer>
+#include <QSet>
+#include <QVariantMap>
 #include <atomic>
 #include <vector>
+#include <algorithm>
 
 /**
  * CloudCatalogBackend - thin QML bridge over the libchiaki cloud catalog.
@@ -49,6 +52,12 @@ public:
     /** Unified cloud catalog (libchiaki single source of truth). */
     Q_INVOKABLE void fetchUnifiedCatalog(const QJSValue &callback);
     Q_INVOKABLE void fetchGameDetails(const QString &productId, const QJSValue &callback);
+
+    /** Filter/sort the in-memory catalog on the C++ side (avoids shipping 4k+ rows to QML). */
+    Q_INVOKABLE QVariantMap filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,
+                                                 const QVariantList &favoriteIds, int sortState,
+                                                 bool billingRental, int limit) const;
+    Q_INVOKABLE int catalogGameCount() const;
 
     // Steam shortcut creation for cloud games
     Q_INVOKABLE void createCloudSteamShortcut(const QString &gameIdentifier, const QString &gameName,
@@ -129,6 +138,25 @@ private:
     void executeGameDetailsFetch(const QString &productId);
     QJsonObject extractGameImages(const QJsonObject &gameData);
     QString getNpSsoToken();
+
+    struct CatalogDisplayRow {
+        QString name;
+        QString productId;
+        QString id;
+        QString category;
+        QString serviceType;
+        QString platform;
+        QString streamIdentifier;
+        QString streamServiceType;
+        QString conceptUrl;
+        bool isOwned = false;
+        QString imageUrl;
+    };
+    static CatalogDisplayRow catalogRowFromJson(const QJsonObject &g);
+    static QVariantMap catalogRowToVariant(const CatalogDisplayRow &row);
+    static QVector<CatalogDisplayRow> buildCatalogDisplayRows(const QJsonArray &games);
+    QVector<CatalogDisplayRow> catalogDisplayRows_;
+    int catalogTotalGames_ = 0;
 
     // Helper methods for shortcut creation
     QPixmap downloadImageFromUrl(const QString &url, int timeoutMs = 10000);

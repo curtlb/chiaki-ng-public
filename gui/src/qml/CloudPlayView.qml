@@ -21,7 +21,9 @@ Pane {
     readonly property Item searchContainerItem: searchContainer
     readonly property Item refreshButtonItem: refreshButton
     
-    property var allGames: []
+    property var allGames: [] // unused; kept for compatibility
+    property int catalogTotalCount: 0
+    property int filteredGameCount: 0
     property var filteredGames: []
     property var currentPageGames: []
     property bool isLoading: false
@@ -37,7 +39,7 @@ Pane {
 
     readonly property var tagFilterCategories: ["owned", "streamable", "purchaseable"]
     readonly property var tagFilterLabels: [qsTr("Owned"), qsTr("Streamable"), qsTr("Store")]
-    readonly property int maxGridGames: 1500
+    readonly property int maxGridGames: 600
     property bool gridTruncated: false
     property var catalogFetchToken: null
     
@@ -87,15 +89,17 @@ Pane {
     
     onVisibleChanged: {
         if (visible) {
-            if (allGames.length === 0)
+            if (catalogTotalCount === 0)
                 loadUnifiedCatalog();
             initialFocusTimer.restart();
         }
     }
-    
-    StackView.onActivated: {
-        Qt.callLater(() => loadUnifiedCatalog());
-        initialFocusTimer.restart();
+
+    Timer {
+        id: filterDebounceTimer
+        interval: 250
+        repeat: false
+        onTriggered: applySearchFilter()
     }
 
     // Account/profile switch, NPSSO change, or cloud-language change wipes the catalog cache in the
@@ -194,34 +198,36 @@ Pane {
             && (Chiaki.settings.cloudBillingHost || "").length > 0;
     }
 
-    function isPlayableNow(game) {
-        if (!game) return false;
-        if (game.category !== "purchaseable") return true;
-        return isCloudBillingActive();
-    }
+    function applySearchFilter() {
+        try {
+            let hadFocus = searchField && searchField.activeFocus;
+            let result = Chiaki.cloudCatalog.filterDisplayCatalog(
+                searchQuery || "",
+                activeTagFilters || [],
+                showFavoritesOnly ? favoriteProductIds : [],
+                sortState,
+                isCloudBillingActive(),
+                maxGridGames
+            );
+            filteredGameCount = result.totalFiltered || 0;
+            if (result.totalGames !== undefined)
+                catalogTotalCount = result.totalGames;
+            currentPageGames = result.games || [];
+            gridTruncated = !!result.truncated;
 
-    function sortGames(games) {
-        let sorted = games.slice();
-        if (sortState === 1) {
-            sorted.sort((a, b) => gameName(a).localeCompare(gameName(b)));
-        } else if (sortState === 2) {
-            sorted.sort((a, b) => gameName(b).localeCompare(gameName(a)));
-        } else {
-            sorted.sort((a, b) => {
-                let pa = isPlayableNow(a) ? 1 : 0;
-                let pb = isPlayableNow(b) ? 1 : 0;
-                if (pa !== pb) return pb - pa;
-                return gameName(a).localeCompare(gameName(b));
-            });
+            if (hadFocus) {
+                Qt.callLater(() => {
+                    if (searchField)
+                        searchField.forceActiveFocus();
+                });
+            }
+        } catch (e) {
+            console.error("applySearchFilter failed:", e);
+            filteredGameCount = 0;
+            currentPageGames = [];
+            gridTruncated = false;
+            showErrorToast(qsTr("Catalog Error"), qsTr("Failed to display catalog: %1").arg(e.toString()));
         }
-        return sorted;
-    }
-
-    function gameName(game) {
-        if (!game) return "";
-        if (game.name) return String(game.name);
-        if (game.game_meta && game.game_meta.name) return String(game.game_meta.name);
-        return "";
     }
 
     function loadUnifiedCatalog() {
@@ -237,16 +243,11 @@ Pane {
         let fetchToken = {};
         catalogFetchToken = fetchToken;
 
-        // The grid is about to be emptied. If it currently holds focus, its cards
-        // vanish and the (now empty) grid swallows arrow keys, leaving focus
-        // black-holed. Park focus on the filter toggle so the header stays
-        // navigable while loading; the post-load callback restores it to the
-        // first card once games are back.
         if (gamesGrid.activeFocus)
             filterToggle.forceActiveFocus();
 
-        allGames = [];
-        filteredGames = [];
+        catalogTotalCount = 0;
+        filteredGameCount = 0;
         currentPageGames = [];
         isLoading = true;
 
@@ -255,16 +256,16 @@ Pane {
                 return;
             isLoading = false;
             if (!success || !jsonData) {
-                allGames = [];
-                filteredGames = [];
+                catalogTotalCount = 0;
+                filteredGameCount = 0;
                 currentPageGames = [];
                 showErrorToast(qsTr("API Error"), message || qsTr("Failed to fetch game catalog"));
                 return;
             }
             try {
                 let data = (typeof jsonData === "string") ? JSON.parse(jsonData) : jsonData;
-                if (data.games && Array.isArray(data.games)) {
-                    allGames = data.games;
+                if (data && data.totalGames !== undefined) {
+                    catalogTotalCount = data.totalGames;
                     fallbackRegion = data.fallbackRegion || "";
                     catalogNativeMode = data.nativeMode !== false;
                     if (Chiaki.settings) {
@@ -277,7 +278,7 @@ Pane {
                         authErrorMessage = "";
                     if (message && message !== "Success" && message !== "Cached")
                         showErrorToast(qsTr("Partial Catalog"), message);
-                    Qt.callLater(applySearchFilter);
+                    applySearchFilter();
                     Qt.callLater(() => {
                         if (gamesGrid.count > 0
                                 && !searchField.activeFocus
@@ -296,59 +297,6 @@ Pane {
         });
     }
 
-    function applySearchFilter() {
-        try {
-            let hadFocus = searchField && searchField.activeFocus;
-
-            let gamesToFilter = allGames.slice();
-
-            if (activeTagFilters && activeTagFilters.length > 0) {
-                gamesToFilter = gamesToFilter.filter(function(game) {
-                    return game && game.category && activeTagFilters.indexOf(game.category) !== -1;
-                });
-            }
-
-            if (showFavoritesOnly) {
-                gamesToFilter = gamesToFilter.filter(function(game) {
-                    let productId = game.productId || game.product_id || game.id;
-                    return favoriteProductIds.indexOf(productId) !== -1;
-                });
-            }
-
-            if (searchQuery && searchQuery.trim() !== "") {
-                let query = searchQuery.toLowerCase().trim();
-                gamesToFilter = gamesToFilter.filter(function(game) {
-                    let name = gameName(game).toLowerCase();
-                    let pid = (game.productId || game.product_id || "").toLowerCase();
-                    return name.includes(query) || pid.includes(query);
-                });
-            }
-
-            filteredGames = sortGames(gamesToFilter);
-            if (filteredGames.length > maxGridGames) {
-                currentPageGames = filteredGames.slice(0, maxGridGames);
-                gridTruncated = true;
-            } else {
-                currentPageGames = filteredGames.slice();
-                gridTruncated = false;
-            }
-
-            if (hadFocus) {
-                Qt.callLater(() => {
-                    if (searchField) {
-                        searchField.forceActiveFocus();
-                    }
-                });
-            }
-        } catch (e) {
-            console.error("applySearchFilter failed:", e);
-            filteredGames = [];
-            currentPageGames = [];
-            gridTruncated = false;
-            showErrorToast(qsTr("Catalog Error"), qsTr("Failed to display catalog: %1").arg(e.toString()));
-        }
-    }
-    
     function toggleFavorite(productId) {
         if (!productId) return;
         
@@ -387,10 +335,8 @@ Pane {
         errorToastTimer.restart();
     }
     
-    // Watch for search query changes
-    onSearchQueryChanged: {
-        applySearchFilter();
-    }
+    // Watch for search query changes (debounced — filter runs in C++)
+    onSearchQueryChanged: filterDebounceTimer.restart()
     
     // Single unified header - production quality design
     Rectangle {
@@ -968,11 +914,11 @@ Pane {
                 Label {
                     text: {
                         if (searchQuery && searchQuery.trim() !== "") {
-                            return filteredGames.length > 0 ? qsTr("%1 of %2").arg(filteredGames.length).arg(allGames.length) : qsTr("No games");
+                            return filteredGameCount > 0 ? qsTr("%1 of %2").arg(filteredGameCount).arg(catalogTotalCount) : qsTr("No games");
                         } else if (gridTruncated) {
-                            return qsTr("%1 of %2").arg(currentPageGames.length).arg(filteredGames.length);
+                            return qsTr("%1 of %2").arg(currentPageGames.length).arg(filteredGameCount);
                         } else {
-                            return filteredGames.length > 0 ? qsTr("%1 games").arg(filteredGames.length) : qsTr("No games");
+                            return filteredGameCount > 0 ? qsTr("%1 games").arg(filteredGameCount) : qsTr("No games");
                         }
                     }
                     font.pixelSize: 12

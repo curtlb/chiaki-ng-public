@@ -30,6 +30,7 @@
 #include <QPixmap>
 #include <climits>
 #include <QJSEngine>
+#include <algorithm>
 
 Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 
@@ -206,6 +207,171 @@ QString CloudCatalogBackend::getNpSsoToken()
     return settings->GetNpssoToken();
 }
 
+static QString pickImageUrl(const QJsonObject &g)
+{
+    const QJsonObject extracted = g.value(QStringLiteral("extracted_images")).toObject();
+    QString url = extracted.value(QStringLiteral("cover")).toString();
+    if (url.isEmpty())
+        url = extracted.value(QStringLiteral("landscape")).toString();
+    if (!url.isEmpty())
+        return url;
+    url = g.value(QStringLiteral("imageUrl")).toString();
+    if (!url.isEmpty())
+        return url;
+    const QJsonArray images = g.value(QStringLiteral("images")).toArray();
+    for (const QJsonValue &v : images) {
+        const QJsonObject img = v.toObject();
+        if (img.value(QStringLiteral("type")).toInt() == 10) {
+            url = img.value(QStringLiteral("url")).toString();
+            if (!url.isEmpty())
+                return url;
+        }
+    }
+    for (const QJsonValue &v : images) {
+        const QString u = v.toObject().value(QStringLiteral("url")).toString();
+        if (!u.isEmpty())
+            return u;
+    }
+    return QString();
+}
+
+CloudCatalogBackend::CatalogDisplayRow CloudCatalogBackend::catalogRowFromJson(const QJsonObject &g)
+{
+    CatalogDisplayRow row;
+    row.name = g.value(QStringLiteral("name")).toString();
+    if (row.name.isEmpty()) {
+        const QJsonObject meta = g.value(QStringLiteral("game_meta")).toObject();
+        row.name = meta.value(QStringLiteral("name")).toString();
+    }
+    row.productId = g.value(QStringLiteral("productId")).toString();
+    if (row.productId.isEmpty())
+        row.productId = g.value(QStringLiteral("product_id")).toString();
+    row.id = g.value(QStringLiteral("id")).toString();
+    row.category = g.value(QStringLiteral("category")).toString();
+    row.serviceType = g.value(QStringLiteral("serviceType")).toString();
+    row.platform = g.value(QStringLiteral("platform")).toString();
+    row.streamIdentifier = g.value(QStringLiteral("streamIdentifier")).toString();
+    row.streamServiceType = g.value(QStringLiteral("streamServiceType")).toString();
+    row.conceptUrl = g.value(QStringLiteral("conceptUrl")).toString();
+    if (row.conceptUrl.isEmpty())
+        row.conceptUrl = g.value(QStringLiteral("concept_url")).toString();
+    row.isOwned = g.value(QStringLiteral("isOwned")).toBool(false);
+    row.imageUrl = pickImageUrl(g);
+    return row;
+}
+
+QVariantMap CloudCatalogBackend::catalogRowToVariant(const CatalogDisplayRow &row)
+{
+    QVariantMap m;
+    m[QStringLiteral("name")] = row.name;
+    m[QStringLiteral("productId")] = row.productId;
+    m[QStringLiteral("product_id")] = row.productId;
+    m[QStringLiteral("id")] = row.id;
+    m[QStringLiteral("category")] = row.category;
+    m[QStringLiteral("serviceType")] = row.serviceType;
+    m[QStringLiteral("platform")] = row.platform;
+    m[QStringLiteral("streamIdentifier")] = row.streamIdentifier;
+    m[QStringLiteral("streamServiceType")] = row.streamServiceType;
+    m[QStringLiteral("conceptUrl")] = row.conceptUrl;
+    m[QStringLiteral("concept_url")] = row.conceptUrl;
+    m[QStringLiteral("isOwned")] = row.isOwned;
+    if (!row.imageUrl.isEmpty())
+        m[QStringLiteral("imageUrl")] = row.imageUrl;
+    return m;
+}
+
+QVector<CloudCatalogBackend::CatalogDisplayRow> CloudCatalogBackend::buildCatalogDisplayRows(const QJsonArray &games)
+{
+    QVector<CatalogDisplayRow> rows;
+    rows.reserve(games.size());
+    for (const QJsonValue &v : games) {
+        if (!v.isObject())
+            continue;
+        rows.append(catalogRowFromJson(v.toObject()));
+    }
+    return rows;
+}
+
+int CloudCatalogBackend::catalogGameCount() const
+{
+    return catalogTotalGames_;
+}
+
+QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,
+                                                      const QVariantList &favoriteIds, int sortState,
+                                                      bool billingRental, int limit) const
+{
+    QStringList categories;
+    categories.reserve(categoryFilters.size());
+    for (const QVariant &v : categoryFilters)
+        categories.append(v.toString());
+
+    QSet<QString> favorites;
+    for (const QVariant &v : favoriteIds)
+        favorites.insert(v.toString());
+
+    const QString q = query.trimmed().toLower();
+    const bool filterCategories = !categories.isEmpty();
+    const bool filterFavorites = !favorites.isEmpty();
+    const bool filterSearch = !q.isEmpty();
+
+    QVector<const CatalogDisplayRow *> matches;
+    matches.reserve(catalogDisplayRows_.size());
+    for (const CatalogDisplayRow &row : catalogDisplayRows_) {
+        if (filterCategories && !categories.contains(row.category))
+            continue;
+        if (filterFavorites) {
+            const QString pid = row.productId.isEmpty() ? row.id : row.productId;
+            if (!favorites.contains(pid))
+                continue;
+        }
+        if (filterSearch) {
+            if (!row.name.toLower().contains(q) && !row.productId.toLower().contains(q))
+                continue;
+        }
+        matches.append(&row);
+    }
+
+    const auto playable = [billingRental](const CatalogDisplayRow &row) {
+        if (row.category != QLatin1String("purchaseable"))
+            return true;
+        return billingRental;
+    };
+
+    if (sortState == 1) {
+        std::sort(matches.begin(), matches.end(), [](const CatalogDisplayRow *a, const CatalogDisplayRow *b) {
+            return QString::localeAwareCompare(a->name, b->name) < 0;
+        });
+    } else if (sortState == 2) {
+        std::sort(matches.begin(), matches.end(), [](const CatalogDisplayRow *a, const CatalogDisplayRow *b) {
+            return QString::localeAwareCompare(b->name, a->name) < 0;
+        });
+    } else {
+        std::stable_sort(matches.begin(), matches.end(), [&](const CatalogDisplayRow *a, const CatalogDisplayRow *b) {
+            const bool pa = playable(*a);
+            const bool pb = playable(*b);
+            if (pa != pb)
+                return pa > pb;
+            return QString::localeAwareCompare(a->name, b->name) < 0;
+        });
+    }
+
+    const int cap = limit > 0 ? limit : matches.size();
+    const int take = std::min(matches.size(), cap);
+
+    QVariantList out;
+    out.reserve(take);
+    for (int i = 0; i < take; ++i)
+        out.append(catalogRowToVariant(*matches[i]));
+
+    QVariantMap result;
+    result[QStringLiteral("games")] = out;
+    result[QStringLiteral("totalFiltered")] = matches.size();
+    result[QStringLiteral("truncated")] = matches.size() > cap;
+    result[QStringLiteral("totalGames")] = catalogTotalGames_;
+    return result;
+}
+
 void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
 {
     CloudLogMessage("Catalog", "fetchUnifiedCatalog requested");
@@ -315,6 +481,13 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
             QJsonObject root;
             if (success)
                 root = QJsonDocument::fromJson(json.toUtf8()).object();
+            if (success) {
+                self->catalogDisplayRows_ = buildCatalogDisplayRows(root.value(QStringLiteral("games")).toArray());
+                self->catalogTotalGames_ = self->catalogDisplayRows_.size();
+            } else {
+                self->catalogDisplayRows_.clear();
+                self->catalogTotalGames_ = 0;
+            }
             if (success && self->settings) {
                 const QString settled = root.value(QStringLiteral("settledLocale")).toString();
                 if (!settled.isEmpty() && settled != self->settings->GetCloudStoreLocale())
@@ -326,10 +499,16 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
 
             QJSValue payload;
             if (success) {
+                QJsonObject meta;
+                meta[QStringLiteral("totalGames")] = self->catalogTotalGames_;
+                meta[QStringLiteral("fallbackRegion")] = root.value(QStringLiteral("fallbackRegion"));
+                meta[QStringLiteral("nativeMode")] = root.value(QStringLiteral("nativeMode"));
+                meta[QStringLiteral("warning")] = root.value(QStringLiteral("warning"));
+                meta[QStringLiteral("settledLocale")] = root.value(QStringLiteral("settledLocale"));
                 if (QJSEngine *eng = qjsEngine(self.data()))
-                    payload = eng->toScriptValue(root);
+                    payload = eng->toScriptValue(meta);
                 else
-                    payload = QJSValue(json);
+                    payload = QJSValue(QString::fromUtf8(QJsonDocument(meta).toJson(QJsonDocument::Compact)));
             }
             if (cb.isCallable())
                 cb.call({ success, message, payload });
@@ -759,6 +938,8 @@ void CloudCatalogBackend::invalidateCache()
     // its snapshot against this counter and discards + restarts instead of serving
     // (and re-persisting) a result computed with the pre-invalidation account/locale.
     catalogGeneration++;
+    catalogDisplayRows_.clear();
+    catalogTotalGames_ = 0;
     // libchiaki owns every cache file and its versioned key (current + legacy), so
     // delegate to it. This is the single source of truth for cache naming and keeps
     // the client from drifting out of sync when the cache schema/version bumps.
