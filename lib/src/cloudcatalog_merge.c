@@ -256,6 +256,16 @@ static const char *stream_service_type(struct json_object *g)
 	return "pscloud";
 }
 
+static bool is_ps5_platform(struct json_object *g)
+{
+	const char *p = game_product_id(g);
+	if(!*p)
+		p = game_entitlement_id(g);
+	if(cc_contains(p, "PPSA"))
+		return true;
+	return device_has(g, "PS5");
+}
+
 static const char *category_for(struct json_object *g)
 {
 	// PS Now (PS3/PS4) is a subscription catalog: you stream these without owning the
@@ -272,16 +282,6 @@ static const char *category_for(struct json_object *g)
 	if(cc_json_bool(g, "isOwned"))
 		return "owned";
 	return "purchaseable";
-}
-
-static bool is_ps5_platform(struct json_object *g)
-{
-	const char *p = game_product_id(g);
-	if(!*p)
-		p = game_entitlement_id(g);
-	if(cc_contains(p, "PPSA"))
-		return true;
-	return device_has(g, "PS5");
 }
 
 // Badge platform from device list + id token only (NOT serviceType, so PS Now
