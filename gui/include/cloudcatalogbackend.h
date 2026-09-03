@@ -165,6 +165,7 @@ private:
         QString streamServiceType;
         QString conceptUrl;
         bool isOwned = false;
+        bool plusCatalog = false;
         QString imageUrl;
         QString sourceList;
     };

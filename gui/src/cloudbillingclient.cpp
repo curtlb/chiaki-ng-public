@@ -2,14 +2,13 @@
 
 #include "cloudbillingclient.h"
 
-#include <QEventLoop>
+#include <QDateTime>
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkDatagram>
 #include <QTcpSocket>
 #include <QUdpSocket>
-#include <QTimer>
 #include <QUuid>
 
 CloudBillingClient::Result CloudBillingClient::request(const QJsonObject &payload, int timeout_ms)
@@ -36,6 +35,7 @@ CloudBillingClient::Result CloudBillingClient::request(const QJsonObject &payloa
 	QJsonObject send_payload = payload;
 	send_payload.remove(QStringLiteral("_host"));
 	send_payload.remove(QStringLiteral("_port"));
+	const QString expect_id = send_payload.value(QStringLiteral("id")).toString();
 
 	const QByteArray send_data = QJsonDocument(send_payload).toJson(QJsonDocument::Compact);
 	if(socket.writeDatagram(send_data, host, port) < 0) {
@@ -43,31 +43,31 @@ CloudBillingClient::Result CloudBillingClient::request(const QJsonObject &payloa
 		return result;
 	}
 
-	QEventLoop loop;
-	QTimer timer;
-	timer.setSingleShot(true);
-	QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
-	QObject::connect(&socket, &QUdpSocket::readyRead, &loop, [&]() {
+	// Blocking wait — safe from worker std::thread (unlike QEventLoop + readyRead).
+	const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + qMax(1, timeout_ms);
+	while(QDateTime::currentMSecsSinceEpoch() < deadline) {
+		const int left = static_cast<int>(deadline - QDateTime::currentMSecsSinceEpoch());
+		if(left <= 0)
+			break;
+		if(!socket.waitForReadyRead(left))
+			continue;
 		while(socket.hasPendingDatagrams()) {
 			const QNetworkDatagram dg = socket.receiveDatagram();
 			const QJsonDocument doc = QJsonDocument::fromJson(dg.data());
 			if(!doc.isObject())
 				continue;
 			const QJsonObject obj = doc.object();
-			if(obj.value(QStringLiteral("id")).toString() != payload.value(QStringLiteral("id")).toString())
+			if(obj.value(QStringLiteral("id")).toString() != expect_id)
 				continue;
 			result.ok = obj.value(QStringLiteral("ok")).toBool();
 			result.error = obj.value(QStringLiteral("error")).toString();
 			result.ui_message = obj.value(QStringLiteral("ui_message")).toString();
 			result.data = obj;
-			loop.quit();
+			return result;
 		}
-	});
-	timer.start(timeout_ms);
-	loop.exec();
+	}
 
-	if(result.data.isEmpty() && result.error.isEmpty())
-		result.error = QStringLiteral("Таймаут ответа сервера биллинга (%1:%2)").arg(host.toString()).arg(port);
+	result.error = QStringLiteral("Таймаут ответа сервера биллинга (%1:%2)").arg(host.toString()).arg(port);
 	return result;
 }
 

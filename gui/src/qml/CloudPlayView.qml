@@ -112,7 +112,9 @@ Pane {
                 if (q.length > 0 && isCloudBillingServerConfigured()) {
                     // First search loads PS Now via assigned-account NPSSO (may take a while).
                     Chiaki.cloudCatalog.ensurePsNowSearchCatalog(function(ok, message) {
-                        if (!ok && message && message !== "not_billing")
+                        // Avoid noisy toast when in-memory/disk cache is already usable.
+                        if (!ok && message && message !== "not_billing"
+                                && !Chiaki.cloudCatalog.psNowSearchCatalogReady())
                             showErrorToast(qsTr("Поиск"), message || qsTr("Не удалось загрузить каталог PS Now"));
                         applySearchFilter();
                         isSearching = false;
@@ -384,6 +386,13 @@ Pane {
                     if (message && message !== "Success" && message !== "Cached")
                         showErrorToast(qsTr("Partial Catalog"), message);
                     applySearchFilter();
+                    // Warm PS Now search catalog once per session (owned grid stays from billing DB).
+                    if (billingServer) {
+                        Chiaki.cloudCatalog.ensurePsNowSearchCatalog(function(ok, message) {
+                            if (!ok && message && message !== "not_billing")
+                                console.warn("[CloudPlayView] PS Now search prewarm:", message);
+                        });
+                    }
                     Qt.callLater(() => {
                         if (gamesGrid.count > 0
                                 && !searchField.activeFocus
