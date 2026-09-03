@@ -484,7 +484,6 @@ Pane {
                 height: 0
                 Layout.preferredWidth: 0
                 Layout.preferredHeight: 0
-                focusPolicy: Qt.NoFocus
             }
 
             // Flexible gap pushes search + the right-side controls to the right edge.
