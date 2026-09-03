@@ -515,13 +515,16 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     const bool filterCategories = !categories.isEmpty();
     const bool filterFavorites = !favorites.isEmpty();
     const bool filterSearch = !q.isEmpty();
+    // Billing rental: search hits come from PS Now (native), not MySQL.
+    const bool usePsNowSearch = billingRental && filterSearch && !psnowSearchRows_.isEmpty();
+    const QVector<CatalogDisplayRow> &sourceRows = usePsNowSearch ? psnowSearchRows_ : catalogDisplayRows_;
 
     QVector<const CatalogDisplayRow *> matches;
-    matches.reserve(catalogDisplayRows_.size());
-    for (const CatalogDisplayRow &row : catalogDisplayRows_) {
+    matches.reserve(sourceRows.size());
+    for (const CatalogDisplayRow &row : sourceRows) {
         if (billingRental && !isBillingRentalPlayableRow(row))
             continue;
-        // Default grid: account-owned titles only. Full rental catalog is search-only.
+        // Default grid: account-owned titles only. Full rental catalog is search-only (PS Now).
         if (billingRental && !filterSearch && row.category != QLatin1String("owned"))
             continue;
         if (filterCategories) {
@@ -597,8 +600,149 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     result[QStringLiteral("games")] = out;
     result[QStringLiteral("totalFiltered")] = matches.size();
     result[QStringLiteral("truncated")] = matches.size() > cap;
-    result[QStringLiteral("totalGames")] = catalogTotalGames_;
+    result[QStringLiteral("totalGames")] = usePsNowSearch ? psnowSearchTotalGames_ : catalogTotalGames_;
+    result[QStringLiteral("searchSource")] = usePsNowSearch
+        ? QStringLiteral("psnow")
+        : (billingRental ? QStringLiteral("billing_db") : QStringLiteral("unified"));
     return result;
+}
+
+bool CloudCatalogBackend::psNowSearchCatalogReady() const
+{
+    return !psnowSearchRows_.isEmpty();
+}
+
+void CloudCatalogBackend::ensurePsNowSearchCatalog(const QJSValue &callback)
+{
+    if (!useBillingCatalogSource(settings)) {
+        if (callback.isCallable())
+            callback.call({ true, QStringLiteral("not_billing"), 0 });
+        return;
+    }
+    if (!psnowSearchRows_.isEmpty()) {
+        if (callback.isCallable())
+            callback.call({ true, QStringLiteral("ready"), psnowSearchTotalGames_ });
+        return;
+    }
+
+    bool expected = false;
+    if (!psnowSearchFetchInFlight.compare_exchange_strong(expected, true)) {
+        if (callback.isCallable())
+            pendingPsNowSearchCallbacks.push_back(callback);
+        return;
+    }
+
+    // Park on GUI thread only — QJSValue must not cross worker threads.
+    if (callback.isCallable())
+        pendingPsNowSearchCallbacks.push_back(callback);
+
+    const quint64 gen = catalogGeneration;
+    const QString host = settings->GetCloudBillingHost();
+    const quint16 port = settings->GetCloudBillingPort();
+    const QString email = settings->GetFourCloudEmail();
+    const QByteArray locale =
+        (settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-US")).toUtf8();
+    const QString searchCacheDir = cacheDirectory + QStringLiteral("/psnow_search");
+    QDir().mkpath(searchCacheDir);
+    const QByteArray cacheDir = searchCacheDir.toUtf8();
+    QPointer<CloudCatalogBackend> self(this);
+
+    if (email.trimmed().isEmpty()) {
+        psnowSearchFetchInFlight.store(false);
+        std::vector<QJSValue> parked;
+        parked.swap(pendingPsNowSearchCallbacks);
+        for (QJSValue &cb : parked) {
+            if (cb.isCallable())
+                cb.call({ false, QStringLiteral("Нет email 4cloud"), 0 });
+        }
+        return;
+    }
+
+    std::thread([self, gen, host, port, email, locale, cacheDir]() mutable {
+        bool success = false;
+        QString message;
+        QString jsonPayload;
+        QString npssoForSettings;
+
+        CloudLogMessage(QStringLiteral("Catalog"),
+            QStringLiteral("PS Now search catalog: requesting assigned-account NPSSO"));
+        const auto npssoRes = CloudBillingClient::catalogNpsso(host, port, email);
+        if (!npssoRes.ok) {
+            message = npssoRes.ui_message.isEmpty() ? npssoRes.error : npssoRes.ui_message;
+            CloudLogMessage(QStringLiteral("Catalog"),
+                QStringLiteral("catalog_npsso failed: %1").arg(message));
+        } else {
+            const QString npsso = npssoRes.data.value(QStringLiteral("npsso")).toString().trimmed();
+            if (npsso.isEmpty()) {
+                message = QStringLiteral("Пустой NPSSO у назначенного аккаунта");
+            } else {
+                npssoForSettings = npsso;
+                CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, "Catalog");
+                ChiakiLog *log = file_log.GetChiakiLog();
+                CHIAKI_LOGI(log, "PS Now search unified fetch started (locale=%s)", locale.constData());
+
+                ChiakiCloudCatalogConfig cfg;
+                memset(&cfg, 0, sizeof(cfg));
+                const QByteArray npssoBytes = npsso.toUtf8();
+                cfg.npsso = npssoBytes.constData();
+                cfg.locale = locale.constData();
+                cfg.cache_dir = cacheDir.constData();
+                cfg.force_refresh = false;
+
+                ChiakiCloudCatalogResult res;
+                ChiakiErrorCode err = chiaki_cloudcatalog_fetch_unified(&cfg, &res, log);
+                success = (err == CHIAKI_ERR_SUCCESS && res.json);
+                if (success) {
+                    jsonPayload = QString::fromUtf8(res.json);
+                    message = QStringLiteral("Success");
+                    CloudLogMessage(QStringLiteral("Catalog"),
+                        QStringLiteral("PS Now search catalog fetch ok"));
+                } else {
+                    message = QString::fromUtf8(
+                        res.error_message ? res.error_message : "Failed to fetch PS Now catalog");
+                    CloudLogMessage(QStringLiteral("Catalog"),
+                        QStringLiteral("PS Now search fetch failed: %1").arg(message));
+                }
+                chiaki_cloudcatalog_result_fini(&res);
+            }
+        }
+
+        QCoreApplication *app = QCoreApplication::instance();
+        if (!app)
+            return;
+        QMetaObject::invokeMethod(app, [self, gen, success, message, jsonPayload, npssoForSettings]() mutable {
+            if (!self)
+                return;
+            std::vector<QJSValue> parked;
+            parked.swap(self->pendingPsNowSearchCallbacks);
+            self->psnowSearchFetchInFlight.store(false);
+
+            if (self->catalogGeneration != gen) {
+                self->psnowSearchRows_.clear();
+                self->psnowSearchTotalGames_ = 0;
+                for (QJSValue &pcb : parked)
+                    if (pcb.isCallable())
+                        self->ensurePsNowSearchCatalog(pcb);
+                return;
+            }
+
+            if (!npssoForSettings.isEmpty() && self->settings)
+                self->settings->SetNpssoTokenSecondary(npssoForSettings);
+
+            if (success) {
+                const QJsonObject root = QJsonDocument::fromJson(jsonPayload.toUtf8()).object();
+                self->psnowSearchRows_ = self->buildCatalogDisplayRows(root.value(QStringLiteral("games")).toArray());
+                self->psnowSearchTotalGames_ = self->psnowSearchRows_.size();
+                CloudLogMessage(QStringLiteral("Catalog"),
+                    QStringLiteral("PS Now search catalog ready: %1 games").arg(self->psnowSearchTotalGames_));
+            }
+
+            for (QJSValue &pcb : parked) {
+                if (pcb.isCallable())
+                    pcb.call({ success, message, self->psnowSearchTotalGames_ });
+            }
+        }, Qt::QueuedConnection);
+    }).detach();
 }
 
 void CloudCatalogBackend::recordRecentPlay(const QString &streamIdentifier, const QString &serviceType,
@@ -1281,11 +1425,15 @@ void CloudCatalogBackend::invalidateCache()
     catalogGeneration++;
     catalogDisplayRows_.clear();
     catalogTotalGames_ = 0;
+    psnowSearchRows_.clear();
+    psnowSearchTotalGames_ = 0;
     // libchiaki owns every cache file and its versioned key (current + legacy), so
     // delegate to it. This is the single source of truth for cache naming and keeps
     // the client from drifting out of sync when the cache schema/version bumps.
     const QByteArray cacheDir = cacheDirectory.toUtf8();
     chiaki_cloudcatalog_invalidate_cache(cacheDir.constData());
+    const QString searchCacheDir = cacheDirectory + QStringLiteral("/psnow_search");
+    chiaki_cloudcatalog_invalidate_cache(searchCacheDir.toUtf8().constData());
     purgeStaleBillingCatalogCaches();
     QFile::remove(getCacheFilePath(billingCatalogCacheKey()));
     qInfo() << "[CACHE INVALIDATED] Delegated cache invalidation to libchiaki for" << cacheDirectory;

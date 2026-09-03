@@ -7,7 +7,8 @@ JSON over UDP (request/response share the same "id" field).
 Default bind: 0.0.0.0:13750
 
 Actions:
-  ping, catalog, quote, start, confirm_stream, heartbeat, renew, end_stream, status
+  ping, catalog, catalog_npsso, quote, start, confirm_stream, heartbeat, renew,
+  end_stream, status, whoami
 
 Deploy:
   cp .env.example .env   # fill in secrets locally (never commit .env)
@@ -686,6 +687,91 @@ def allocate_account(conn, game):
         if account_can_play_game(conn, acc, game):
             return acc
     return None
+
+
+def allocate_catalog_account(conn):
+    """Soft-assign any free PS account for catalog/search (prefer PS+)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Accounts "
+            "WHERE Status = 'available' "
+            "ORDER BY HasPsPlus DESC, LastUsedAt IS NULL DESC, LastUsedAt ASC "
+            "FOR UPDATE"
+        )
+        return cur.fetchone()
+
+
+def ensure_user_catalog_npsso(conn, user_id):
+    """
+    NPSSO from the player's first assigned CloudStreaming_Accounts row.
+    If the player has no active/retention lease yet, soft-assign one (same lease
+    table as start) so search uses the same PS Now account they will stream on.
+    """
+    lease = find_any_user_lease(conn, user_id)
+    if lease:
+        return {
+            "npsso": lease.get("NPSSO") or "",
+            "account_id": lease.get("AccountID"),
+            "account_label": lease.get("AccountLabel") or "",
+            "lease_id": lease.get("ID"),
+            "soft_assigned": False,
+        }
+    account = allocate_catalog_account(conn)
+    if not account:
+        return None
+    now = datetime.now()
+    retention = now + timedelta(days=RETENTION_DAYS)
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO CloudStreaming_Leases "
+            "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil) "
+            "VALUES (%s, %s, 'active', %s, %s, %s)",
+            (user_id, account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(retention)),
+        )
+        lease_id = cur.lastrowid
+        cur.execute(
+            "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
+            "LastUsedAt=NOW(3) WHERE ID=%s",
+            (lease_id, account["ID"]),
+        )
+    return {
+        "npsso": account.get("NPSSO") or "",
+        "account_id": account["ID"],
+        "account_label": account.get("Label") or "",
+        "lease_id": lease_id,
+        "soft_assigned": True,
+    }
+
+
+def handle_catalog_npsso(conn, req):
+    """Return NPSSO of the player's assigned PS account for PS Now search/catalog."""
+    email = (req.get("email") or "").strip().lower()
+    req_id = req.get("id")
+    if not email:
+        return reply(req_id, False, error="Укажите email")
+    user = ensure_user(conn, email)
+    info = ensure_user_catalog_npsso(conn, user["ID"])
+    if not info or not (info.get("npsso") or "").strip():
+        return reply(
+            req_id,
+            False,
+            error="Нет свободных PS-аккаунтов для каталога. Попробуйте позже.",
+            ui_message="Все аккаунты заняты. Ожидайте освобождения.",
+        )
+    log.info(
+        "catalog_npsso user=%s account_id=%s soft_assigned=%s",
+        user["ID"],
+        info.get("account_id"),
+        info.get("soft_assigned"),
+    )
+    return reply(
+        req_id,
+        True,
+        npsso=info["npsso"],
+        account_id=info["account_id"],
+        account_label=info.get("account_label") or "",
+        soft_assigned=bool(info.get("soft_assigned")),
+    )
 
 
 def touch_lease(conn, lease_id):
@@ -2032,6 +2118,8 @@ def dispatch(payload):
             out = handle_quote(conn, payload)
         elif action == "catalog":
             out = handle_catalog(conn, payload)
+        elif action == "catalog_npsso":
+            out = handle_catalog_npsso(conn, payload)
         elif action == "confirm_stream":
             out = handle_confirm_stream(conn, payload)
         elif action == "start":

@@ -148,6 +148,13 @@ CloudBillingClient::Result CloudBillingClient::whoami(const QString &host, quint
 	return request(o);
 }
 
+CloudBillingClient::Result CloudBillingClient::catalogNpsso(const QString &host, quint16 port, const QString &email)
+{
+	QJsonObject o = baseReq(host, port, QStringLiteral("catalog_npsso"));
+	o[QStringLiteral("email")] = email;
+	return request(o, 15000);
+}
+
 static QString normalizeTitleSku(QString sku)
 {
 	sku = sku.trimmed();

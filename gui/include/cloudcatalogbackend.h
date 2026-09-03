@@ -58,6 +58,13 @@ public:
     Q_INVOKABLE QVariantMap filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,
                                                  const QVariantList &favoriteIds, int sortState,
                                                  bool billingRental, int limit) const;
+    /**
+     * Billing rental search: ensure the PS Now unified catalog is loaded using NPSSO from
+     * the player's assigned CloudStreaming_Accounts row (via billing catalog_npsso).
+     * Callback: (success: bool, message: string, totalGames: int).
+     */
+    Q_INVOKABLE void ensurePsNowSearchCatalog(const QJSValue &callback);
+    Q_INVOKABLE bool psNowSearchCatalogReady() const;
     Q_INVOKABLE QVariantList recentDisplayGames(bool billingRental, int limit = 16) const;
     Q_INVOKABLE void recordRecentPlay(const QString &streamIdentifier, const QString &serviceType,
                                       const QString &gameName);
@@ -114,6 +121,10 @@ private:
     std::atomic<bool> unifiedFetchInFlight{false};
     std::vector<QJSValue> pendingUnifiedCallbacks;
 
+    // PS Now search catalog (billing rental): separate from MySQL billing owned grid.
+    std::atomic<bool> psnowSearchFetchInFlight{false};
+    std::vector<QJSValue> pendingPsNowSearchCallbacks;
+
     // Bumped by invalidateCache() (GUI thread only). A unified fetch snapshots it
     // at start; a completion whose snapshot is stale means the cache (and account/
     // locale inputs) changed mid-flight — the result must be discarded and the
@@ -166,6 +177,8 @@ private:
     void purgeStaleBillingCatalogCaches();
     QVector<CatalogDisplayRow> catalogDisplayRows_;
     int catalogTotalGames_ = 0;
+    QVector<CatalogDisplayRow> psnowSearchRows_;
+    int psnowSearchTotalGames_ = 0;
 
     // Helper methods for shortcut creation
     QPixmap downloadImageFromUrl(const QString &url, int timeoutMs = 10000);

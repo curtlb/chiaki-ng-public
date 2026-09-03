@@ -108,8 +108,19 @@ Pane {
         onTriggered: {
             // Yield so the search spinner paints before a heavy catalog scan.
             Qt.callLater(() => {
-                applySearchFilter();
-                isSearching = false;
+                const q = (searchQuery || "").trim();
+                if (q.length > 0 && isCloudBillingServerConfigured()) {
+                    // First search loads PS Now via assigned-account NPSSO (may take a while).
+                    Chiaki.cloudCatalog.ensurePsNowSearchCatalog(function(ok, message) {
+                        if (!ok && message && message !== "not_billing")
+                            showErrorToast(qsTr("Поиск"), message || qsTr("Не удалось загрузить каталог PS Now"));
+                        applySearchFilter();
+                        isSearching = false;
+                    });
+                } else {
+                    applySearchFilter();
+                    isSearching = false;
+                }
             });
         }
     }

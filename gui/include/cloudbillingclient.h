@@ -33,6 +33,8 @@ public:
 	static Result renew(const QString &host, quint16 port, const QString &email, const QString &session_token);
 	static Result endStream(const QString &host, quint16 port, const QString &session_token);
 	static Result whoami(const QString &host, quint16 port, const QString &email);
+	/** NPSSO from the player's first assigned CloudStreaming_Accounts (soft-assigns if needed). */
+	static Result catalogNpsso(const QString &host, quint16 port, const QString &email);
 	/** Full game catalog from CloudStreaming_Catalog (no player NPSSO).
 	 *  Fetched over TCP on billing_port+1 (default 13751) as a qCompress blob. */
 	static Result fetchCatalog(const QString &host, quint16 port,
