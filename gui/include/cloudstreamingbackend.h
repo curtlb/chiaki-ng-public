@@ -59,6 +59,7 @@ public:
     // Platform is automatically detected from API response for PSNOW, or hardcoded to "ps5" for PSCLOUD
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback);
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
+    Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, QString platform, const QJSValue &callback);
 
     /** Fetch hourly billing quote (no charge). Callback: ok, message, hourlyPrice. */
     Q_INVOKABLE void fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
@@ -124,6 +125,7 @@ private:
     QString last_service_type;
     QString last_game_identifier;
     QString last_game_name;
+    QString last_platform;
     QString billing_session_token;
     QString billing_npsso;
     QString billing_game_identifier;

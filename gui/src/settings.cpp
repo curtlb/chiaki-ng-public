@@ -2356,7 +2356,7 @@ static unsigned int ClampCloudBitrateKbps(unsigned int bitrate_kbps)
 
 unsigned int Settings::GetCloudBitratePSCloud() const
 {
-	const unsigned int legacy = settings.value("settings/cloud_bitrate", 20000).toUInt();
+	const unsigned int legacy = settings.value("settings/cloud_bitrate", 25000).toUInt();
 	return ClampCloudBitrateKbps(settings.value("settings/cloud_bitrate_pscloud", legacy).toUInt());
 }
 
@@ -2367,7 +2367,7 @@ void Settings::SetCloudBitratePSCloud(unsigned int bitrate_kbps)
 
 unsigned int Settings::GetCloudBitratePSNOW() const
 {
-	const unsigned int legacy = settings.value("settings/cloud_bitrate", 20000).toUInt();
+	const unsigned int legacy = settings.value("settings/cloud_bitrate", 10000).toUInt();
 	return ClampCloudBitrateKbps(settings.value("settings/cloud_bitrate_psnow", legacy).toUInt());
 }
 

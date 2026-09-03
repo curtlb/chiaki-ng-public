@@ -248,6 +248,7 @@ Pane {
                 serviceType,
                 streamingId,
                 gameName,
+                platform || "",
                 function(success, message, serverIp) {
                     if (!success) {
                         let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));

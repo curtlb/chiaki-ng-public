@@ -308,12 +308,18 @@ void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameI
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback)
 {
-    startCompleteCloudSession(serviceType, gameIdentifier, QString(), callback);
+    startCompleteCloudSession(serviceType, gameIdentifier, QString(), QString(), callback);
 }
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback)
 {
+    startCompleteCloudSession(serviceType, gameIdentifier, gameName, QString(), callback);
+}
+
+void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, QString platform, const QJSValue &callback)
+{
     serviceType = serviceType.toLower();
+    platform = platform.trimmed().toLower();
 
     // Validate parameters
     if (serviceType != "psnow" && serviceType != "pscloud") {
@@ -325,7 +331,8 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
     }
 
     CloudLogMessage(QStringLiteral("Session"),
-        QStringLiteral("startCompleteCloudSession service=%1 game=%2").arg(serviceType, gameIdentifier));
+        QStringLiteral("startCompleteCloudSession service=%1 game=%2 platform=%3")
+            .arg(serviceType, gameIdentifier, platform.isEmpty() ? QStringLiteral("-") : platform));
 
     // Lookup game image from cache before starting session
     QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent());
@@ -346,6 +353,7 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
     last_service_type = serviceType;
     last_game_identifier = gameIdentifier;
     last_game_name = gameName;
+    last_platform = platform;
 
     const bool billing_server = settings
         && settings->GetCloudBillingEnabled()
@@ -447,8 +455,6 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
                                         : settings->GetCloudDatacentersJsonPSNOW()).toUtf8();
     const int resolution = pscloud ? settings->GetCloudResolutionPSCloud()
                                     : settings->GetCloudResolutionPSNOW();
-    const int bitrate = static_cast<int>(pscloud ? settings->GetCloudBitratePSCloud()
-                                                  : settings->GetCloudBitratePSNOW());
     const bool isForeign = settings->IsCloudCatalogIsForeign();
     const bool attrPassed = settings->GetAccountAttributesCheckPassed();
 
@@ -465,6 +471,17 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
             ownedPlat = p.toUtf8();
         }
     }
+
+    // Platform bitrate defaults: PS5 → 25 Mbit, PS3/PS4 → 10 Mbit.
+    QString platform = last_platform.trimmed().toLower();
+    if (platform.isEmpty() && !ownedPlat.isEmpty())
+        platform = QString::fromUtf8(ownedPlat).trimmed().toLower();
+    if (platform.isEmpty())
+        platform = pscloud ? QStringLiteral("ps5") : QStringLiteral("ps4");
+    if (last_platform.isEmpty())
+        last_platform = platform;
+    const int bitrate = (platform == QStringLiteral("ps5")) ? 25000 : 10000;
+    qInfo() << "Cloud bitrate for platform" << platform << ":" << bitrate << "kbps";
     Q_UNUSED(sharedDuid); // the C flow generates its own shared DUID for Kamaji+Gaikai
 
     setAllocationProgress(tr("Starting cloud session..."));
@@ -621,9 +638,18 @@ void CloudStreamingBackend::finishCloudSession(QString serviceType, QString serv
     connect_info.cloud_mtu_out = mtuOut;
     connect_info.cloud_rtt_us = rttUs;
     connect_info.video_profile = settings->GetCloudVideoProfile(serviceType);
+    {
+        QString platform = last_platform.trimmed().toLower();
+        if (platform.isEmpty())
+            platform = (serviceType == QStringLiteral("pscloud")) ? QStringLiteral("ps5")
+                                                                  : QStringLiteral("ps4");
+        connect_info.video_profile.bitrate =
+            (platform == QStringLiteral("ps5")) ? 25000u : 10000u;
+    }
 
     qInfo() << "Cloud streaming parameters set:";
     qInfo() << "  service_type:" << chiaki_service_type_string(connect_info.service_type);
+    qInfo() << "  bitrate_kbps:" << connect_info.video_profile.bitrate;
     qInfo() << "  cloud_psn_wrapper_type:" << QString("0x%1").arg(connect_info.cloud_psn_wrapper_type, 2, 16, QChar('0'));
     qInfo() << "  mtu_in:" << mtuIn << " mtu_out:" << mtuOut << " rtt_us:" << rttUs;
 
