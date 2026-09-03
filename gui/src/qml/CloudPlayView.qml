@@ -157,7 +157,7 @@ Pane {
     // Handle Escape/B button for quit confirmation dialog
     Keys.onEscapePressed: {
         if (showConfirmDialogFunc) {
-            showConfirmDialogFunc(qsTr("Quit"), qsTr("Are you sure you want to quit?"), () => Qt.quit(), null, true);
+            showConfirmDialogFunc(qsTr("Quit"), qsTr("Are you sure you want to quit?"), () => Qt.quit());
         }
     }
     
@@ -169,7 +169,7 @@ Pane {
         // Handle B button (Back key) for quit confirmation dialog
         if (event.key === Qt.Key_Back) {
             if (showConfirmDialogFunc) {
-                showConfirmDialogFunc(qsTr("Quit"), qsTr("Are you sure you want to quit?"), () => Qt.quit(), null, true);
+                showConfirmDialogFunc(qsTr("Quit"), qsTr("Are you sure you want to quit?"), () => Qt.quit());
             }
             event.accepted = true;
             return;
@@ -291,7 +291,7 @@ Pane {
                     : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
                 let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
                 if (showConfirmDialogFunc) {
-                    showConfirmDialogFunc(title, confirmText, launchCloudStream, null, true);
+                    showConfirmDialogFunc(title, confirmText, launchCloudStream);
                 } else {
                     launchCloudStream();
                 }

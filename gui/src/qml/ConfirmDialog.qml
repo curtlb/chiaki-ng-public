@@ -29,7 +29,10 @@ Dialog {
         restoreFocus();
         callback();
     }
-    onClosed: if(!newDialogOpen) { restoreFocus() }
+    onClosed: {
+        infoOnly = false
+        if(!newDialogOpen) { restoreFocus() }
+    }
 
     onRejected: {
         if(rejectCallback)

@@ -204,8 +204,16 @@ def fetch_lease_row(conn, lease_id, for_update=False):
         return cur.fetchone()
 
 
+def is_lease_first_msk_day(lease):
+    """True on the MSK calendar day when the PS account was first assigned."""
+    first = parse_db_datetime((lease or {}).get("FirstAssignedAt"))
+    if not first:
+        return False
+    return first.date() == msk_today()
+
+
 def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, daily_row):
-    """Activate 48h freeze at 61 min/day; extend RetentionUntil +1 day once at 90 min/day (MSK)."""
+    """First MSK day: 48h freeze at 61 min. Later days: +1 day at 90 min if freeze already active."""
     lease = fetch_lease_row(conn, lease_id, for_update=True)
     if not lease:
         return lease
@@ -214,10 +222,11 @@ def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, da
     freeze_active = bool(int(lease.get("SaveFreezeActive") or 0))
     retention = parse_db_datetime(lease.get("RetentionUntil"))
     ext_granted = bool(int(daily_row.get("ExtensionGranted") or 0))
+    first_day = is_lease_first_msk_day(lease)
     new_freeze = freeze_active
     new_retention = retention
 
-    if not freeze_active and played_min >= SAVE_FREEZE_THRESHOLD_MIN:
+    if not freeze_active and first_day and played_min >= SAVE_FREEZE_THRESHOLD_MIN:
         new_freeze = True
         new_retention = now + timedelta(hours=SAVE_INITIAL_RETENTION_HOURS)
 
@@ -275,18 +284,20 @@ def build_save_retention_payload(conn, user_id, lease_id):
     freeze_active = bool(int((lease or {}).get("SaveFreezeActive") or 0))
     retention_until = parse_db_datetime((lease or {}).get("RetentionUntil")) if lease else None
     ext_granted = bool(int((daily or {}).get("ExtensionGranted") or 0))
-    mins_to_freeze = max(0, SAVE_FREEZE_THRESHOLD_MIN - played_min)
+    first_day = is_lease_first_msk_day(lease)
+    mins_to_freeze = max(0, SAVE_FREEZE_THRESHOLD_MIN - played_min) if first_day else 0
     mins_to_extend = (
         0 if ext_granted else max(0, SAVE_EXTEND_THRESHOLD_MIN - played_min)
     )
 
     if not freeze_active:
-        if mins_to_freeze > 0:
+        if first_day and mins_to_freeze > 0:
             message = (
                 "Заморозка сохранений не произойдёт.\n\n"
                 "Чтобы ваши сохранения хранились %s часов после игры, "
                 "нужно отыграть ещё %s мин. сегодня (по московскому времени).\n"
-                "Сегодня отыграно: %s мин из %s мин."
+                "Сегодня отыграно: %s мин из %s мин.\n"
+                "Первоначальная заморозка доступна только в первый день после выдачи аккаунта."
                 % (
                     SAVE_INITIAL_RETENTION_HOURS,
                     mins_to_freeze,
@@ -294,10 +305,17 @@ def build_save_retention_payload(conn, user_id, lease_id):
                     SAVE_FREEZE_THRESHOLD_MIN,
                 )
             )
-        else:
+        elif first_day:
             message = (
                 "Заморозка сохранений будет активирована после достижения порога "
-                "(%s мин за день по МСК)." % SAVE_FREEZE_THRESHOLD_MIN
+                "(%s мин за первый день по МСК)." % SAVE_FREEZE_THRESHOLD_MIN
+            )
+        else:
+            message = (
+                "Заморозка сохранений не активна.\n\n"
+                "Первоначальная заморозка (48 ч) доступна только в первый день "
+                "после выдачи аккаунта (не менее %s мин. игры за этот день по МСК)."
+                % SAVE_FREEZE_THRESHOLD_MIN
             )
     else:
         until_str = fmt_dt_msk(retention_until)
