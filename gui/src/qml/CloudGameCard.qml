@@ -16,6 +16,7 @@ Rectangle {
     property bool hasFocus: isCurrentItem && GridView.view.activeFocus
     property bool isPsnow: isPsnowGame()
     property string cachedImageUrl: ""
+    property int imageFallbackIndex: 0
     property var qrCodeDialog: null // Reference to QR code dialog
     // With 4cloud hourly billing, PS5 cloud titles marked "purchaseable" in the user's
     // catalog are played via a rented PS account NPSSO after payment — not the user's library.
@@ -107,17 +108,46 @@ Rectangle {
         return getServiceType();
     }
     
+    function titleSkuFromPid(pid) {
+        if (!pid) return "";
+        let dash = pid.indexOf("-");
+        if (dash >= 0 && dash + 1 < pid.length) {
+            let rest = pid.substring(dash + 1);
+            let next = rest.indexOf("-");
+            return next > 0 ? rest.substring(0, next) : rest;
+        }
+        let up = pid.substring(0, 4).toUpperCase();
+        if (up === "CUSA" || up === "PPSA" || up === "NPEA" || up === "NPEB" || up === "NPUB")
+            return pid;
+        return "";
+    }
+
+    function chihiroCandidates(pid) {
+        let out = [];
+        if (!pid) return out;
+        let prefix = pid.substring(0, 2).toUpperCase();
+        let country = (prefix === "UP" || prefix === "HP" || prefix === "HN") ? "US" : "GB";
+        if (pid.indexOf("-") > 0)
+            out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/container/${country}/en/999/${pid}/image?w=440&h=440`);
+        let sku = titleSkuFromPid(pid);
+        if (sku) {
+            out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/${country}/en/999/${sku}/image?w=440&h=440`);
+            if (country !== "US")
+                out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/US/en/999/${sku}/image?w=440&h=440`);
+            if (country !== "GB")
+                out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/GB/en/999/${sku}/image?w=440&h=440`);
+        }
+        return out;
+    }
+
     function getImageUrl() {
         if (!gameData) return "";
         
-        // Check if we already have extracted images from previous fetch
-        // Prefer cover over landscape
         if (gameData.extracted_images) {
             if (gameData.extracted_images.cover) return gameData.extracted_images.cover;
             if (gameData.extracted_images.landscape) return gameData.extracted_images.landscape;
         }
         
-        // For PS5 Cloud games from gameslist API - they have imageUrl directly
         if (gameData.imageUrl) return gameData.imageUrl;
         if (gameData.images && Array.isArray(gameData.images) && gameData.images.length > 0) {
             for (let i = 0; i < gameData.images.length; i++) {
@@ -133,32 +163,46 @@ Rectangle {
                 if (img && img.url) return img.url;
             }
         }
-        // Billing catalog may omit imageUrl; backend usually fills it — last resort from product id.
         let pid = getProductIdForApi() || getProductId();
-        if (pid && pid.indexOf("-") > 0) {
-            let locale = (Chiaki.settings && Chiaki.settings.cloudStoreLocale) ? Chiaki.settings.cloudStoreLocale : "en-GB";
-            let parts = locale.toLowerCase().split("-");
-            let lang = parts.length >= 1 ? parts[0] : "en";
-            let country = parts.length >= 2 ? parts[1].toUpperCase() : "US";
-            if (pid.substring(0, 2).toUpperCase() === "EP" && country === "US")
-                country = "GB";
-            return `https://store.playstation.com/store/api/chihiro/00_09_000/container/${country}/${lang}/999/${pid}/image?w=440&h=440`;
+        let candidates = chihiroCandidates(pid);
+        return candidates.length > 0 ? candidates[0] : "";
+    }
+
+    function nextImageFallback() {
+        let pid = getProductIdForApi() || getProductId();
+        let candidates = [];
+        let primary = getImageUrl();
+        if (primary)
+            candidates.push(primary);
+        chihiroCandidates(pid).forEach((u) => {
+            if (candidates.indexOf(u) < 0)
+                candidates.push(u);
+        });
+        imageFallbackIndex++;
+        if (imageFallbackIndex < candidates.length) {
+            cachedImageUrl = candidates[imageFallbackIndex];
+            return true;
         }
-        return "";
+        return false;
     }
     
-    onGameDataChanged: cachedImageUrl = getImageUrl()
-    
-    Component.onCompleted: {
+    onGameDataChanged: {
+        imageFallbackIndex = 0;
         cachedImageUrl = getImageUrl();
     }
     
-    color: isHovered || isCurrentItem ? Qt.lighter(Material.dialogColor, 1.1) : Material.dialogColor
-    radius: 8
-    border.width: 0
-    border.color: "transparent"
+    Component.onCompleted: {
+        imageFallbackIndex = 0;
+        cachedImageUrl = getImageUrl();
+    }
     
-    Behavior on color { ColorAnimation { duration: 150 } }
+    color: isHovered || isCurrentItem ? "#1a222d" : "#121820"
+    radius: 12
+    border.width: (isHovered || isCurrentItem) ? 1 : 0
+    border.color: isHovered || isCurrentItem ? Qt.rgba(0.18, 0.77, 0.71, 0.45) : "transparent"
+    
+    Behavior on color { ColorAnimation { duration: 160 } }
+    Behavior on border.color { ColorAnimation { duration: 160 } }
     
     HoverHandler {
         id: cardHoverHandler
@@ -192,14 +236,11 @@ Rectangle {
                 cache: true
                 smooth: true
                 
-                // Re-resolve when catalog row updates (covers, locale, etc.)
-                source: gameData ? getImageUrl() : ""
+                source: cachedImageUrl || (gameData ? getImageUrl() : "")
                 
-                // Suppress error warnings - image loading failures are non-fatal
-                // QML Image component may not support all HTTPS image formats
                 onStatusChanged: {
-                    // Silently handle errors - don't retry as it just spams warnings
-                    // Images will show placeholder if they fail to load
+                    if (status === Image.Error)
+                        nextImageFallback();
                 }
                 
                 BusyIndicator {
@@ -263,10 +304,10 @@ Rectangle {
                 radius: 4
                 visible: gameData && gameData.category
                 color: {
-                    if (!gameData) return "#FF9800";
-                    if (gameData.category === "owned") return "#4CAF50";
-                    if (gameData.category === "streamable") return "#2196F3";
-                    return "#FF9800";
+                    if (!gameData) return "#e0a84a";
+                    if (gameData.category === "owned") return "#1a8f84";
+                    if (gameData.category === "streamable") return "#2a5f8f";
+                    return "#a8782e";
                 }
 
                 Label {

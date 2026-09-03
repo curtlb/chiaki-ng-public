@@ -141,22 +141,47 @@ CloudBillingClient::Result CloudBillingClient::endStream(const QString &host, qu
 	return request(o);
 }
 
+static QString extractTitleSku(const QString &product_id)
+{
+	const QString pid = product_id.trimmed();
+	if(pid.isEmpty())
+		return {};
+	const int dash = pid.indexOf(QLatin1Char('-'));
+	if(dash >= 0 && dash + 1 < pid.size()) {
+		const QString rest = pid.mid(dash + 1);
+		const int nextDash = rest.indexOf(QLatin1Char('-'));
+		if(nextDash > 0)
+			return rest.left(nextDash);
+		return rest;
+	}
+	if(pid.startsWith(QLatin1String("CUSA"), Qt::CaseInsensitive)
+	   || pid.startsWith(QLatin1String("PPSA"), Qt::CaseInsensitive)
+	   || pid.startsWith(QLatin1String("NPEA"), Qt::CaseInsensitive)
+	   || pid.startsWith(QLatin1String("NPEB"), Qt::CaseInsensitive)
+	   || pid.startsWith(QLatin1String("NPUB"), Qt::CaseInsensitive))
+		return pid;
+	return {};
+}
+
 static QString chihiroImageUrl(const QString &product_id, const QString &locale = QStringLiteral("en-GB"))
 {
 	const QString pid = product_id.trimmed();
 	if(pid.isEmpty())
 		return {};
-	QString country = QStringLiteral("US");
+	Q_UNUSED(locale);
+	QString country = QStringLiteral("GB");
 	QString lang = QStringLiteral("en");
-	const QStringList parts = locale.toLower().split(QLatin1Char('-'));
-	if(parts.size() >= 2) {
-		lang = parts.at(0);
-		country = parts.at(1).toUpper();
-	}
 	const QString prefix = pid.left(2).toUpper();
-	if(prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC")) {
-		if(country == QStringLiteral("US"))
-			country = QStringLiteral("GB");
+	if(prefix == QStringLiteral("UP") || prefix == QStringLiteral("HP") || prefix == QStringLiteral("HN"))
+		country = QStringLiteral("US");
+	if(pid.contains(QLatin1Char('-'))) {
+		return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
+			.arg(country, lang, pid);
+	}
+	const QString sku = extractTitleSku(pid);
+	if(!sku.isEmpty()) {
+		return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/%1/%2/999/%3/image?w=440&h=440")
+			.arg(country, lang, sku);
 	}
 	return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
 		.arg(country, lang, pid);

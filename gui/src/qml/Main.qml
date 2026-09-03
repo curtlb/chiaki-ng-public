@@ -10,7 +10,7 @@ Item {
     property list<Item> restoreFocusItems
     property bool initialAsk: false
     Material.theme: Material.Dark
-    Material.accent: "#00a7ff"
+    Material.accent: "#2ec4b6"
 
     function controllerButton(name) {
         let type = "deck";

@@ -7,74 +7,139 @@ import org.streetpea.chiaking
 
 Pane {
     id: root
-    padding: 40
+    padding: 0
     Material.theme: Material.Dark
-    Material.accent: "#00a7ff"
+    Material.accent: "#2ec4b6"
 
-    ColumnLayout {
+    CleanBlueBackground {
+        anchors.fill: parent
+        z: -1
+    }
+
+    Rectangle {
         anchors.centerIn: parent
-        width: Math.min(400, parent.width - 80)
-        spacing: 30
+        width: Math.min(440, parent.width - 48)
+        height: loginColumn.implicitHeight + 56
+        radius: 14
+        color: Qt.rgba(0.08, 0.10, 0.14, 0.92)
+        border.width: 1
+        border.color: Qt.rgba(0.18, 0.77, 0.71, 0.28)
 
-        Label {
-            Layout.alignment: Qt.AlignHCenter
-            text: "Авторизация"
-            font.pixelSize: 32
-            font.bold: true
-            color: Material.foreground
-        }
-
-        TextField {
-            id: emailField
-            Layout.fillWidth: true
-            placeholderText: "Email"
-            text: ""
-            focus: true
-            Material.accent: Material.accent
-            Keys.onReturnPressed: passwordField.focus = true
-            Keys.onEnterPressed: passwordField.focus = true
-        }
-
-        TextField {
-            id: passwordField
-            Layout.fillWidth: true
-            placeholderText: "Пароль"
-            echoMode: TextField.Password
-            Material.accent: Material.accent
-            Keys.onReturnPressed: loginButton.clicked()
-            Keys.onEnterPressed: loginButton.clicked()
-        }
-
-        Button {
-            id: loginButton
-            Layout.fillWidth: true
-            Layout.preferredHeight: 50
-            text: "Войти"
-            enabled: emailField.text.length > 0 && passwordField.text.length > 0 && !authenticating
-            Material.accent: Material.accent
-            onClicked: {
-                authenticating = true
-                errorText.text = ""
-                Chiaki.authenticate(emailField.text, passwordField.text)
+        ColumnLayout {
+            id: loginColumn
+            anchors {
+                left: parent.left
+                right: parent.right
+                verticalCenter: parent.verticalCenter
+                leftMargin: 28
+                rightMargin: 28
             }
-        }
+            spacing: 18
 
-        Label {
-            id: errorText
-            Layout.fillWidth: true
-            Layout.preferredHeight: 40
-            visible: text.length > 0
-            text: ""
-            color: Material.color(Material.Red)
-            wrapMode: Text.Wrap
-            horizontalAlignment: Text.AlignHCenter
-        }
+            Label {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.bottomMargin: 8
+                text: "4cloud"
+                font.pixelSize: 13
+                font.letterSpacing: 3
+                font.capitalization: Font.AllUppercase
+                color: "#2ec4b6"
+                opacity: 0.9
+            }
 
-        BusyIndicator {
-            id: busyIndicator
-            Layout.alignment: Qt.AlignHCenter
-            visible: authenticating
-            running: authenticating
+            Label {
+                Layout.alignment: Qt.AlignHCenter
+                text: "Авторизация"
+                font.pixelSize: 28
+                font.weight: Font.DemiBold
+                color: "#e8eef4"
+            }
+
+            Label {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.bottomMargin: 8
+                text: "Войдите, чтобы запускать облачные игры"
+                font.pixelSize: 13
+                color: "#8b9aab"
+            }
+
+            TextField {
+                id: emailField
+                Layout.fillWidth: true
+                Layout.preferredHeight: 44
+                placeholderText: "Email"
+                text: ""
+                focus: true
+                leftPadding: 14
+                rightPadding: 14
+                Material.accent: Material.accent
+                Keys.onReturnPressed: passwordField.focus = true
+                Keys.onEnterPressed: passwordField.focus = true
+                background: Rectangle {
+                    radius: 8
+                    color: "#141a22"
+                    border.width: 1
+                    border.color: emailField.activeFocus ? "#2ec4b6" : "#243041"
+                }
+            }
+
+            TextField {
+                id: passwordField
+                Layout.fillWidth: true
+                Layout.preferredHeight: 44
+                placeholderText: "Пароль"
+                echoMode: TextField.Password
+                leftPadding: 14
+                rightPadding: 14
+                Material.accent: Material.accent
+                Keys.onReturnPressed: loginButton.clicked()
+                Keys.onEnterPressed: loginButton.clicked()
+                background: Rectangle {
+                    radius: 8
+                    color: "#141a22"
+                    border.width: 1
+                    border.color: passwordField.activeFocus ? "#2ec4b6" : "#243041"
+                }
+            }
+
+            Button {
+                id: loginButton
+                Layout.fillWidth: true
+                Layout.preferredHeight: 48
+                Layout.topMargin: 6
+                text: "Войти"
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+                enabled: emailField.text.length > 0 && passwordField.text.length > 0 && !authenticating
+                Material.background: enabled ? "#2ec4b6" : "#1a222d"
+                Material.foreground: enabled ? "#071210" : "#5c6b7c"
+                Material.roundedScale: Material.SmallScale
+                onClicked: {
+                    authenticating = true
+                    errorText.text = ""
+                    Chiaki.authenticate(emailField.text, passwordField.text)
+                }
+            }
+
+            Label {
+                id: errorText
+                Layout.fillWidth: true
+                Layout.preferredHeight: implicitHeight
+                visible: text.length > 0
+                text: ""
+                color: "#e85d5d"
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                font.pixelSize: 13
+            }
+
+            BusyIndicator {
+                id: busyIndicator
+                Layout.alignment: Qt.AlignHCenter
+                visible: authenticating
+                running: authenticating
+                Material.accent: "#2ec4b6"
+            }
         }
     }
 
@@ -85,7 +150,6 @@ Pane {
 
         function onAuthenticationSuccess() {
             authenticating = false
-            // The signal will be handled by Main.qml to show main view
         }
 
         function onAuthenticationError(errorMessage) {

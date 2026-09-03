@@ -235,22 +235,53 @@ static QJsonObject billingCatalogEnvelope(const QJsonArray &games, const QString
     return root;
 }
 
+static QString extractTitleSku(const QString &product_id)
+{
+    const QString pid = product_id.trimmed();
+    if (pid.isEmpty())
+        return {};
+    // EP0001-CUSA12345_00-FOO → CUSA12345_00
+    const int dash = pid.indexOf(QLatin1Char('-'));
+    if (dash >= 0 && dash + 1 < pid.size()) {
+        const QString rest = pid.mid(dash + 1);
+        const int nextDash = rest.indexOf(QLatin1Char('-'));
+        if (nextDash > 0)
+            return rest.left(nextDash);
+        return rest;
+    }
+    // Bare CUSA / PPSA / NPEA ids
+    if (pid.startsWith(QLatin1String("CUSA"), Qt::CaseInsensitive)
+        || pid.startsWith(QLatin1String("PPSA"), Qt::CaseInsensitive)
+        || pid.startsWith(QLatin1String("NPEA"), Qt::CaseInsensitive)
+        || pid.startsWith(QLatin1String("NPEB"), Qt::CaseInsensitive)
+        || pid.startsWith(QLatin1String("NPUB"), Qt::CaseInsensitive))
+        return pid;
+    return {};
+}
+
 static QString chihiroCoverUrl(const QString &product_id, const QString &locale = QStringLiteral("en-GB"))
 {
     const QString pid = product_id.trimmed();
     if (pid.isEmpty())
         return {};
-    QString country = QStringLiteral("US");
+    // Covers are most reliable on en-GB / en-US storefronts; ignore UI locale (e.g. ru-RU)
+    // which often 404s for EU/US title IDs and leaves cards on letter placeholders.
+    Q_UNUSED(locale);
+    QString country = QStringLiteral("GB");
     QString lang = QStringLiteral("en");
-    const QStringList parts = locale.toLower().split(QLatin1Char('-'));
-    if (parts.size() >= 2) {
-        lang = parts.at(0);
-        country = parts.at(1).toUpper();
-    }
     const QString prefix = pid.left(2).toUpper();
-    if (prefix == QStringLiteral("EP") || prefix == QStringLiteral("EE") || prefix == QStringLiteral("EC")) {
-        if (country == QStringLiteral("US"))
-            country = QStringLiteral("GB");
+    if (prefix == QStringLiteral("UP") || prefix == QStringLiteral("HP") || prefix == QStringLiteral("HN")) {
+        country = QStringLiteral("US");
+    }
+    // Prefer full NP product id via /container/; fall back to /titlecontainer/ + SKU.
+    if (pid.contains(QLatin1Char('-'))) {
+        return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
+            .arg(country, lang, pid);
+    }
+    const QString sku = extractTitleSku(pid);
+    if (!sku.isEmpty()) {
+        return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/%1/%2/999/%3/image?w=440&h=440")
+            .arg(country, lang, sku);
     }
     return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
         .arg(country, lang, pid);
@@ -442,6 +473,7 @@ void CloudCatalogBackend::purgeStaleBillingCatalogCaches()
         QStringLiteral("billing_catalog_v9"),
         QStringLiteral("billing_catalog_v10"),
         QStringLiteral("billing_catalog_v11"),
+        QStringLiteral("billing_catalog_v12"),
     };
     for (const QString &key : stale)
         QFile::remove(getCacheFilePath(key));
@@ -449,7 +481,7 @@ void CloudCatalogBackend::purgeStaleBillingCatalogCaches()
 
 QString CloudCatalogBackend::billingCatalogCacheKey()
 {
-    return QStringLiteral("billing_catalog_v12");
+    return QStringLiteral("billing_catalog_v13");
 }
 
 QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,

@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - feature/cloud-streaming
+      - feature/ui-redesign-taste
   pull_request:
     branches:
       - feature/cloud-streaming
+      - feature/ui-redesign-taste
 
 jobs:
   build-windows_x64-msys2:

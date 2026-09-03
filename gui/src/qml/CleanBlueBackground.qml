@@ -1,91 +1,62 @@
 import QtQuick
 import QtQuick.Effects
 
+// App shell backdrop: deep charcoal with a single teal wash (not purple mesh).
 Rectangle {
     id: root
-    color: "#000000"
-    
+    color: "#07090d"
+
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
             orientation: Gradient.Vertical
-            GradientStop { position: 0.0; color: "#1a0a25" }
-            GradientStop { position: 0.25; color: "#25154a" }
-            GradientStop { position: 0.5; color: "#3d1b65" }
-            GradientStop { position: 0.75; color: "#522c7d" }
-            GradientStop { position: 1.0; color: "#250e3a" }
+            GradientStop { position: 0.0; color: "#0b1017" }
+            GradientStop { position: 0.45; color: "#0a0e14" }
+            GradientStop { position: 1.0; color: "#06080c" }
         }
     }
-    
+
     Rectangle {
-        anchors.fill: parent
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: Qt.rgba(0.4, 0.15, 0.5, 0.3) }
-            GradientStop { position: 0.3; color: Qt.rgba(0.6, 0.15, 0.7, 0.2) }
-            GradientStop { position: 0.7; color: Qt.rgba(0.7, 0.25, 0.8, 0.15) }
-            GradientStop { position: 1.0; color: Qt.rgba(0.5, 0.1, 0.5, 0.25) }
-        }
-        opacity: 0.6
-    }
-    
-    Rectangle {
-        anchors.fill: parent
-        rotation: 15
-        gradient: Gradient {
-            orientation: Gradient.Vertical
-            GradientStop { position: 0.0; color: Qt.rgba(0.85, 0.35, 0.8, 0.1) }
-            GradientStop { position: 0.4; color: Qt.rgba(0.5, 0.3, 0.8, 0.12) }
-            GradientStop { position: 0.6; color: Qt.rgba(0.7, 0.2, 0.7, 0.1) }
-            GradientStop { position: 1.0; color: Qt.rgba(0.4, 0.1, 0.6, 0.2) }
-        }
-        opacity: 0.4
-    }
-    
-    Rectangle {
-        anchors.fill: parent
-        rotation: -12
-        gradient: Gradient {
-            orientation: Gradient.Vertical
-            GradientStop { position: 0.0; color: Qt.rgba(0.4, 0.25, 0.7, 0.08) }
-            GradientStop { position: 0.3; color: Qt.rgba(0.75, 0.25, 0.75, 0.12) }
-            GradientStop { position: 0.7; color: Qt.rgba(0.5, 0.3, 0.8, 0.06) }
-            GradientStop { position: 1.0; color: Qt.rgba(0.6, 0.2, 0.7, 0.1) }
-        }
-        opacity: 0.3
-    }
-    
-    Rectangle {
-        anchors.centerIn: parent
-        anchors.horizontalCenterOffset: -width * 0.3
-        anchors.verticalCenterOffset: -height * 0.2
-        width: parent.width * 0.8
-        height: parent.height * 0.6
-        radius: width * 0.5
-        color: Qt.rgba(0.5, 0.5, 0.85, 0.06)
-        
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.rightMargin: -width * 0.35
+        anchors.topMargin: -height * 0.25
+        width: parent.width * 0.55
+        height: parent.height * 0.45
+        radius: width
+        color: Qt.rgba(0.18, 0.77, 0.71, 0.07)
+
         layer.enabled: true
         layer.effect: MultiEffect {
             blurEnabled: true
             blurMax: 64
-            blur: 0.8
+            blur: 1.0
         }
     }
-    
+
     Rectangle {
-        anchors.centerIn: parent
-        anchors.horizontalCenterOffset: width * 0.4
-        anchors.verticalCenterOffset: height * 0.3
-        width: parent.width * 0.6
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: -width * 0.3
+        anchors.bottomMargin: -height * 0.2
+        width: parent.width * 0.5
         height: parent.height * 0.4
-        radius: width * 0.5
-        color: Qt.rgba(0.85, 0.3, 0.85, 0.06)
-        
+        radius: width
+        color: Qt.rgba(0.35, 0.45, 0.55, 0.05)
+
         layer.enabled: true
         layer.effect: MultiEffect {
             blurEnabled: true
             blurMax: 48
             blur: 0.9
         }
+    }
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: 1
+        color: Qt.rgba(0.18, 0.77, 0.71, 0.12)
     }
 }

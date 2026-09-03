@@ -16,6 +16,12 @@ Dialog {
     y: Math.round((root.height - height) / 2)
     modal: true
     Material.roundedScale: Material.MediumScale
+    background: Rectangle {
+        color: "#121820"
+        radius: 12
+        border.width: 1
+        border.color: Qt.rgba(0.18, 0.77, 0.71, 0.35)
+    }
     onOpened: label.forceActiveFocus(Qt.TabFocusReason)
     onAccepted: {
         newDialogOpen = true;
@@ -59,7 +65,7 @@ Dialog {
             spacing: 20
 
             Button {
-                text: qsTr("Yes")
+                text: qsTr("Да")
                 Material.background: Material.accent
                 flat: true
                 leftPadding: 50
@@ -81,7 +87,7 @@ Dialog {
 
             Button {
                 Material.background: Material.accent
-                text: qsTr("No")
+                text: qsTr("Нет")
                 flat: true
                 leftPadding: 50
                 onClicked: dialog.reject()

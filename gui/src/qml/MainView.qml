@@ -73,38 +73,61 @@ Pane {
             left: parent.left
             right: parent.right
         }
-        height: 80
+        height: 64
+        background: Rectangle {
+            color: Qt.rgba(0.05, 0.07, 0.10, 0.94)
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: Qt.rgba(0.18, 0.77, 0.71, 0.18)
+            }
+        }
 
         RowLayout {
             anchors {
                 fill: parent
-                leftMargin: 10
-                rightMargin: 10
+                leftMargin: 12
+                rightMargin: 12
+            }
+            spacing: 6
+
+            Button {
+                Layout.fillHeight: true
+                Layout.preferredWidth: 72
+                flat: true
+                text: "×"
+                font.pixelSize: 36
+                focusPolicy: Qt.NoFocus
+                onClicked: Qt.quit()
+                Material.roundedScale: Material.SmallScale
+                Material.foreground: "#e8eef4"
             }
 
             Button {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 100
                 flat: true
-                text: "×"
-                font.pixelSize: 60
-                focusPolicy: Qt.NoFocus
-                onClicked: Qt.quit()
-                Material.roundedScale: Material.SmallScale
-            }
-
-            Button {
-                Layout.fillHeight: true
-                Layout.preferredWidth: 120
-                flat: true
                 text: qsTr("Выйти")
                 focusPolicy: Qt.NoFocus
                 visible: !!Chiaki.settings.jwtToken
                 onClicked: Chiaki.logoutFourcloud()
                 Material.roundedScale: Material.SmallScale
+                Material.foreground: "#8b9aab"
             }
 
             Item { Layout.fillWidth: true }
+
+            Label {
+                text: "4cloud"
+                font.pixelSize: 12
+                font.letterSpacing: 2.5
+                font.capitalization: Font.AllUppercase
+                color: "#2ec4b6"
+                opacity: 0.85
+                Layout.rightMargin: 8
+            }
 
             Button {
                 Layout.fillHeight: true
@@ -117,24 +140,23 @@ Pane {
                 Material.roundedScale: Material.SmallScale
             }
 
-            Item { Layout.preferredWidth: 10 }
-
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 280
+                Layout.preferredWidth: 200
                 flat: true
                 text: "Добавить конфиг"
                 focusPolicy: Qt.NoFocus
                 onClicked: Chiaki.settings.importSettings()
                 Material.roundedScale: Material.SmallScale
+                Material.foreground: "#e8eef4"
                 Image {
                     anchors {
                         right: parent.right
                         verticalCenter: parent.verticalCenter
-                        leftMargin: 12
+                        rightMargin: 10
                     }
-                    width: 28
-                    height: 28
+                    width: 22
+                    height: 22
                     sourceSize: Qt.size(width, height)
                     source: "qrc:/icons/l3.svg"
                 }
@@ -142,41 +164,34 @@ Pane {
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 400
+                Layout.preferredWidth: 220
                 flat: true
                 text: "Обновить PSN хосты"
                 icon.source: "qrc:/icons/r1.svg"
                 focusPolicy: Qt.NoFocus
                 onClicked: Chiaki.refreshPsnToken();
                 Material.roundedScale: Material.SmallScale
+                Material.foreground: "#e8eef4"
                 visible: Chiaki.settings.psnAuthToken
             }
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 400
-                flat: true
-                focusPolicy: Qt.NoFocus
-                Material.roundedScale: Material.SmallScale
-                visible: !Chiaki.settings.psnAuthToken
-            }
-
-            Button {
-                Layout.fillHeight: true
-                Layout.preferredWidth: 300
+                Layout.preferredWidth: 180
                 flat: true
                 text: "Добавить хост"
                 focusPolicy: Qt.NoFocus
                 onClicked: root.showManualHostDialog()
                 Material.roundedScale: Material.SmallScale
+                Material.foreground: "#e8eef4"
                 Image {
                     anchors {
                         left: parent.left
                         verticalCenter: parent.verticalCenter
                         leftMargin: 12
                     }
-                    width: 28
-                    height: 28
+                    width: 22
+                    height: 22
                     sourceSize: Qt.size(width, height)
                     source: "qrc:/icons/r3.svg"
                 }
@@ -185,11 +200,11 @@ Pane {
             Button {
                 id: settingsButton
                 Layout.fillHeight: true
-                Layout.preferredWidth: 100
+                Layout.preferredWidth: 72
                 flat: true
                 icon.source: "qrc:/icons/settings-20px.svg";
-                icon.width: 50
-                icon.height: 50
+                icon.width: 36
+                icon.height: 36
                 focusPolicy: Qt.NoFocus
                 onClicked: root.showSettingsDialog()
                 Material.roundedScale: Material.SmallScale
@@ -204,8 +219,26 @@ Pane {
             left: parent.left
             right: parent.right
         }
-        TabButton { text: qsTr("Remote Play") }
-        TabButton { text: qsTr("Облако") }
+        background: Rectangle {
+            color: "#0a0e14"
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#243041"
+            }
+        }
+        TabButton {
+            text: qsTr("Remote Play")
+            font.pixelSize: 14
+            font.weight: Font.DemiBold
+        }
+        TabButton {
+            text: qsTr("Облако")
+            font.pixelSize: 14
+            font.weight: Font.DemiBold
+        }
         onCurrentIndexChanged: {
             if (currentIndex === 1)
                 consolePane.cloudPlayPinned = true

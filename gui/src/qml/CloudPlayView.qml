@@ -451,7 +451,7 @@ Pane {
         }
         height: 52
         
-        color: Qt.rgba(10/255, 20/255, 38/255, 0.95)
+        color: Qt.rgba(7/255, 9/255, 13/255, 0.95)
         
         // Subtle bottom border
         Rectangle {
@@ -461,7 +461,7 @@ Pane {
                 bottom: parent.bottom
             }
             height: 1
-            color: Qt.rgba(0, 212/255, 255/255, 0.2)
+            color: Qt.rgba(46/255, 196/255, 182/255, 0.2)
         }
         
         RowLayout {
@@ -482,8 +482,8 @@ Pane {
 
                 Rectangle {
                     anchors.fill: parent
-                    color: filterToggle.activeFocus ? Qt.rgba(0, 212/255, 255/255, 0.15) : "transparent"
-                    border.color: filterToggle.activeFocus ? "#00d4ff" : "transparent"
+                    color: filterToggle.activeFocus ? Qt.rgba(46/255, 196/255, 182/255, 0.15) : "transparent"
+                    border.color: filterToggle.activeFocus ? "#2ec4b6" : "transparent"
                     border.width: filterToggle.activeFocus ? 1 : 0
                     radius: 4
                 }
@@ -493,7 +493,7 @@ Pane {
                     anchors.centerIn: parent
                     spacing: 6
                     property bool filtersActive: activeTagFilters && activeTagFilters.length > 0
-                    property color tint: filtersActive ? "#00d4ff" : Qt.rgba(255, 255, 255, 0.6)
+                    property color tint: filtersActive ? "#2ec4b6" : Qt.rgba(255, 255, 255, 0.6)
 
                     // Funnel / "decrease" filter glyph (matches iOS line.3.horizontal.decrease)
                     Canvas {
@@ -550,7 +550,7 @@ Pane {
                 Layout.preferredWidth: searchContainer.activeFocus || searchField.activeFocus || searchField.text.length > 0 ? 360 : 36
                 radius: 18
                 color: searchContainer.activeFocus || searchField.activeFocus ? Qt.rgba(255, 255, 255, 0.15) : Qt.rgba(255, 255, 255, 0.1)
-                border.color: searchContainer.activeFocus || searchField.activeFocus ? "#00d4ff" : Qt.rgba(255, 255, 255, 0.2)
+                border.color: searchContainer.activeFocus || searchField.activeFocus ? "#2ec4b6" : Qt.rgba(255, 255, 255, 0.2)
                 border.width: searchContainer.activeFocus || searchField.activeFocus ? 2 : 1
                 focusPolicy: Qt.StrongFocus
                 // Keep search OUT of the automatic focus chain so it never grabs default
@@ -621,7 +621,7 @@ Pane {
                             anchors.fill: parent
                             onPaint: {
                                 var ctx = getContext("2d");
-                                ctx.strokeStyle = searchField.activeFocus ? "#00d4ff" : Qt.rgba(255, 255, 255, 0.7);
+                                ctx.strokeStyle = searchField.activeFocus ? "#2ec4b6" : Qt.rgba(255, 255, 255, 0.7);
                                 ctx.lineWidth = 2;
                                 ctx.lineCap = "round";
                                 
@@ -747,9 +747,9 @@ Pane {
                     }
 
                     background: Rectangle {
-                        color: Qt.rgba(10/255, 20/255, 38/255, 0.98)
+                        color: Qt.rgba(7/255, 9/255, 13/255, 0.98)
                         radius: 12
-                        border.color: "#00d4ff"
+                        border.color: "#2ec4b6"
                         border.width: 2
                     }
 
@@ -838,8 +838,8 @@ Pane {
 
                     Rectangle {
                         anchors.fill: parent
-                        color: favoritesToggle.activeFocus ? Qt.rgba(0, 212/255, 255/255, 0.15) : "transparent"
-                        border.color: favoritesToggle.activeFocus ? "#00d4ff" : "transparent"
+                        color: favoritesToggle.activeFocus ? Qt.rgba(46/255, 196/255, 182/255, 0.15) : "transparent"
+                        border.color: favoritesToggle.activeFocus ? "#2ec4b6" : "transparent"
                         border.width: favoritesToggle.activeFocus ? 1 : 0
                         radius: 4
                     }
@@ -910,8 +910,8 @@ Pane {
 
                     Rectangle {
                         anchors.fill: parent
-                        color: refreshButton.activeFocus ? Qt.rgba(0, 212/255, 255/255, 0.15) : "transparent"
-                        border.color: refreshButton.activeFocus ? "#00d4ff" : "transparent"
+                        color: refreshButton.activeFocus ? Qt.rgba(46/255, 196/255, 182/255, 0.15) : "transparent"
+                        border.color: refreshButton.activeFocus ? "#2ec4b6" : "transparent"
                         border.width: refreshButton.activeFocus ? 1 : 0
                         radius: 4
                     }
@@ -949,8 +949,8 @@ Pane {
 
                     Rectangle {
                         anchors.fill: parent
-                        color: sortToggle.activeFocus ? Qt.rgba(0, 212/255, 255/255, 0.15) : "transparent"
-                        border.color: sortToggle.activeFocus ? "#00d4ff" : "transparent"
+                        color: sortToggle.activeFocus ? Qt.rgba(46/255, 196/255, 182/255, 0.15) : "transparent"
+                        border.color: sortToggle.activeFocus ? "#2ec4b6" : "transparent"
                         border.width: sortToggle.activeFocus ? 1 : 0
                         radius: 4
                     }
@@ -967,7 +967,7 @@ Pane {
                             onPaint: {
                                 var ctx = getContext("2d");
                                 ctx.reset();
-                                ctx.strokeStyle = "#00d4ff";
+                                ctx.strokeStyle = "#2ec4b6";
                                 ctx.lineWidth = 1.8; ctx.lineCap = "round"; ctx.lineJoin = "round";
                                 ctx.beginPath();
                                 ctx.moveTo(5, 15); ctx.lineTo(5, 3);
@@ -986,7 +986,7 @@ Pane {
                             text: sortState === 1 ? qsTr("А → Я") : (sortState === 2 ? qsTr("Я → А") : qsTr("С обложкой"))
                             font.pixelSize: 13
                             font.weight: Font.Medium
-                            color: "#00d4ff"
+                            color: "#2ec4b6"
                         }
                     }
 
@@ -1049,25 +1049,16 @@ Pane {
         anchors.topMargin: 15
         spacing: 0
         
-        // Region-group fallback banner (yellow).
-        // Only a genuine "region has no native cloud" signal: suppressed when an auth error is
-        // present, because nativeMode=false is then just a side-effect of the failed login (we
-        // never determined the region) -- the red expired banner below is the real reason.
+        // Region fallback banner hidden for 4cloud rental clients (not actionable).
         Rectangle {
             id: fallbackBanner
             Layout.fillWidth: true
-            Layout.preferredHeight: (!catalogNativeMode && authErrorMessage.length === 0 && !isLoading) ? 56 : 0
-            // Gate on !isLoading: catalogNativeMode holds a stale persisted value mid-fetch, so the
-            // banner must only reflect a COMPLETED fetch (otherwise it flashes while games load).
-            visible: !catalogNativeMode && authErrorMessage.length === 0 && !isLoading
+            Layout.preferredHeight: 0
+            visible: false
             color: Qt.rgba(255/255, 193/255, 7/255, 0.2)
             border.color: "#FFC107"
             border.width: 2
             clip: true
-
-            Behavior on Layout.preferredHeight {
-                NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
-            }
 
             Label {
                 anchors {
@@ -1170,7 +1161,7 @@ Pane {
 
                 Rectangle {
                     anchors.fill: parent
-                    color: Qt.rgba(10/255, 20/255, 38/255, 0.72)
+                    color: Qt.rgba(7/255, 9/255, 13/255, 0.72)
                 }
 
                 Column {
@@ -1548,23 +1539,6 @@ Pane {
             color: "#FFC107"
             wrapMode: Text.Wrap
             text: qsTr("Showing the first %1 games. Use search or filters to narrow the list.").arg(maxGridGames)
-        }
-
-        Label {
-            Layout.fillWidth: true
-            Layout.leftMargin: 20
-            Layout.rightMargin: 20
-            Layout.bottomMargin: 8
-            opacity: 0.55
-            font.pixelSize: 11
-            color: "white"
-            wrapMode: Text.Wrap
-            text: {
-                let t = qsTr("Лог облака: %1").arg(Chiaki.cloudLogPath || qsTr("не найден"));
-                if (Chiaki.cloudLogPathAlt && Chiaki.cloudLogPathAlt.length > 0)
-                    t += "\n" + qsTr("Запасной лог: %1").arg(Chiaki.cloudLogPathAlt);
-                return t;
-            }
         }
         
     }
