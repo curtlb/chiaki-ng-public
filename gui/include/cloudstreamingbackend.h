@@ -95,6 +95,7 @@ private slots:
 private:
     void setAllocationProgress(const QString &message);
     void setBillingStatus(const QString &message, int minutes_left = -1);
+    void setBillingMinutesOnly(int minutes_left);
     void startBillingHeartbeat();
     void stopBillingHeartbeat();
     bool runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error);

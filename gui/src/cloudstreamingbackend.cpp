@@ -75,7 +75,7 @@ CloudStreamingBackend::CloudStreamingBackend(Settings *settings, QObject *parent
     , settings(settings)
     , allocation_progress("")
 {
-    billing_heartbeat_timer.setInterval(45000);
+    billing_heartbeat_timer.setInterval(15000);
     connect(&billing_heartbeat_timer, &QTimer::timeout, this, &CloudStreamingBackend::onBillingHeartbeatTick);
 }
 
@@ -97,6 +97,12 @@ void CloudStreamingBackend::setBillingStatus(const QString &message, int minutes
     }
     if(changed)
         emit billingStatusChanged();
+}
+
+void CloudStreamingBackend::setBillingMinutesOnly(int minutes_left)
+{
+    const int mins = qMax(0, minutes_left);
+    setBillingStatus(tr("Осталось %1 мин").arg(mins), mins);
 }
 
 void CloudStreamingBackend::startBillingHeartbeat()
@@ -130,10 +136,7 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
     }
     noteBillingIdentity(settings, parent(), res.data);
     const int mins = billingMinutesFromResponse(res.data);
-    QString msg = res.ui_message;
-    if(msg.isEmpty())
-        msg = tr("Оплаченное время: %1 мин").arg(mins);
-    setBillingStatus(msg, mins);
+    setBillingMinutesOnly(mins);
     if(res.data.value(QStringLiteral("should_renew")).toBool()) {
         const QString email = settings->GetFourCloudEmail();
         setAllocationProgress(tr("Списание за следующий час…"));
@@ -143,8 +146,7 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
             email,
             billing_session_token);
         if(renew_res.ok)
-            setBillingStatus(renew_res.ui_message.isEmpty() ? tr("Сессия продлена на 1 час") : renew_res.ui_message,
-                billingMinutesFromResponse(renew_res.data));
+            setBillingMinutesOnly(billingMinutesFromResponse(renew_res.data));
         else
             setBillingStatus(renew_res.ui_message.isEmpty() ? renew_res.error : renew_res.ui_message, mins);
     }
@@ -214,8 +216,7 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
     if (billing_store_lang.isEmpty())
         billing_store_lang = QStringLiteral("en");
     billing_payment_pending = start.data.value(QStringLiteral("payment_pending")).toBool(false);
-    setBillingStatus(start.ui_message,
-        billingMinutesFromResponse(start.data));
+    setBillingMinutesOnly(billingMinutesFromResponse(start.data));
     setAllocationProgress(start.ui_message);
     if(!billing_payment_pending)
         startBillingHeartbeat();
@@ -238,8 +239,7 @@ bool CloudStreamingBackend::confirmBillingCharge(QString *out_error)
         return false;
     }
     billing_payment_pending = false;
-    setBillingStatus(res.ui_message.isEmpty() ? tr("Оплата прошла") : res.ui_message,
-        billingMinutesFromResponse(res.data));
+    setBillingMinutesOnly(billingMinutesFromResponse(res.data));
     startBillingHeartbeat();
     return true;
 }
@@ -707,6 +707,8 @@ void CloudStreamingBackend::finishCloudSession(QString serviceType, QString serv
         emit sessionCreated(session);
 
         setAllocationProgress("");
+        if(billing_minutes_left > 0)
+            setBillingMinutesOnly(billing_minutes_left);
         session->Start();
         qInfo() << "StreamSession Start() called (connection is asynchronous)";
 

@@ -11,6 +11,11 @@ Pane {
     Material.theme: Material.Dark
     Material.accent: "#2ec4b6"
 
+    // Saved JWT: Main.qml shows LoginView while checkJwtToken() runs.
+    readonly property bool hasSavedToken: !!(Chiaki.settings.jwtToken && Chiaki.settings.jwtToken.length > 0)
+    property bool authenticating: false
+    property bool tokenChecking: false
+
     CleanBlueBackground {
         anchors.fill: parent
         z: -1
@@ -49,7 +54,7 @@ Pane {
 
             Label {
                 Layout.alignment: Qt.AlignHCenter
-                text: "Авторизация"
+                text: tokenChecking ? qsTr("Вход…") : qsTr("Авторизация")
                 font.pixelSize: 28
                 font.weight: Font.DemiBold
                 color: "#e8eef4"
@@ -58,9 +63,14 @@ Pane {
             Label {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.bottomMargin: 8
-                text: "Войдите, чтобы запускать облачные игры"
+                text: tokenChecking
+                      ? qsTr("Проверяем сохранённый вход — подождите")
+                      : qsTr("Войдите, чтобы запускать облачные игры")
                 font.pixelSize: 13
                 color: "#8b9aab"
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                Layout.fillWidth: true
             }
 
             TextField {
@@ -69,7 +79,9 @@ Pane {
                 Layout.preferredHeight: 44
                 placeholderText: "Email"
                 text: ""
-                focus: true
+                focus: !tokenChecking
+                enabled: !authenticating
+                opacity: enabled ? 1.0 : 0.45
                 leftPadding: 14
                 rightPadding: 14
                 Material.accent: Material.accent
@@ -89,6 +101,8 @@ Pane {
                 Layout.preferredHeight: 44
                 placeholderText: "Пароль"
                 echoMode: TextField.Password
+                enabled: !authenticating
+                opacity: enabled ? 1.0 : 0.45
                 leftPadding: 14
                 rightPadding: 14
                 Material.accent: Material.accent
@@ -107,15 +121,16 @@ Pane {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 48
                 Layout.topMargin: 6
-                text: "Войти"
+                text: tokenChecking ? qsTr("Проверка входа…") : qsTr("Войти")
                 font.pixelSize: 15
                 font.weight: Font.DemiBold
-                enabled: emailField.text.length > 0 && passwordField.text.length > 0 && !authenticating
+                enabled: !authenticating && emailField.text.length > 0 && passwordField.text.length > 0
                 Material.background: enabled ? "#2ec4b6" : "#1a222d"
                 Material.foreground: enabled ? "#071210" : "#5c6b7c"
                 Material.roundedScale: Material.SmallScale
                 onClicked: {
                     authenticating = true
+                    tokenChecking = false
                     errorText.text = ""
                     Chiaki.authenticate(emailField.text, passwordField.text)
                 }
@@ -140,26 +155,58 @@ Pane {
                 running: authenticating
                 Material.accent: "#2ec4b6"
             }
+
+            Label {
+                Layout.alignment: Qt.AlignHCenter
+                visible: tokenChecking
+                text: qsTr("Не вводите логин и пароль — авторизация уже идёт")
+                font.pixelSize: 12
+                color: "#2ec4b6"
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                Layout.fillWidth: true
+            }
         }
     }
 
-    property bool authenticating: false
+    Component.onCompleted: {
+        if (hasSavedToken) {
+            tokenChecking = true
+            authenticating = true
+            errorText.text = ""
+        }
+    }
 
     Connections {
         target: Chiaki
 
         function onAuthenticationSuccess() {
             authenticating = false
+            tokenChecking = false
         }
 
         function onAuthenticationError(errorMessage) {
             authenticating = false
+            tokenChecking = false
             errorText.text = errorMessage
+        }
+
+        function onJwtTokenValid() {
+            authenticating = false
+            tokenChecking = false
+        }
+
+        function onJwtTokenExpired() {
+            authenticating = false
+            tokenChecking = false
+            if (!errorText.text)
+                errorText.text = qsTr("Сессия истекла — войдите снова")
         }
 
         function onSubscriptionExpired(message) {
             authenticating = false
-            errorText.text = message
+            tokenChecking = false
+            errorText.text = message || qsTr("Нет активной подписки")
         }
     }
 }

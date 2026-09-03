@@ -207,22 +207,16 @@ Item {
         anchors {
             top: parent.top
             left: parent.left
-            right: parent.right
             margins: 12
         }
         z: 50
         padding: 8
-        visible: !sessionError && (Chiaki.cloudStreaming.billingStatusMessage || "").length > 0
-        wrapMode: Text.WordWrap
-        color: "#ffb347"
+        // Only remaining minutes — no stale "starting game" copy.
+        visible: !sessionError && !sessionLoading && Chiaki.cloudStreaming.billingMinutesLeft > 0
+        color: "#e8eef4"
         font.pixelSize: 14
-        text: {
-            var msg = Chiaki.cloudStreaming.billingStatusMessage || "";
-            var mins = Chiaki.cloudStreaming.billingMinutesLeft;
-            if (mins > 0 && msg.indexOf("мин") < 0)
-                return msg + " (" + mins + " " + qsTr("мин") + ")";
-            return msg;
-        }
+        font.weight: Font.DemiBold
+        text: qsTr("Осталось %1 мин").arg(Chiaki.cloudStreaming.billingMinutesLeft)
         background: Rectangle {
             color: "#88000000"
             radius: 8
