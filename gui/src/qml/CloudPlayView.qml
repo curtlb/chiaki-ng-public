@@ -28,6 +28,7 @@ Pane {
     property var recentGames: []
     property var currentPageGames: []
     property bool isLoading: false
+    property bool isSearching: false
     property string searchQuery: ""
     property string authErrorMessage: ""
     property string fallbackRegion: ""
@@ -100,9 +101,15 @@ Pane {
 
     Timer {
         id: filterDebounceTimer
-        interval: 250
+        interval: 400
         repeat: false
-        onTriggered: applySearchFilter()
+        onTriggered: {
+            // Yield so the search spinner paints before a heavy catalog scan.
+            Qt.callLater(() => {
+                applySearchFilter();
+                isSearching = false;
+            });
+        }
     }
 
     // Account/profile switch, NPSSO change, or cloud-language change wipes the catalog cache in the
@@ -421,7 +428,18 @@ Pane {
     }
     
     // Watch for search query changes (debounced — filter runs in C++)
-    onSearchQueryChanged: filterDebounceTimer.restart()
+    onSearchQueryChanged: {
+        const q = (searchQuery || "").trim();
+        if (q.length > 0) {
+            isSearching = true;
+            filterDebounceTimer.restart();
+        } else {
+            // Clearing search: restore owned-only grid immediately.
+            filterDebounceTimer.stop();
+            isSearching = false;
+            applySearchFilter();
+        }
+    }
     
     // Single unified header - production quality design
     Rectangle {
@@ -627,7 +645,7 @@ Pane {
                         Layout.alignment: Qt.AlignVCenter
                         visible: searchField.activeFocus || searchField.text.length > 0
                         opacity: visible ? 1 : 0
-                        placeholderText: qsTr("Search games...")
+                        placeholderText: qsTr("Поиск по каталогу…")
                         font.pixelSize: 14
                         color: "white"
                         selectByMouse: true
@@ -998,18 +1016,24 @@ Pane {
                 // Game count label
                 Label {
                     text: {
+                        if (isSearching)
+                            return qsTr("Поиск…");
                         if (searchQuery && searchQuery.trim() !== "") {
-                            return filteredGameCount > 0 ? qsTr("%1 of %2").arg(filteredGameCount).arg(catalogTotalCount) : qsTr("No games");
+                            return filteredGameCount > 0
+                                ? qsTr("%1 из %2").arg(filteredGameCount).arg(catalogTotalCount)
+                                : qsTr("Ничего не найдено");
                         } else if (gridTruncated) {
-                            return qsTr("%1 of %2").arg(currentPageGames.length).arg(filteredGameCount);
+                            return qsTr("%1 из %2").arg(currentPageGames.length).arg(filteredGameCount);
                         } else {
-                            return filteredGameCount > 0 ? qsTr("%1 games").arg(filteredGameCount) : qsTr("No games");
+                            return filteredGameCount > 0
+                                ? qsTr("%1 купленных").arg(filteredGameCount)
+                                : qsTr("Нет купленных игр");
                         }
                     }
                     font.pixelSize: 12
                     opacity: 0.75
                     color: "white"
-                    Layout.preferredWidth: 80
+                    Layout.preferredWidth: 110
                     Layout.leftMargin: -6
                     horizontalAlignment: Text.AlignRight
                 }
@@ -1131,102 +1155,145 @@ Pane {
                 running: isLoading
             }
         }
-        
-        // Games grid (single Flickable — mouse wheel scrolls the whole catalog)
-        Flickable {
-            id: catalogFlickable
+
+        // Catalog area: owned grid by default; search overlay while scanning full catalog
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            contentWidth: width
-            contentHeight: catalogColumn.implicitHeight
-            focus: false
+            visible: !isLoading
 
-            ScrollBar.vertical: ScrollBar {
-                policy: ScrollBar.AsNeeded
-            }
+            // Search-in-progress overlay (full catalog scan can take a moment)
+            Item {
+                anchors.fill: parent
+                visible: isSearching
+                z: 2
 
-            WheelHandler {
-                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                onWheel: (event) => {
-                    if (event.angleDelta.y === 0)
-                        return;
-                    const step = event.angleDelta.y * 0.85;
-                    catalogFlickable.flick(0, -step);
-                    event.accepted = true;
+                Rectangle {
+                    anchors.fill: parent
+                    color: Qt.rgba(10/255, 20/255, 38/255, 0.72)
                 }
-            }
 
-            Column {
-                id: catalogColumn
-                width: catalogFlickable.width
-                spacing: 12
-
-                // Recently played on this profile
                 Column {
-                    width: parent.width
-                    visible: recentGames.length > 0 && !isLoading
-                    spacing: 8
+                    anchors.centerIn: parent
+                    spacing: 16
+
+                    BusyIndicator {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        running: isSearching
+                    }
 
                     Label {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 20
-                        text: qsTr("Недавние")
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: qsTr("Идёт поиск по каталогу…")
+                        color: "white"
                         font.pixelSize: 16
                         font.bold: true
-                        color: "white"
                     }
 
-                    ListView {
-                        id: recentList
-                        width: parent.width
-                        height: 260
-                        orientation: ListView.Horizontal
-                        spacing: 12
-                        leftMargin: 20
-                        rightMargin: 20
-                        clip: true
-                        model: recentGames
-                        delegate: CloudGameCard {
-                            required property int index
-                            required property var modelData
-                            width: 180
-                            height: 250
-                            gameData: modelData
-                            qrCodeDialog: root.qrCodeDialogRef
-                            onStreamGame: (streamingId, platform, serviceType) => {
-                                root.launchCloudGameFromCard(modelData, streamingId, platform, serviceType);
-                            }
-                            onToggleFavorite: (productId) => root.toggleFavorite(productId)
-                        }
+                    Label {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: qsTr("Это может занять несколько секунд")
+                        color: Qt.rgba(1, 1, 1, 0.7)
+                        font.pixelSize: 13
+                    }
+                }
+            }
+        
+            // Games grid (single Flickable — mouse wheel scrolls the whole catalog)
+            Flickable {
+                id: catalogFlickable
+                anchors.fill: parent
+                visible: !isSearching
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                contentWidth: width
+                contentHeight: catalogColumn.implicitHeight
+                focus: false
+
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                }
+
+                WheelHandler {
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                    onWheel: (event) => {
+                        if (event.angleDelta.y === 0)
+                            return;
+                        const step = event.angleDelta.y * 0.85;
+                        catalogFlickable.flick(0, -step);
+                        event.accepted = true;
                     }
                 }
 
-                GridView {
-                    id: gamesGrid
+                Column {
+                    id: catalogColumn
+                    width: catalogFlickable.width
+                    spacing: 12
 
-                    property int gridAvailWidth: catalogColumn.width - 40
-                    property int _layoutVersion: 0
-                    
-                    width: {
-                        let modelCount = count;
-                        let version = _layoutVersion;
-                        let availableWidth = gridAvailWidth;
-                        let cols = Math.floor(availableWidth / cellWidth);
-                        if (cols === 0) cols = 1;
-                        return Math.min(cols * cellWidth, availableWidth);
+                    // Recently played on this profile
+                    Column {
+                        width: parent.width
+                        visible: recentGames.length > 0 && !isLoading
+                        spacing: 8
+
+                        Label {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 20
+                            text: qsTr("Недавние")
+                            font.pixelSize: 16
+                            font.bold: true
+                            color: "white"
+                        }
+
+                        ListView {
+                            id: recentList
+                            width: parent.width
+                            height: 260
+                            orientation: ListView.Horizontal
+                            spacing: 12
+                            leftMargin: 20
+                            rightMargin: 20
+                            clip: true
+                            model: recentGames
+                            delegate: CloudGameCard {
+                                required property int index
+                                required property var modelData
+                                width: 180
+                                height: 250
+                                gameData: modelData
+                                qrCodeDialog: root.qrCodeDialogRef
+                                onStreamGame: (streamingId, platform, serviceType) => {
+                                    root.launchCloudGameFromCard(modelData, streamingId, platform, serviceType);
+                                }
+                                onToggleFavorite: (productId) => root.toggleFavorite(productId)
+                            }
+                        }
                     }
-                    height: {
-                        let cols = Math.max(1, Math.floor(gridAvailWidth / cellWidth));
-                        let rows = Math.ceil(Math.max(count, 1) / cols);
-                        return rows * cellHeight + 20;
-                    }
-                    x: {
-                        let availableWidth = gridAvailWidth;
-                        let gridWidth = width;
-                        return Math.max(20, (catalogColumn.width - gridWidth) / 2);
-                    }
+
+                    GridView {
+                        id: gamesGrid
+
+                        property int gridAvailWidth: catalogColumn.width - 40
+                        property int _layoutVersion: 0
+                        
+                        width: {
+                            let modelCount = count;
+                            let version = _layoutVersion;
+                            let availableWidth = gridAvailWidth;
+                            let cols = Math.floor(availableWidth / cellWidth);
+                            if (cols === 0) cols = 1;
+                            return Math.min(cols * cellWidth, availableWidth);
+                        }
+                        height: {
+                            let cols = Math.max(1, Math.floor(gridAvailWidth / cellWidth));
+                            let rows = Math.ceil(Math.max(count, 1) / cols);
+                            return rows * cellHeight + 20;
+                        }
+                        x: {
+                            let availableWidth = gridAvailWidth;
+                            let gridWidth = width;
+                            return Math.max(20, (catalogColumn.width - gridWidth) / 2);
+                        }
                     
                     Connections {
                         target: catalogColumn
@@ -1468,13 +1535,14 @@ Pane {
                     }
                 }
             }
+            }
         }
 
         Label {
             Layout.fillWidth: true
             Layout.leftMargin: 20
             Layout.rightMargin: 20
-            visible: gridTruncated && !isLoading
+            visible: gridTruncated && !isLoading && !isSearching
             opacity: 0.75
             font.pixelSize: 12
             color: "#FFC107"

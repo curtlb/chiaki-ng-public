@@ -475,6 +475,9 @@ QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, cons
     for (const CatalogDisplayRow &row : catalogDisplayRows_) {
         if (billingRental && !isBillingRentalPlayableRow(row))
             continue;
+        // Default grid: account-owned titles only. Full rental catalog is search-only.
+        if (billingRental && !filterSearch && row.category != QLatin1String("owned"))
+            continue;
         if (filterCategories) {
             bool category_ok = false;
             for (const QString &cat : categories) {
