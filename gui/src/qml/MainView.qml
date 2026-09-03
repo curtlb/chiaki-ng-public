@@ -142,58 +142,83 @@ Pane {
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 200
+                Layout.preferredWidth: 210
                 flat: true
-                text: "Добавить конфиг"
                 focusPolicy: Qt.NoFocus
                 onClicked: Chiaki.settings.importSettings()
                 Material.roundedScale: Material.SmallScale
                 Material.foreground: "#e8eef4"
-                Image {
-                    anchors {
-                        right: parent.right
-                        verticalCenter: parent.verticalCenter
-                        rightMargin: 10
+                contentItem: RowLayout {
+                    spacing: 10
+                    anchors.centerIn: parent
+                    Label {
+                        text: "Добавить конфиг"
+                        color: parent.parent.Material.foreground
+                        font: parent.parent.font
+                        Layout.alignment: Qt.AlignVCenter
                     }
-                    width: 22
-                    height: 22
-                    sourceSize: Qt.size(width, height)
-                    source: "qrc:/icons/l3.svg"
+                    Image {
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 22
+                        Layout.alignment: Qt.AlignVCenter
+                        sourceSize: Qt.size(22, 22)
+                        source: "qrc:/icons/l3.svg"
+                    }
                 }
             }
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 220
+                Layout.preferredWidth: 230
                 flat: true
-                text: "Обновить PSN хосты"
-                icon.source: "qrc:/icons/r1.svg"
                 focusPolicy: Qt.NoFocus
                 onClicked: Chiaki.refreshPsnToken();
                 Material.roundedScale: Material.SmallScale
                 Material.foreground: "#e8eef4"
                 visible: Chiaki.settings.psnAuthToken
+                contentItem: RowLayout {
+                    spacing: 10
+                    anchors.centerIn: parent
+                    Image {
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 22
+                        Layout.alignment: Qt.AlignVCenter
+                        sourceSize: Qt.size(22, 22)
+                        source: "qrc:/icons/r1.svg"
+                    }
+                    Label {
+                        text: "Обновить PSN хосты"
+                        color: parent.parent.Material.foreground
+                        font: parent.parent.font
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                }
             }
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 180
+                Layout.preferredWidth: 190
                 flat: true
-                text: "Добавить хост"
                 focusPolicy: Qt.NoFocus
                 onClicked: root.showManualHostDialog()
                 Material.roundedScale: Material.SmallScale
                 Material.foreground: "#e8eef4"
-                Image {
-                    anchors {
-                        left: parent.left
-                        verticalCenter: parent.verticalCenter
-                        leftMargin: 12
+                contentItem: RowLayout {
+                    spacing: 10
+                    anchors.centerIn: parent
+                    Image {
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 22
+                        Layout.alignment: Qt.AlignVCenter
+                        sourceSize: Qt.size(22, 22)
+                        source: "qrc:/icons/r3.svg"
                     }
-                    width: 22
-                    height: 22
-                    sourceSize: Qt.size(width, height)
-                    source: "qrc:/icons/r3.svg"
+                    Label {
+                        text: "Добавить хост"
+                        color: parent.parent.Material.foreground
+                        font: parent.parent.font
+                        Layout.alignment: Qt.AlignVCenter
+                    }
                 }
             }
 
@@ -279,9 +304,34 @@ Pane {
             visible: modelData.display
             id: delegate
             width: parent ? parent.width : 0
-            height: modelData.display ? 180 : 0
+            height: modelData.display ? 160 : 0
             highlighted: ListView.isCurrentItem
             onClicked: connectToHost()
+            background: Rectangle {
+                color: {
+                    if (delegate.highlighted)
+                        return Qt.rgba(0.18, 0.77, 0.71, 0.12);
+                    if (delegate.hovered)
+                        return Qt.rgba(1, 1, 1, 0.04);
+                    return "transparent";
+                }
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: "#243041"
+                    opacity: 0.7
+                }
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 3
+                    visible: delegate.highlighted
+                    color: "#2ec4b6"
+                }
+            }
 
             function connectToHost() {
                 // Всегда передаём name (для manual host с регистрацией это nickname из настроек)

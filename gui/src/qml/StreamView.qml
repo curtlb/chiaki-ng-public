@@ -749,6 +749,12 @@ Item {
         y: Math.round((root.height - height) / 2)
         modal: true
         padding: 30
+        background: Rectangle {
+            color: "#121820"
+            radius: 12
+            border.width: 1
+            border.color: Qt.rgba(0.18, 0.77, 0.71, 0.35)
+        }
         onAboutToShow: {
             closeAction = 0;
         }
@@ -761,7 +767,7 @@ Item {
         ColumnLayout {
             Label {
                 Layout.alignment: Qt.AlignCenter
-                text: qsTr("Disconnect Session")
+                text: qsTr("Отключить сессию")
                 font.bold: true
                 font.pixelSize: 24
             }
@@ -769,7 +775,7 @@ Item {
             Label {
                 Layout.topMargin: 10
                 Layout.alignment: Qt.AlignCenter
-                text: qsTr("Do you want the Console to go into sleep mode?")
+                text: qsTr("Отправить консоль в режим сна?")
                 font.pixelSize: 20
             }
 
@@ -783,7 +789,7 @@ Item {
                     Layout.preferredWidth: 200
                     Layout.minimumHeight: 80
                     Layout.maximumHeight: 80
-                    text: qsTr("Sleep")
+                    text: qsTr("Сон")
                     font.pixelSize: 24
                     Material.roundedScale: Material.SmallScale
                     Material.background: activeFocus ? parent.Material.accent : undefined
@@ -802,7 +808,7 @@ Item {
                     Layout.preferredWidth: 200
                     Layout.minimumHeight: 80
                     Layout.maximumHeight: 80
-                    text: qsTr("No")
+                    text: qsTr("Нет")
                     font.pixelSize: 24
                     Material.roundedScale: Material.SmallScale
                     Material.background: activeFocus ? parent.Material.accent : undefined
@@ -823,10 +829,16 @@ Item {
         parent: Overlay.overlay
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
-        title: qsTr("Console Login PIN")
+        title: qsTr("PIN входа на консоль")
         modal: true
         closePolicy: Popup.NoAutoClose
         standardButtons: Dialog.Ok | Dialog.Cancel
+        background: Rectangle {
+            color: "#121820"
+            radius: 12
+            border.width: 1
+            border.color: Qt.rgba(0.18, 0.77, 0.71, 0.35)
+        }
         onAboutToShow: {
             standardButton(Dialog.Ok).enabled = Qt.binding(function() {
                 return pinField.acceptableInput;

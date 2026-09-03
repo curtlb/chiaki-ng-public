@@ -235,6 +235,34 @@ static QJsonObject billingCatalogEnvelope(const QJsonArray &games, const QString
     return root;
 }
 
+static QString normalizeTitleSku(QString sku)
+{
+    sku = sku.trimmed();
+    if (sku.isEmpty())
+        return {};
+    // titlecontainer needs CUSA#####_00 — bare CUSA##### returns 404.
+    const QString up = sku.toUpper();
+    const QStringList prefixes = {
+        QStringLiteral("CUSA"), QStringLiteral("PPSA"), QStringLiteral("NPEA"),
+        QStringLiteral("NPEB"), QStringLiteral("NPUB"), QStringLiteral("NPUA"),
+        QStringLiteral("NPUG")
+    };
+    for (const QString &pref : prefixes) {
+        if (!up.startsWith(pref))
+            continue;
+        const QString rest = up.mid(pref.size());
+        if (rest.contains(QLatin1Char('_')))
+            return up;
+        // Digits only → append _00
+        bool ok = false;
+        rest.toULongLong(&ok);
+        if (ok && !rest.isEmpty())
+            return pref + rest + QStringLiteral("_00");
+        return up;
+    }
+    return sku;
+}
+
 static QString extractTitleSku(const QString &product_id)
 {
     const QString pid = product_id.trimmed();
@@ -245,18 +273,9 @@ static QString extractTitleSku(const QString &product_id)
     if (dash >= 0 && dash + 1 < pid.size()) {
         const QString rest = pid.mid(dash + 1);
         const int nextDash = rest.indexOf(QLatin1Char('-'));
-        if (nextDash > 0)
-            return rest.left(nextDash);
-        return rest;
+        return normalizeTitleSku(nextDash > 0 ? rest.left(nextDash) : rest);
     }
-    // Bare CUSA / PPSA / NPEA ids
-    if (pid.startsWith(QLatin1String("CUSA"), Qt::CaseInsensitive)
-        || pid.startsWith(QLatin1String("PPSA"), Qt::CaseInsensitive)
-        || pid.startsWith(QLatin1String("NPEA"), Qt::CaseInsensitive)
-        || pid.startsWith(QLatin1String("NPEB"), Qt::CaseInsensitive)
-        || pid.startsWith(QLatin1String("NPUB"), Qt::CaseInsensitive))
-        return pid;
-    return {};
+    return normalizeTitleSku(pid);
 }
 
 static QString chihiroCoverUrl(const QString &product_id, const QString &locale = QStringLiteral("en-GB"))
@@ -264,27 +283,17 @@ static QString chihiroCoverUrl(const QString &product_id, const QString &locale 
     const QString pid = product_id.trimmed();
     if (pid.isEmpty())
         return {};
-    // Covers are most reliable on en-GB / en-US storefronts; ignore UI locale (e.g. ru-RU)
-    // which often 404s for EU/US title IDs and leaves cards on letter placeholders.
+    // /container/{full-NP-id}/image 404s; /titlecontainer/{CUSA#####_00}/image returns JPEG.
     Q_UNUSED(locale);
     QString country = QStringLiteral("GB");
-    QString lang = QStringLiteral("en");
     const QString prefix = pid.left(2).toUpper();
-    if (prefix == QStringLiteral("UP") || prefix == QStringLiteral("HP") || prefix == QStringLiteral("HN")) {
+    if (prefix == QStringLiteral("UP") || prefix == QStringLiteral("HP") || prefix == QStringLiteral("HN"))
         country = QStringLiteral("US");
-    }
-    // Prefer full NP product id via /container/; fall back to /titlecontainer/ + SKU.
-    if (pid.contains(QLatin1Char('-'))) {
-        return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
-            .arg(country, lang, pid);
-    }
     const QString sku = extractTitleSku(pid);
-    if (!sku.isEmpty()) {
-        return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/%1/%2/999/%3/image?w=440&h=440")
-            .arg(country, lang, sku);
-    }
-    return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
-        .arg(country, lang, pid);
+    if (sku.isEmpty())
+        return {};
+    return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/%1/en/999/%2/image?w=440&h=440")
+        .arg(country, sku);
 }
 
 static QString pickImageUrl(const QJsonObject &g, const QString &locale = QStringLiteral("en-GB"))
@@ -296,15 +305,20 @@ static QString pickImageUrl(const QJsonObject &g, const QString &locale = QStrin
     if (!url.isEmpty())
         return url;
     url = g.value(QStringLiteral("imageUrl")).toString();
-    if (!url.isEmpty())
-        return url;
+    // Legacy chihiro /container/{full-id}/image URLs 404 — rewrite to titlecontainer.
+    if (!url.isEmpty() && url.contains(QLatin1String("/chihiro/"))
+        && url.contains(QLatin1String("/container/"))
+        && !url.contains(QLatin1String("/titlecontainer/")))
+        url.clear();
+    if (!url.isEmpty() && !url.contains(QLatin1String("/chihiro/")))
+        return url; // CDN / apollo / other real cover URL from DB
     const QJsonArray images = g.value(QStringLiteral("images")).toArray();
     for (const QJsonValue &v : images) {
         const QJsonObject img = v.toObject();
         if (img.value(QStringLiteral("type")).toInt() == 10) {
-            url = img.value(QStringLiteral("url")).toString();
-            if (!url.isEmpty())
-                return url;
+            const QString u = img.value(QStringLiteral("url")).toString();
+            if (!u.isEmpty())
+                return u;
         }
     }
     for (const QJsonValue &v : images) {
@@ -312,13 +326,12 @@ static QString pickImageUrl(const QJsonObject &g, const QString &locale = QStrin
         if (!u.isEmpty())
             return u;
     }
-    // Billing DB catalog omits imageUrl on the wire; synthesize Chihiro cover.
     QString pid = g.value(QStringLiteral("productId")).toString();
     if (pid.isEmpty())
         pid = g.value(QStringLiteral("streamIdentifier")).toString();
     if (!pid.isEmpty())
         return chihiroCoverUrl(pid, locale);
-    return QString();
+    return url; // may still be a rewritten-empty path → empty
 }
 
 QString CloudCatalogBackend::rowLookupKey(const CatalogDisplayRow &row)
@@ -474,6 +487,7 @@ void CloudCatalogBackend::purgeStaleBillingCatalogCaches()
         QStringLiteral("billing_catalog_v10"),
         QStringLiteral("billing_catalog_v11"),
         QStringLiteral("billing_catalog_v12"),
+        QStringLiteral("billing_catalog_v13"),
     };
     for (const QString &key : stale)
         QFile::remove(getCacheFilePath(key));
@@ -481,7 +495,7 @@ void CloudCatalogBackend::purgeStaleBillingCatalogCaches()
 
 QString CloudCatalogBackend::billingCatalogCacheKey()
 {
-    return QStringLiteral("billing_catalog_v13");
+    return QStringLiteral("billing_catalog_v14");
 }
 
 QVariantMap CloudCatalogBackend::filterDisplayCatalog(const QString &query, const QVariantList &categoryFilters,

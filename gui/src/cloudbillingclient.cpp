@@ -141,6 +141,32 @@ CloudBillingClient::Result CloudBillingClient::endStream(const QString &host, qu
 	return request(o);
 }
 
+static QString normalizeTitleSku(QString sku)
+{
+	sku = sku.trimmed();
+	if(sku.isEmpty())
+		return {};
+	const QString up = sku.toUpper();
+	const QStringList prefixes = {
+		QStringLiteral("CUSA"), QStringLiteral("PPSA"), QStringLiteral("NPEA"),
+		QStringLiteral("NPEB"), QStringLiteral("NPUB"), QStringLiteral("NPUA"),
+		QStringLiteral("NPUG")
+	};
+	for(const QString &pref : prefixes) {
+		if(!up.startsWith(pref))
+			continue;
+		const QString rest = up.mid(pref.size());
+		if(rest.contains(QLatin1Char('_')))
+			return up;
+		bool ok = false;
+		rest.toULongLong(&ok);
+		if(ok && !rest.isEmpty())
+			return pref + rest + QStringLiteral("_00");
+		return up;
+	}
+	return sku;
+}
+
 static QString extractTitleSku(const QString &product_id)
 {
 	const QString pid = product_id.trimmed();
@@ -150,17 +176,9 @@ static QString extractTitleSku(const QString &product_id)
 	if(dash >= 0 && dash + 1 < pid.size()) {
 		const QString rest = pid.mid(dash + 1);
 		const int nextDash = rest.indexOf(QLatin1Char('-'));
-		if(nextDash > 0)
-			return rest.left(nextDash);
-		return rest;
+		return normalizeTitleSku(nextDash > 0 ? rest.left(nextDash) : rest);
 	}
-	if(pid.startsWith(QLatin1String("CUSA"), Qt::CaseInsensitive)
-	   || pid.startsWith(QLatin1String("PPSA"), Qt::CaseInsensitive)
-	   || pid.startsWith(QLatin1String("NPEA"), Qt::CaseInsensitive)
-	   || pid.startsWith(QLatin1String("NPEB"), Qt::CaseInsensitive)
-	   || pid.startsWith(QLatin1String("NPUB"), Qt::CaseInsensitive))
-		return pid;
-	return {};
+	return normalizeTitleSku(pid);
 }
 
 static QString chihiroImageUrl(const QString &product_id, const QString &locale = QStringLiteral("en-GB"))
@@ -170,21 +188,14 @@ static QString chihiroImageUrl(const QString &product_id, const QString &locale 
 		return {};
 	Q_UNUSED(locale);
 	QString country = QStringLiteral("GB");
-	QString lang = QStringLiteral("en");
 	const QString prefix = pid.left(2).toUpper();
 	if(prefix == QStringLiteral("UP") || prefix == QStringLiteral("HP") || prefix == QStringLiteral("HN"))
 		country = QStringLiteral("US");
-	if(pid.contains(QLatin1Char('-'))) {
-		return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
-			.arg(country, lang, pid);
-	}
 	const QString sku = extractTitleSku(pid);
-	if(!sku.isEmpty()) {
-		return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/%1/%2/999/%3/image?w=440&h=440")
-			.arg(country, lang, sku);
-	}
-	return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/container/%1/%2/999/%3/image?w=440&h=440")
-		.arg(country, lang, pid);
+	if(sku.isEmpty())
+		return {};
+	return QStringLiteral("https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/%1/en/999/%2/image?w=440&h=440")
+		.arg(country, sku);
 }
 
 static bool readTcpLine(QTcpSocket &tcp, QByteArray *out_line, int timeout_ms)
@@ -313,11 +324,18 @@ CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host,
 	QJsonArray games = result.data.value(QStringLiteral("games")).toArray();
 	for(int i = 0; i < games.size(); ++i) {
 		QJsonObject g = games.at(i).toObject();
-		if(g.value(QStringLiteral("imageUrl")).toString().isEmpty()) {
+		QString existing = g.value(QStringLiteral("imageUrl")).toString();
+		if(existing.contains(QLatin1String("/chihiro/"))
+		   && existing.contains(QLatin1String("/container/"))
+		   && !existing.contains(QLatin1String("/titlecontainer/")))
+			existing.clear();
+		if(existing.isEmpty()) {
 			const QString pid = g.value(QStringLiteral("productId")).toString();
 			const QString url = chihiroImageUrl(pid.isEmpty() ? g.value(QStringLiteral("streamIdentifier")).toString() : pid);
 			if(!url.isEmpty())
 				g.insert(QStringLiteral("imageUrl"), url);
+		} else {
+			g.insert(QStringLiteral("imageUrl"), existing);
 		}
 		if(g.value(QStringLiteral("streamServiceType")).toString().isEmpty())
 			g.insert(QStringLiteral("streamServiceType"), g.value(QStringLiteral("serviceType")).toString());

@@ -110,16 +110,27 @@ Rectangle {
     
     function titleSkuFromPid(pid) {
         if (!pid) return "";
+        let raw = pid;
         let dash = pid.indexOf("-");
         if (dash >= 0 && dash + 1 < pid.length) {
             let rest = pid.substring(dash + 1);
             let next = rest.indexOf("-");
-            return next > 0 ? rest.substring(0, next) : rest;
+            raw = next > 0 ? rest.substring(0, next) : rest;
         }
-        let up = pid.substring(0, 4).toUpperCase();
-        if (up === "CUSA" || up === "PPSA" || up === "NPEA" || up === "NPEB" || up === "NPUB")
-            return pid;
-        return "";
+        let up = raw.toUpperCase();
+        let prefixes = ["CUSA", "PPSA", "NPEA", "NPEB", "NPUB", "NPUA", "NPUG"];
+        for (let i = 0; i < prefixes.length; i++) {
+            let pref = prefixes[i];
+            if (!up.startsWith(pref))
+                continue;
+            let rest = up.substring(pref.length);
+            if (rest.indexOf("_") >= 0)
+                return up;
+            if (/^[0-9]+$/.test(rest))
+                return pref + rest + "_00";
+            return up;
+        }
+        return raw;
     }
 
     function chihiroCandidates(pid) {
@@ -127,16 +138,14 @@ Rectangle {
         if (!pid) return out;
         let prefix = pid.substring(0, 2).toUpperCase();
         let country = (prefix === "UP" || prefix === "HP" || prefix === "HN") ? "US" : "GB";
-        if (pid.indexOf("-") > 0)
-            out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/container/${country}/en/999/${pid}/image?w=440&h=440`);
         let sku = titleSkuFromPid(pid);
-        if (sku) {
-            out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/${country}/en/999/${sku}/image?w=440&h=440`);
-            if (country !== "US")
-                out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/US/en/999/${sku}/image?w=440&h=440`);
-            if (country !== "GB")
-                out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/GB/en/999/${sku}/image?w=440&h=440`);
-        }
+        if (!sku) return out;
+        // titlecontainer works; full-id /container/ 404s
+        out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/${country}/en/999/${sku}/image?w=440&h=440`);
+        if (country !== "US")
+            out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/US/en/999/${sku}/image?w=440&h=440`);
+        if (country !== "GB")
+            out.push(`https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/GB/en/999/${sku}/image?w=440&h=440`);
         return out;
     }
 
@@ -148,7 +157,12 @@ Rectangle {
             if (gameData.extracted_images.landscape) return gameData.extracted_images.landscape;
         }
         
-        if (gameData.imageUrl) return gameData.imageUrl;
+        let url = gameData.imageUrl || "";
+        // Drop broken chihiro /container/{full-id}/image URLs (404)
+        if (url.indexOf("/chihiro/") >= 0 && url.indexOf("/container/") >= 0 && url.indexOf("/titlecontainer/") < 0)
+            url = "";
+        if (url)
+            return url;
         if (gameData.images && Array.isArray(gameData.images) && gameData.images.length > 0) {
             for (let i = 0; i < gameData.images.length; i++) {
                 let img = gameData.images[i];

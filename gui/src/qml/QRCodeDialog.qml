@@ -15,6 +15,12 @@ Dialog {
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     
     Material.roundedScale: Material.MediumScale
+    background: Rectangle {
+        color: "#121820"
+        radius: 12
+        border.width: 1
+        border.color: Qt.rgba(0.18, 0.77, 0.71, 0.35)
+    }
     
     anchors.centerIn: parent
     
@@ -42,7 +48,7 @@ Dialog {
     footer: DialogButtonBox {
         Button {
             id: closeButton
-            text: qsTr("Close")
+            text: qsTr("Закрыть")
             flat: true
             onClicked: dialog.close()
         }

@@ -416,7 +416,7 @@ Pane {
     function showShortcutToast(title, message) {
         shortcutToastTitle.text = title;
         shortcutToastMessage.text = message;
-        shortcutToast.color = "#2196F3";
+        shortcutToast.color = "#2ec4b6";
         shortcutToastTimer.restart();
     }
     
