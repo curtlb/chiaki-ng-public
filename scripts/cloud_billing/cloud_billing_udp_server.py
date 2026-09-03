@@ -1194,28 +1194,46 @@ def end_other_active_sessions(
     return
 
 
-def session_payload(conn, sess):
+def session_payload(conn, sess, billing_pool=None, persist_pool=False):
     if not sess or not sess.get("ID"):
         return {}
-    sess = tick_session_balance(conn, sess)
+    # Reload from DB first — callers often pass a stale row after switching pools.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1",
+            (sess["ID"],),
+        )
+        fresh = cur.fetchone()
+    if not fresh:
+        return {}
+    if billing_pool in ("plus", "owned"):
+        fresh = dict(fresh)
+        fresh["BillingPool"] = billing_pool
+        if persist_pool:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE CloudStreaming_Sessions SET BillingPool=%s WHERE ID=%s",
+                    (billing_pool, fresh["ID"]),
+                )
+    fresh = tick_session_balance(conn, fresh)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.*, g.Name AS GameName, g.HourlyPrice, a.NPSSO, a.Label AS AccountLabel, "
             "a.Region AS AccountRegion, "
-            "l.RetentionUntil, "
-            + sql_minutes_left_expr()
-            + " AS MinutesLeft "
+            "l.RetentionUntil "
             "FROM CloudStreaming_Sessions s "
             "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
             "JOIN CloudStreaming_Accounts a ON a.ID = s.AccountID "
             "JOIN CloudStreaming_Leases l ON l.ID = s.LeaseID "
             "WHERE s.ID = %s LIMIT 1",
-            (sess["ID"],),
+            (fresh["ID"],),
         )
         row = cur.fetchone()
     if not row:
         return {}
-    pool = row.get("BillingPool") or "plus"
+    pool = billing_pool or row.get("BillingPool") or "plus"
+    if pool not in ("plus", "owned"):
+        pool = "plus"
     plus_left = int(row.get("PlusMinutesLeft") or 0)
     owned_left = int(row.get("OwnedMinutesLeft") or 0)
     minutes_left = owned_left if pool == "owned" else plus_left
@@ -1771,8 +1789,10 @@ def handle_quote(conn, req):
     )
     target_pool = game_billing_pool(conn, account_id, game)
     if resumable:
-        payload = session_payload(conn, resumable)
-        mins = payload.get("minutes_left", 0)
+        # Wallet for the *target* game pool — not whatever BillingPool the last stream used.
+        plus_left = pool_minutes(resumable, "plus")
+        owned_left = pool_minutes(resumable, "owned")
+        mins = owned_left if target_pool == "owned" else plus_left
         pool_label = (
             "купленных игр" if target_pool == "owned" else "PS Plus / бесплатных игр"
         )
@@ -1790,8 +1810,8 @@ def handle_quote(conn, req):
             resume_session=True,
             no_charge=True,
             minutes_left=mins,
-            plus_minutes_left=payload.get("plus_minutes_left", 0),
-            owned_minutes_left=payload.get("owned_minutes_left", 0),
+            plus_minutes_left=plus_left,
+            owned_minutes_left=owned_left,
             game_name=game["Name"],
             billing_pool=target_pool,
         )
@@ -1884,8 +1904,19 @@ def handle_start(conn, req):
         )
         touch_lease(conn, resumable["LeaseID"])
         conn.commit()
-        payload = session_payload(conn, resumable)
-        mins = payload.get("minutes_left", 0)
+        # Re-read after BillingPool switch so tick/payload cannot use the previous pool.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1",
+                (resumable["ID"],),
+            )
+            resumable = cur.fetchone()
+        payload = session_payload(conn, resumable, billing_pool=target_pool)
+        mins = pool_minutes(resumable, target_pool)
+        if target_pool == "owned":
+            mins = int(payload.get("owned_minutes_left") or mins)
+        else:
+            mins = int(payload.get("plus_minutes_left") or mins)
         ui_msg = (
             "Запуск «%s». Осталось %s мин на балансе (%s)."
             % (
@@ -1902,6 +1933,7 @@ def handle_start(conn, req):
         conn.commit()
         payload["resumed"] = True
         payload["ui_message"] = ui_msg
+        payload["minutes_left"] = mins
         payload["billing_pool"] = target_pool
         return reply(req_id, True, **payload)
 
