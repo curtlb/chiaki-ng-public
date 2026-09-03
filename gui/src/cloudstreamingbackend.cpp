@@ -10,6 +10,7 @@
 #include "chiaki/cloudsession.h"
 #include "chiaki/log.h"
 #include "qmlbackend.h"
+#include "qmlsettings.h"
 #include "cloudcatalogbackend.h"
 
 #include <QObject>
@@ -45,6 +46,28 @@ static int billingMinutesFromResponse(const QJsonObject &data)
     if(secs <= 0)
         return 0;
     return static_cast<int>((secs + 59) / 60);
+}
+
+static void noteBillingIdentity(Settings *settings, QObject *context, const QJsonObject &data)
+{
+    if(!settings)
+        return;
+    const qint64 uid = data.value(QStringLiteral("user_id")).toVariant().toLongLong();
+    if(uid > 0) {
+        settings->SetCloudBillingUserId(uid);
+        if(auto *backend = qobject_cast<QmlBackend*>(context)) {
+            if(QmlSettings *qs = backend->qmlSettings())
+                qs->refreshCloudBillingUserId();
+        }
+    }
+    const QString email = data.value(QStringLiteral("email")).toString().trimmed();
+    if(!email.isEmpty() && settings->GetFourCloudEmail().isEmpty()) {
+        settings->SetFourCloudEmail(email);
+        if(auto *backend = qobject_cast<QmlBackend*>(context)) {
+            if(QmlSettings *qs = backend->qmlSettings())
+                qs->refreshFourCloudEmail();
+        }
+    }
 }
 
 CloudStreamingBackend::CloudStreamingBackend(Settings *settings, QObject *parent)
@@ -105,6 +128,7 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
             stopBillingHeartbeat();
         return;
     }
+    noteBillingIdentity(settings, parent(), res.data);
     const int mins = billingMinutesFromResponse(res.data);
     QString msg = res.ui_message;
     if(msg.isEmpty())
@@ -178,6 +202,7 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
         return true;
     }
 
+    noteBillingIdentity(settings, parent(), start.data);
     billing_session_token = start.data.value(QStringLiteral("session_token")).toString();
     *out_npsso = start.data.value(QStringLiteral("npsso")).toString();
     billing_npsso = *out_npsso;
@@ -266,6 +291,8 @@ void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameI
     setAllocationProgress(tr("Получение информации об оплате…"));
     const auto quote = CloudBillingClient::quote(
         host, settings->GetCloudBillingPort(), email, serviceType, gameIdentifier, gameName);
+    if(quote.ok)
+        noteBillingIdentity(settings, parent(), quote.data);
     const QString message = quote.ok
         ? quote.ui_message
         : (quote.ui_message.isEmpty() ? quote.error : quote.ui_message);

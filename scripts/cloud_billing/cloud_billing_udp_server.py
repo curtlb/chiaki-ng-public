@@ -186,6 +186,62 @@ def reply(req_id, ok, **kwargs):
     return out
 
 
+def annotate_client(out, email=None, user_id=None):
+    """Attach client identity to every billing reply for logs + client UID display."""
+    if not isinstance(out, dict):
+        return out
+    if email:
+        out["email"] = email
+    if user_id is not None:
+        out["user_id"] = int(user_id)
+    return out
+
+
+def resolve_client_from_payload(conn, payload, out=None):
+    """Best-effort email/uid for logging and reply enrichment."""
+    email = (payload.get("email") or "").strip().lower()
+    user_id = None
+    if isinstance(out, dict):
+        if out.get("email"):
+            email = str(out.get("email")).strip().lower() or email
+        if out.get("user_id") is not None:
+            try:
+                user_id = int(out.get("user_id"))
+            except (TypeError, ValueError):
+                user_id = None
+        if user_id is None and out.get("session_token"):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT u.ID AS UserID, u.User AS Email FROM CloudStreaming_Sessions s "
+                    "JOIN CloudStreaming_Users u ON u.ID = s.UserID "
+                    "WHERE s.SessionToken=%s LIMIT 1",
+                    (out.get("session_token"),),
+                )
+                row = cur.fetchone()
+                if row:
+                    user_id = row.get("UserID")
+                    email = (row.get("Email") or email or "").strip().lower()
+    if email and user_id is None:
+        try:
+            user = ensure_user(conn, email)
+            user_id = user.get("ID")
+        except Exception:
+            pass
+    if not email and payload.get("session_token"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT u.ID AS UserID, u.User AS Email FROM CloudStreaming_Sessions s "
+                "JOIN CloudStreaming_Users u ON u.ID = s.UserID "
+                "WHERE s.SessionToken=%s LIMIT 1",
+                (payload.get("session_token"),),
+            )
+            row = cur.fetchone()
+            if row:
+                user_id = row.get("UserID")
+                email = (row.get("Email") or "").strip().lower()
+    return email, user_id
+
+
 def get_payment_method(conn, email):
     """Cloud gaming card — NOT the console rental autobilling table."""
     with conn.cursor() as cur:
@@ -864,6 +920,7 @@ def session_payload(conn, sess):
     store_country = "US" if region in AMERICAS_REGIONS else region
     return {
         "session_token": row["SessionToken"],
+        "user_id": int(row["UserID"]) if row.get("UserID") is not None else None,
         "npsso": row["NPSSO"],
         "account_label": row.get("AccountLabel"),
         "account_region": region,
@@ -1315,7 +1372,13 @@ def handle_tcp_client(conn, addr):
         except Exception as e:
             log.warning("bad TCP json from %s: %s", addr, e)
             return
-        log.info("TCP REQ %s from %s action=%s", payload.get("id"), addr, payload.get("action"))
+        log.info(
+            "TCP REQ %s from %s action=%s email=%s",
+            payload.get("id"),
+            addr,
+            payload.get("action"),
+            (payload.get("email") or "-"),
+        )
         out = dispatch(payload)
         blob = None
         if isinstance(out, dict):
@@ -1981,13 +2044,22 @@ def dispatch(payload):
             out = handle_end_stream(conn, payload)
         elif action == "status":
             out = handle_status(conn, payload)
+        elif action == "whoami":
+            email = (payload.get("email") or "").strip().lower()
+            if not email:
+                out = reply(req_id, False, error="Укажите email")
+            else:
+                user = ensure_user(conn, email)
+                out = reply(req_id, True, email=email, user_id=user["ID"])
         else:
             out = reply(req_id, False, error="unknown action: %s" % action)
+        email, user_id = resolve_client_from_payload(conn, payload, out)
+        out = annotate_client(out, email=email, user_id=user_id)
         if not conn.get_autocommit():
             conn.commit()
         return out
     except Exception as e:
-        log.exception("dispatch error action=%s", action)
+        log.exception("dispatch error action=%s email=%s", action, (payload.get("email") or "-"))
         try:
             conn.rollback()
         except Exception:
@@ -2096,9 +2168,24 @@ def main():
         except Exception as e:
             log.warning("bad json from %s: %s", addr, e)
             continue
-        log.info("REQ %s from %s action=%s", payload.get("id"), addr, payload.get("action"))
+        log.info(
+            "REQ %s from %s action=%s email=%s uid=%s",
+            payload.get("id"),
+            addr,
+            payload.get("action"),
+            (payload.get("email") or "-"),
+            "-",
+        )
         out = dispatch(payload)
         try:
+            log.info(
+                "REQ %s done action=%s email=%s uid=%s ok=%s",
+                payload.get("id"),
+                payload.get("action"),
+                (out.get("email") if isinstance(out, dict) else None) or (payload.get("email") or "-"),
+                (out.get("user_id") if isinstance(out, dict) else None) or "-",
+                (out.get("ok") if isinstance(out, dict) else None),
+            )
             send_udp_reply(sock, out, addr)
         except Exception as e:
             log.error("send reply %s: %s", addr, e)

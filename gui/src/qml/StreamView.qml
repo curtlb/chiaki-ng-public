@@ -31,6 +31,22 @@ Item {
     StackView.onActivating: Chiaki.window.keepVideo = true
     StackView.onDeactivated: Chiaki.window.keepVideo = false
 
+    Label {
+        anchors {
+            left: parent.left
+            bottom: parent.bottom
+            margins: 12
+        }
+        z: 1000
+        visible: !!Chiaki.settings.jwtToken && Chiaki.settings.cloudBillingUserId > 0
+        text: "UID " + Chiaki.settings.cloudBillingUserId
+        color: Qt.rgba(1, 1, 1, 0.55)
+        font.pixelSize: 12
+        font.family: "Consolas"
+        style: Text.Outline
+        styleColor: "#000000"
+    }
+
     Rectangle {
         id: loadingView
         anchors.fill: parent

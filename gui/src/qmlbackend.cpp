@@ -9,6 +9,7 @@
 #include "systemdinhibit.h"
 #include "crashreporter.h"
 #include "cloudlog.h"
+#include "cloudbillingclient.h"
 #include "chiaki/remote/holepunch.h"
 #ifdef Q_OS_MACOS
 #include "macWakeSleep.h"
@@ -1955,6 +1956,22 @@ void QmlBackend::fetchFourcloudState()
 
 void QmlBackend::ensureFourcloudPolling()
 {
+    if (settings && settings->GetCloudBillingEnabled()
+            && !settings->GetFourCloudEmail().isEmpty()
+            && !settings->GetCloudBillingHost().isEmpty()
+            && settings->GetCloudBillingUserId() <= 0) {
+        const auto who = CloudBillingClient::whoami(
+            settings->GetCloudBillingHost(),
+            settings->GetCloudBillingPort(),
+            settings->GetFourCloudEmail());
+        if (who.ok) {
+            const qint64 uid = who.data.value(QStringLiteral("user_id")).toVariant().toLongLong();
+            if (uid > 0 && settings_qml)
+                settings_qml->setCloudBillingUserId(uid);
+            else if (uid > 0)
+                settings->SetCloudBillingUserId(uid);
+        }
+    }
     if (settings->GetNps4().isEmpty())
         return;
     if (!fourcloud_state_timer || fourcloud_state_timer->isActive())
@@ -1970,7 +1987,10 @@ void QmlBackend::logoutFourcloud()
         settings->SetJwtPort(0);
         settings->SetNps4("");
 		settings->SetSubscriptionExpiryDate("");
+        settings->SetCloudBillingUserId(0);
     }
+    if (settings_qml)
+        settings_qml->refreshCloudBillingUserId();
     clearFourcloudState();
     emit jwtTokenExpired();
 }

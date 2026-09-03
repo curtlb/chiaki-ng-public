@@ -87,6 +87,8 @@ Pane {
         }
         Qt.callLater(() => loadUnifiedCatalog());
         initialFocusTimer.restart();
+        if (Chiaki.ensureFourcloudPolling)
+            Chiaki.ensureFourcloudPolling();
     }
     
     onVisibleChanged: {
@@ -474,73 +476,18 @@ Pane {
             }
             spacing: 8
 
-            // Acquisition-tag filter summary (Owned / Streamable / Store) — far left
+            // Acquisition-tag filter hidden for rental clients (owned-first catalog).
             Item {
                 id: filterToggle
-                Layout.preferredWidth: Math.max(filterToggleRow.implicitWidth + 20, 110)
-                Layout.preferredHeight: 36
-
-                Rectangle {
-                    anchors.fill: parent
-                    color: filterToggle.activeFocus ? Qt.rgba(46/255, 196/255, 182/255, 0.15) : "transparent"
-                    border.color: filterToggle.activeFocus ? "#2ec4b6" : "transparent"
-                    border.width: filterToggle.activeFocus ? 1 : 0
-                    radius: 4
-                }
-
-                Row {
-                    id: filterToggleRow
-                    anchors.centerIn: parent
-                    spacing: 6
-                    property bool filtersActive: activeTagFilters && activeTagFilters.length > 0
-                    property color tint: filtersActive ? "#2ec4b6" : Qt.rgba(255, 255, 255, 0.6)
-
-                    // Funnel / "decrease" filter glyph (matches iOS line.3.horizontal.decrease)
-                    Canvas {
-                        id: filterGlyph
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 16; height: 16
-                        property color stroke: filterToggleRow.tint
-                        onStrokeChanged: requestPaint()
-                        onPaint: {
-                            var ctx = getContext("2d");
-                            ctx.reset();
-                            ctx.strokeStyle = stroke;
-                            ctx.lineWidth = 1.8; ctx.lineCap = "round";
-                            ctx.beginPath();
-                            ctx.moveTo(2, 4); ctx.lineTo(14, 4);
-                            ctx.moveTo(4, 8); ctx.lineTo(12, 8);
-                            ctx.moveTo(6, 12); ctx.lineTo(10, 12);
-                            ctx.stroke();
-                        }
-                    }
-
-                    Text {
-                        id: filterToggleText
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: tagFilterSummary()
-                        font.pixelSize: 13
-                        font.weight: Font.Medium
-                        color: filterToggleRow.tint
-                    }
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: tagFilterPopup.open()
-                }
-
-                focusPolicy: Qt.StrongFocus
-                KeyNavigation.left: sortToggle
-                KeyNavigation.right: searchContainer
-                KeyNavigation.down: gamesGrid.count > 0 ? gamesGrid : null
-                KeyNavigation.up: mainTabBar ? mainTabBar.itemAt(1) : null
-                Keys.onReturnPressed: { tagFilterPopup.open(); event.accepted = true; }
+                visible: false
+                width: 0
+                height: 0
+                Layout.preferredWidth: 0
+                Layout.preferredHeight: 0
+                focusPolicy: Qt.NoFocus
             }
 
             // Flexible gap pushes search + the right-side controls to the right edge.
-            // It sits to the LEFT of search so the field expands leftward into this gap.
             Item { Layout.fillWidth: true }
 
             // Search bar - icon that expands leftward when focused (right side, left of favorites)
@@ -1239,7 +1186,7 @@ Pane {
                         ListView {
                             id: recentList
                             width: parent.width
-                            height: 260
+                            height: 270
                             orientation: ListView.Horizontal
                             spacing: 12
                             leftMargin: 20
@@ -1250,7 +1197,7 @@ Pane {
                                 required property int index
                                 required property var modelData
                                 width: 180
-                                height: 250
+                                height: 260
                                 gameData: modelData
                                 qrCodeDialog: root.qrCodeDialogRef
                                 onStreamGame: (streamingId, platform, serviceType) => {
@@ -1259,6 +1206,16 @@ Pane {
                                 onToggleFavorite: (productId) => root.toggleFavorite(productId)
                             }
                         }
+                    }
+
+                    Label {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 20
+                        visible: recentGames.length > 0 && currentPageGames.length > 0 && !isLoading
+                        text: qsTr("Каталог")
+                        font.pixelSize: 16
+                        font.bold: true
+                        color: "white"
                     }
 
                     GridView {
@@ -1280,11 +1237,8 @@ Pane {
                             let rows = Math.ceil(Math.max(count, 1) / cols);
                             return rows * cellHeight + 20;
                         }
-                        x: {
-                            let availableWidth = gridAvailWidth;
-                            let gridWidth = width;
-                            return Math.max(20, (catalogColumn.width - gridWidth) / 2);
-                        }
+                        // Left-align with recent row (centering looked crooked under «Недавние»)
+                        x: 20
                     
                     Connections {
                         target: catalogColumn
@@ -1298,7 +1252,7 @@ Pane {
                     clip: false
                     interactive: false
                     
-                    KeyNavigation.up: filterToggle
+                    KeyNavigation.up: searchContainer
                     
                     model: currentPageGames
                     highlightFollowsCurrentItem: true

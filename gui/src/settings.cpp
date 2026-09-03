@@ -2486,6 +2486,18 @@ void Settings::SetFourCloudEmail(const QString &email)
 	settings.setValue("settings/fourcloud_email", v);
 }
 
+qint64 Settings::GetCloudBillingUserId() const
+{
+	return settings.value("settings/cloud_billing_user_id", 0).toLongLong();
+}
+
+void Settings::SetCloudBillingUserId(qint64 user_id)
+{
+	if(GetCloudBillingUserId() == user_id)
+		return;
+	settings.setValue("settings/cloud_billing_user_id", user_id);
+}
+
 bool Settings::GetCloudBillingEnabled() const
 {
 	return settings.value("settings/cloud_billing_enabled", true).toBool();

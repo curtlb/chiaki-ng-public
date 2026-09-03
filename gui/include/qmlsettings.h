@@ -83,6 +83,7 @@ class QmlSettings : public QObject
     Q_PROPERTY(QString cloudBillingHost READ cloudBillingHost WRITE setCloudBillingHost NOTIFY cloudBillingHostChanged)
     Q_PROPERTY(int cloudBillingPort READ cloudBillingPort WRITE setCloudBillingPort NOTIFY cloudBillingPortChanged)
     Q_PROPERTY(QString fourCloudEmail READ fourCloudEmail NOTIFY fourCloudEmailChanged)
+    Q_PROPERTY(qint64 cloudBillingUserId READ cloudBillingUserId NOTIFY cloudBillingUserIdChanged)
     Q_PROPERTY(QString cloudStoreLocale READ cloudStoreLocale WRITE setCloudStoreLocale NOTIFY cloudStoreLocaleChanged)
     Q_PROPERTY(QString cloudResolvedStoreCountry READ cloudResolvedStoreCountry WRITE setCloudResolvedStoreCountry NOTIFY cloudResolvedStoreCountryChanged)
     Q_PROPERTY(bool cloudCatalogNativeMode READ cloudCatalogNativeMode WRITE setCloudCatalogNativeMode NOTIFY cloudCatalogNativeModeChanged)
@@ -529,7 +530,10 @@ public:
     int cloudBillingPort() const;
     void setCloudBillingPort(int port);
     QString fourCloudEmail() const;
+    qint64 cloudBillingUserId() const;
     void refreshFourCloudEmail();
+    void refreshCloudBillingUserId();
+    void setCloudBillingUserId(qint64 user_id);
 
     QString cloudStoreLocale() const;
     void setCloudStoreLocale(const QString &locale);
@@ -700,6 +704,7 @@ signals:
     void cloudBillingHostChanged();
     void cloudBillingPortChanged();
     void fourCloudEmailChanged();
+    void cloudBillingUserIdChanged();
     void cloudStoreLocaleChanged();
     void cloudResolvedStoreCountryChanged();
     void cloudCatalogNativeModeChanged();

@@ -704,6 +704,24 @@ void QmlSettings::refreshFourCloudEmail()
     emit fourCloudEmailChanged();
 }
 
+qint64 QmlSettings::cloudBillingUserId() const
+{
+    return settings->GetCloudBillingUserId();
+}
+
+void QmlSettings::refreshCloudBillingUserId()
+{
+    emit cloudBillingUserIdChanged();
+}
+
+void QmlSettings::setCloudBillingUserId(qint64 user_id)
+{
+    if(settings->GetCloudBillingUserId() == user_id)
+        return;
+    settings->SetCloudBillingUserId(user_id);
+    emit cloudBillingUserIdChanged();
+}
+
 QString QmlSettings::cloudStoreLocale() const
 {
     return settings->GetCloudStoreLocale();

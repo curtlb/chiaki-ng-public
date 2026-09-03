@@ -11,6 +11,12 @@ Pane {
     // Keep CloudPlayView alive after the first visit so an in-flight catalog fetch
     // cannot call back into a destroyed QML object when the user leaves the tab.
     property bool cloudPlayPinned: false
+
+    CleanBlueBackground {
+        anchors.fill: parent
+        z: -1
+    }
+
     StackView.onActivated: {
         forceActiveFocus(Qt.TabFocusReason);
         Chiaki.ensureFourcloudPolling();
@@ -142,84 +148,57 @@ Pane {
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 210
+                Layout.preferredWidth: 200
                 flat: true
+                text: "Добавить конфиг"
+                icon.source: "qrc:/icons/l3.svg"
+                icon.width: 20
+                icon.height: 20
+                display: AbstractButton.TextBesideIcon
+                spacing: 10
+                leftPadding: 14
+                rightPadding: 14
                 focusPolicy: Qt.NoFocus
                 onClicked: Chiaki.settings.importSettings()
                 Material.roundedScale: Material.SmallScale
                 Material.foreground: "#e8eef4"
-                contentItem: RowLayout {
-                    spacing: 10
-                    anchors.centerIn: parent
-                    Label {
-                        text: "Добавить конфиг"
-                        color: parent.parent.Material.foreground
-                        font: parent.parent.font
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                    Image {
-                        Layout.preferredWidth: 22
-                        Layout.preferredHeight: 22
-                        Layout.alignment: Qt.AlignVCenter
-                        sourceSize: Qt.size(22, 22)
-                        source: "qrc:/icons/l3.svg"
-                    }
-                }
             }
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 230
+                Layout.preferredWidth: 220
                 flat: true
+                text: "Обновить PSN хосты"
+                icon.source: "qrc:/icons/r1.svg"
+                icon.width: 20
+                icon.height: 20
+                display: AbstractButton.TextBesideIcon
+                spacing: 10
+                leftPadding: 14
+                rightPadding: 14
                 focusPolicy: Qt.NoFocus
                 onClicked: Chiaki.refreshPsnToken();
                 Material.roundedScale: Material.SmallScale
                 Material.foreground: "#e8eef4"
                 visible: Chiaki.settings.psnAuthToken
-                contentItem: RowLayout {
-                    spacing: 10
-                    anchors.centerIn: parent
-                    Image {
-                        Layout.preferredWidth: 22
-                        Layout.preferredHeight: 22
-                        Layout.alignment: Qt.AlignVCenter
-                        sourceSize: Qt.size(22, 22)
-                        source: "qrc:/icons/r1.svg"
-                    }
-                    Label {
-                        text: "Обновить PSN хосты"
-                        color: parent.parent.Material.foreground
-                        font: parent.parent.font
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                }
             }
 
             Button {
                 Layout.fillHeight: true
-                Layout.preferredWidth: 190
+                Layout.preferredWidth: 180
                 flat: true
+                text: "Добавить хост"
+                icon.source: "qrc:/icons/r3.svg"
+                icon.width: 20
+                icon.height: 20
+                display: AbstractButton.TextBesideIcon
+                spacing: 10
+                leftPadding: 14
+                rightPadding: 14
                 focusPolicy: Qt.NoFocus
                 onClicked: root.showManualHostDialog()
                 Material.roundedScale: Material.SmallScale
                 Material.foreground: "#e8eef4"
-                contentItem: RowLayout {
-                    spacing: 10
-                    anchors.centerIn: parent
-                    Image {
-                        Layout.preferredWidth: 22
-                        Layout.preferredHeight: 22
-                        Layout.alignment: Qt.AlignVCenter
-                        sourceSize: Qt.size(22, 22)
-                        source: "qrc:/icons/r3.svg"
-                    }
-                    Label {
-                        text: "Добавить хост"
-                        color: parent.parent.Material.foreground
-                        font: parent.parent.font
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                }
             }
 
             Button {
@@ -279,10 +258,12 @@ Pane {
             left: parent.left
             right: parent.right
             bottom: parent.bottom
-            bottomMargin: 50
+            bottomMargin: 70
         }
         clip: true
         model: Chiaki.hosts
+        spacing: 4
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
         onCountChanged: {
             if(!hostsView.currentItem)
                 hostsView.incrementCurrentIndex();
@@ -616,17 +597,37 @@ Pane {
         anchors {
             left: parent.left
             bottom: parent.bottom
-            margins: 20
+            leftMargin: 20
+            bottomMargin: 52
         }
         icon.source: "qrc:/icons/discover-" + (checked ? "" : "off-") + "24px.svg"
-        icon.width: 50
-        icon.height: 50
-        padding: 20
+        icon.width: 40
+        icon.height: 40
+        padding: 14
         focusPolicy: Qt.NoFocus
         checkable: true
         checked: Chiaki.discoveryEnabled
         onToggled: Chiaki.discoveryEnabled = !Chiaki.discoveryEnabled
         Material.background: Material.accent
+    }
+
+    Label {
+        id: clientUidLabel
+        anchors {
+            left: parent.left
+            bottom: parent.bottom
+            margins: 14
+        }
+        z: 30
+        visible: !!Chiaki.settings.jwtToken
+        text: Chiaki.settings.cloudBillingUserId > 0
+              ? ("UID " + Chiaki.settings.cloudBillingUserId)
+              : (Chiaki.settings.fourCloudEmail
+                 ? qsTr("UID …")
+                 : "")
+        color: "#8b9aab"
+        font.pixelSize: 12
+        font.family: "Consolas"
     }
 
     Label {
@@ -637,6 +638,8 @@ Pane {
             margins: 20
         }
         text: Qt.application.version
+        color: "#5c6b7c"
+        font.pixelSize: 12
     }
 
     Image {

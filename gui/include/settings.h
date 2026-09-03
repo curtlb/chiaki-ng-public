@@ -398,6 +398,8 @@ class Settings : public QObject
 	// 4cloud.pro account (hourly cloud gaming billing)
 	QString GetFourCloudEmail() const;
 	void SetFourCloudEmail(const QString &email);
+	qint64 GetCloudBillingUserId() const;
+	void SetCloudBillingUserId(qint64 user_id);
 	bool GetCloudBillingEnabled() const;
 	void SetCloudBillingEnabled(bool enabled);
 	QString GetCloudBillingHost() const;

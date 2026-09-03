@@ -141,6 +141,13 @@ CloudBillingClient::Result CloudBillingClient::endStream(const QString &host, qu
 	return request(o);
 }
 
+CloudBillingClient::Result CloudBillingClient::whoami(const QString &host, quint16 port, const QString &email)
+{
+	QJsonObject o = baseReq(host, port, QStringLiteral("whoami"));
+	o[QStringLiteral("email")] = email;
+	return request(o);
+}
+
 static QString normalizeTitleSku(QString sku)
 {
 	sku = sku.trimmed();
