@@ -171,7 +171,8 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Leases (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
--- Hourly play session (billing block inside a lease)
+-- Live play wallet: ONE row per user (Plus + Owned residual minutes)
+-- Past sessions are moved to CloudStreaming_SessionsArchive.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
     ID                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -194,8 +195,8 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
 
     BlockNo             INT NOT NULL DEFAULT 1,
     BlockStartedAt      DATETIME(3) NOT NULL,
-    PaidUntil           DATETIME(3) NOT NULL,
-    RenewAt             DATETIME(3) NOT NULL COMMENT 'paid_until - 10 minutes',
+    PaidUntil           DATETIME(3) NOT NULL COMMENT 'mirror of active-pool residual',
+    RenewAt             DATETIME(3) NOT NULL COMMENT 'PaidUntil - 10 minutes',
 
     StreamActive        TINYINT(1) NOT NULL DEFAULT 0,
     LastHeartbeatAt     DATETIME(3) NULL,
@@ -204,11 +205,17 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
     EndReason           VARCHAR(64) NULL,
     UiMessage           VARCHAR(512) NULL,
 
+    PlusMinutesLeft     INT NOT NULL DEFAULT 0 COMMENT 'residual minutes for Plus/F2P pool',
+    OwnedMinutesLeft    INT NOT NULL DEFAULT 0 COMMENT 'residual minutes for owned titles',
+    BillingPool         ENUM('plus','owned') NULL,
+    BalanceTickAt       DATETIME(3) NULL COMMENT 'last burn tick while StreamActive=1',
+
     CreatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UpdatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
 
     PRIMARY KEY (ID),
     UNIQUE KEY uq_cs_session_token (SessionToken),
+    UNIQUE KEY uq_cs_sess_user_one (UserID),
     KEY idx_cs_sess_user (UserID, Status),
     KEY idx_cs_sess_lease (LeaseID, Status),
     KEY idx_cs_sess_renew (Status, RenewAt),
@@ -220,8 +227,41 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
     CONSTRAINT fk_cs_sess_game FOREIGN KEY (GameID) REFERENCES CloudStreaming_Games(ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS CloudStreaming_SessionsArchive (
+    ID                  BIGINT UNSIGNED NOT NULL,
+    SessionToken        CHAR(36) NOT NULL,
+    UserID              BIGINT UNSIGNED NOT NULL,
+    LeaseID             BIGINT UNSIGNED NOT NULL,
+    AccountID           BIGINT UNSIGNED NOT NULL,
+    GameID              BIGINT UNSIGNED NOT NULL,
+    ServiceType         ENUM('pscloud','psnow') NOT NULL,
+    GameIdentifier      VARCHAR(128) NOT NULL,
+    Status              VARCHAR(32) NOT NULL,
+    BlockNo             INT NOT NULL DEFAULT 1,
+    BlockStartedAt      DATETIME(3) NOT NULL,
+    PaidUntil           DATETIME(3) NOT NULL,
+    RenewAt             DATETIME(3) NOT NULL,
+    StreamActive        TINYINT(1) NOT NULL DEFAULT 0,
+    LastHeartbeatAt     DATETIME(3) NULL,
+    EndedAt             DATETIME(3) NULL,
+    EndReason           VARCHAR(64) NULL,
+    UiMessage           VARCHAR(512) NULL,
+    PlusMinutesLeft     INT NOT NULL DEFAULT 0,
+    OwnedMinutesLeft    INT NOT NULL DEFAULT 0,
+    BillingPool         ENUM('plus','owned') NULL,
+    BalanceTickAt       DATETIME(3) NULL,
+    CreatedAt           DATETIME(3) NULL,
+    UpdatedAt           DATETIME(3) NULL,
+    ArchivedAt          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    ArchiveReason       VARCHAR(64) NOT NULL DEFAULT 'consolidate',
+    PRIMARY KEY (ID),
+    KEY idx_cs_sess_arch_user (UserID, ArchivedAt),
+    KEY idx_cs_sess_arch_token (SessionToken)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ---------------------------------------------------------------------------
 -- Payment charges (Robokassa recurring)
+-- SessionID may point at live Sessions or SessionsArchive (no FK).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS CloudStreaming_Charges (
     ID                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -240,7 +280,6 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Charges (
     UNIQUE KEY uq_cs_charge_idem (IdempotencyKey),
     UNIQUE KEY uq_cs_charge_session_block (SessionID, BlockNo),
     KEY idx_cs_charge_user (UserID, CreatedAt),
-    CONSTRAINT fk_cs_charge_session FOREIGN KEY (SessionID) REFERENCES CloudStreaming_Sessions(ID),
     CONSTRAINT fk_cs_charge_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

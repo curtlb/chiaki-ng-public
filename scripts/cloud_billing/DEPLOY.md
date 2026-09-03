@@ -38,9 +38,17 @@ Existing database (already has old `CloudStreaming_*` tables):
 
 ```bash
 mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < migrate_catalog_v2.sql
+mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < migrate_sessions_balance_v3.sql
 ```
 
-Use **`migrate_catalog_v2.sql`** (not `migrate_catalog.sql`) if phpMyAdmin reports **#1022 duplicate key** on `CloudStreaming_AccountOwnedGames_new` — the old script reused FK names already taken by the live table.
+`migrate_sessions_balance_v3.sql` adds `PlusMinutesLeft` / `OwnedMinutesLeft` and
+`CloudStreaming_SessionsArchive`. On `pm2 restart`, the billing server also
+consolidates duplicate live sessions (one row per user) and moves extras to the
+archive automatically.
+
+**Billing model:** each player has one live `CloudStreaming_Sessions` row with two
+residual wallets — Plus/F2P (`PlusMinutesLeft`) and owned titles (`OwnedMinutesLeft`).
+Minutes burn only while `StreamActive=1`. Charging +60 min credits the matching pool.
 
 If a previous attempt failed halfway:
 

@@ -146,9 +146,11 @@ def parse_db_datetime(value):
 
 
 def sql_minutes_left_expr():
-    """Remaining paid minutes using the same MySQL clock as PaidUntil / NOW(3)."""
+    """Active-pool residual minutes (PlusMinutesLeft / OwnedMinutesLeft)."""
     return (
-        "GREATEST(0, CEILING(TIMESTAMPDIFF(SECOND, NOW(3), s.PaidUntil) / 60))"
+        "GREATEST(0, CASE "
+        "WHEN COALESCE(s.BillingPool, 'plus') = 'owned' THEN s.OwnedMinutesLeft "
+        "ELSE s.PlusMinutesLeft END)"
     )
 
 
@@ -164,6 +166,312 @@ def fetch_minutes_left(conn, session_id):
     if not row:
         return 0
     return int(row.get("MinutesLeft") or 0)
+
+
+def pool_column(pool):
+    return "OwnedMinutesLeft" if pool == "owned" else "PlusMinutesLeft"
+
+
+def pool_minutes(sess, pool=None):
+    pool = pool or (sess.get("BillingPool") or "plus")
+    key = "OwnedMinutesLeft" if pool == "owned" else "PlusMinutesLeft"
+    try:
+        return max(0, int(sess.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def sync_paid_until_fields(conn, sess_id, pool, minutes_left):
+    """Keep PaidUntil/RenewAt as mirrors of residual minutes for older clients."""
+    minutes_left = max(0, int(minutes_left or 0))
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_Sessions SET "
+            "PaidUntil = DATE_ADD(NOW(3), INTERVAL %s MINUTE), "
+            "RenewAt = DATE_ADD(NOW(3), INTERVAL %s MINUTE), "
+            "BillingPool = %s "
+            "WHERE ID = %s",
+            (minutes_left, max(0, minutes_left - int(RENEW_LEAD.total_seconds() // 60)), pool, sess_id),
+        )
+
+
+def credit_pool_minutes(conn, sess_id, pool, minutes):
+    col = pool_column(pool)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_Sessions SET `{col}` = GREATEST(0, `{col}`) + %s "
+            "WHERE ID = %s".format(col=col),
+            (int(minutes), sess_id),
+        )
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess_id,))
+        sess = cur.fetchone()
+    sync_paid_until_fields(conn, sess_id, pool, pool_minutes(sess, pool))
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess_id,))
+        return cur.fetchone()
+
+
+def tick_session_balance(conn, sess):
+    """Burn residual minutes only while the stream is active."""
+    if not sess:
+        return sess
+    if not int(sess.get("StreamActive") or 0):
+        return sess
+    if sess.get("Status") == "pending_payment":
+        return sess
+    pool = sess.get("BillingPool") or "plus"
+    now = datetime.now()
+    tick_at = parse_db_datetime(sess.get("BalanceTickAt")) or parse_db_datetime(
+        sess.get("LastHeartbeatAt")
+    )
+    if not tick_at:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET BalanceTickAt=NOW(3) WHERE ID=%s",
+                (sess["ID"],),
+            )
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
+            return cur.fetchone()
+    elapsed = int((now - tick_at).total_seconds() // 60)
+    if elapsed <= 0:
+        return sess
+    before = pool_minutes(sess, pool)
+    after = max(0, before - elapsed)
+    col = pool_column(pool)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_Sessions SET `{col}`=%s, BalanceTickAt=NOW(3) "
+            "WHERE ID=%s".format(col=col),
+            (after, sess["ID"]),
+        )
+    sync_paid_until_fields(conn, sess["ID"], pool, after)
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
+        sess = cur.fetchone()
+    if after <= 0 and before > 0:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
+                "EndReason='time_expired', StreamActive=0, "
+                "UiMessage=%s WHERE ID=%s",
+                ("Оплаченное время закончилось.", sess["ID"]),
+            )
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
+            sess = cur.fetchone()
+    return sess
+
+
+def archive_session_row(conn, sess, reason="consolidate"):
+    if not sess:
+        return
+    cols = (
+        "ID", "SessionToken", "UserID", "LeaseID", "AccountID", "GameID", "ServiceType",
+        "GameIdentifier", "Status", "BlockNo", "BlockStartedAt", "PaidUntil", "RenewAt",
+        "StreamActive", "LastHeartbeatAt", "EndedAt", "EndReason", "UiMessage",
+        "PlusMinutesLeft", "OwnedMinutesLeft", "BillingPool", "BalanceTickAt",
+        "CreatedAt", "UpdatedAt",
+    )
+    values = []
+    for c in cols:
+        if c in ("PlusMinutesLeft", "OwnedMinutesLeft"):
+            values.append(int(sess.get(c) or 0))
+        else:
+            values.append(sess.get(c))
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO CloudStreaming_SessionsArchive ("
+            + ", ".join(cols)
+            + ", ArchivedAt, ArchiveReason) VALUES ("
+            + ", ".join(["%s"] * len(cols))
+            + ", NOW(3), %s) "
+            "ON DUPLICATE KEY UPDATE ArchiveReason=VALUES(ArchiveReason), ArchivedAt=NOW(3)",
+            tuple(values) + (reason,),
+        )
+        cur.execute("DELETE FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
+
+
+def _session_rank(sess):
+    status_rank = {
+        "active": 0,
+        "grace_no_stream": 1,
+        "renewal_pending": 2,
+        "pending_payment": 3,
+        "ended": 4,
+        "failed": 5,
+    }
+    return (
+        status_rank.get(sess.get("Status"), 9),
+        -(pool_minutes(sess, "plus") + pool_minutes(sess, "owned")),
+        -int(sess.get("ID") or 0),
+    )
+
+
+def consolidate_user_sessions(conn, user_id=None):
+    """Keep one live Sessions row per user; move the rest to archive."""
+    with conn.cursor() as cur:
+        if user_id is None:
+            cur.execute("SELECT DISTINCT UserID FROM CloudStreaming_Sessions")
+        else:
+            cur.execute(
+                "SELECT DISTINCT UserID FROM CloudStreaming_Sessions WHERE UserID=%s",
+                (user_id,),
+            )
+        user_ids = [r["UserID"] for r in cur.fetchall()]
+    for uid in user_ids:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM CloudStreaming_Sessions WHERE UserID=%s FOR UPDATE",
+                (uid,),
+            )
+            rows = cur.fetchall()
+        if len(rows) <= 1:
+            if rows:
+                # Seed balances from PaidUntil once if both wallets are empty.
+                sess = rows[0]
+                if pool_minutes(sess, "plus") == 0 and pool_minutes(sess, "owned") == 0:
+                    paid_until = parse_db_datetime(sess.get("PaidUntil"))
+                    now = datetime.now()
+                    if paid_until and paid_until > now:
+                        mins = max(0, int((paid_until - now).total_seconds() + 59) // 60)
+                        pool = sess.get("BillingPool") or session_billing_pool(conn, sess)
+                        col = pool_column(pool)
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE CloudStreaming_Sessions SET `{col}`=%s, BillingPool=%s "
+                                "WHERE ID=%s".format(col=col),
+                                (mins, pool, sess["ID"]),
+                            )
+            continue
+        rows_sorted = sorted(rows, key=_session_rank)
+        keep = dict(rows_sorted[0])
+        plus_sum = sum(pool_minutes(r, "plus") for r in rows)
+        owned_sum = sum(pool_minutes(r, "owned") for r in rows)
+        # Recover residual from PaidUntil on rows that never got wallet columns filled.
+        for r in rows:
+            if pool_minutes(r, "plus") or pool_minutes(r, "owned"):
+                continue
+            paid_until = parse_db_datetime(r.get("PaidUntil"))
+            now = datetime.now()
+            if not paid_until or paid_until <= now:
+                continue
+            mins = max(0, int((paid_until - now).total_seconds() + 59) // 60)
+            pool = r.get("BillingPool") or session_billing_pool(conn, r)
+            if pool == "owned":
+                owned_sum += mins
+            else:
+                plus_sum += mins
+        max_block = max(int(r.get("BlockNo") or 1) for r in rows)
+        pool = keep.get("BillingPool") or session_billing_pool(conn, keep)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET PlusMinutesLeft=%s, OwnedMinutesLeft=%s, "
+                "BlockNo=%s, BillingPool=%s WHERE ID=%s",
+                (plus_sum, owned_sum, max_block, pool, keep["ID"]),
+            )
+        sync_paid_until_fields(
+            conn, keep["ID"], pool, owned_sum if pool == "owned" else plus_sum
+        )
+        for r in rows:
+            if r["ID"] == keep["ID"]:
+                continue
+            archive_session_row(conn, r, reason="consolidate")
+        log.info(
+            "sessions consolidate user=%s keep=%s plus=%s owned=%s archived=%s",
+            uid,
+            keep["ID"],
+            plus_sum,
+            owned_sum,
+            len(rows) - 1,
+        )
+
+
+def ensure_sessions_balance_schema(conn):
+    """Idempotent: archive table, wallet columns, consolidate, unique UserID."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS CloudStreaming_SessionsArchive (
+                ID BIGINT UNSIGNED NOT NULL,
+                SessionToken CHAR(36) NOT NULL,
+                UserID BIGINT UNSIGNED NOT NULL,
+                LeaseID BIGINT UNSIGNED NOT NULL,
+                AccountID BIGINT UNSIGNED NOT NULL,
+                GameID BIGINT UNSIGNED NOT NULL,
+                ServiceType ENUM('pscloud','psnow') NOT NULL,
+                GameIdentifier VARCHAR(128) NOT NULL,
+                Status VARCHAR(32) NOT NULL,
+                BlockNo INT NOT NULL DEFAULT 1,
+                BlockStartedAt DATETIME(3) NOT NULL,
+                PaidUntil DATETIME(3) NOT NULL,
+                RenewAt DATETIME(3) NOT NULL,
+                StreamActive TINYINT(1) NOT NULL DEFAULT 0,
+                LastHeartbeatAt DATETIME(3) NULL,
+                EndedAt DATETIME(3) NULL,
+                EndReason VARCHAR(64) NULL,
+                UiMessage VARCHAR(512) NULL,
+                PlusMinutesLeft INT NOT NULL DEFAULT 0,
+                OwnedMinutesLeft INT NOT NULL DEFAULT 0,
+                BillingPool ENUM('plus','owned') NULL,
+                BalanceTickAt DATETIME(3) NULL,
+                CreatedAt DATETIME(3) NULL,
+                UpdatedAt DATETIME(3) NULL,
+                ArchivedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                ArchiveReason VARCHAR(64) NOT NULL DEFAULT 'consolidate',
+                PRIMARY KEY (ID),
+                KEY idx_cs_sess_arch_user (UserID, ArchivedAt),
+                KEY idx_cs_sess_arch_token (SessionToken)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        )
+    # Drop charges FK so archived SessionIDs remain valid historically.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='CloudStreaming_Charges' "
+            "AND CONSTRAINT_NAME='fk_cs_charge_session' LIMIT 1"
+        )
+        if cur.fetchone():
+            cur.execute("ALTER TABLE CloudStreaming_Charges DROP FOREIGN KEY fk_cs_charge_session")
+    for col, ddl in (
+        ("PlusMinutesLeft", "INT NOT NULL DEFAULT 0 AFTER UiMessage"),
+        ("OwnedMinutesLeft", "INT NOT NULL DEFAULT 0 AFTER PlusMinutesLeft"),
+        ("BillingPool", "ENUM('plus','owned') NULL AFTER OwnedMinutesLeft"),
+        ("BalanceTickAt", "DATETIME(3) NULL AFTER BillingPool"),
+    ):
+        if not _column_exists(conn, "CloudStreaming_Sessions", col):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "ALTER TABLE CloudStreaming_Sessions ADD COLUMN %s %s" % (col, ddl)
+                )
+    consolidate_user_sessions(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='CloudStreaming_Sessions' "
+            "AND INDEX_NAME='uq_cs_sess_user_one'"
+        )
+        if int((cur.fetchone() or {}).get("c") or 0) == 0:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_Sessions ADD UNIQUE KEY uq_cs_sess_user_one (UserID)"
+            )
+    conn.commit()
+
+
+def get_user_session(conn, user_id, for_update=False):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM CloudStreaming_Sessions WHERE UserID=%s",
+            (user_id,),
+        )
+        count = int((cur.fetchone() or {}).get("c") or 0)
+    if count > 1:
+        consolidate_user_sessions(conn, user_id)
+    sql = "SELECT * FROM CloudStreaming_Sessions WHERE UserID=%s LIMIT 1"
+    if for_update:
+        sql += " FOR UPDATE"
+    with conn.cursor() as cur:
+        cur.execute(sql, (user_id,))
+        return cur.fetchone()
 
 
 def db_connect():
@@ -312,6 +620,7 @@ def verify_schema(conn):
             "and migrate_payment_methods.sql, then pm2 restart cloud-billing-udp."
             % ", ".join(missing)
         )
+    ensure_sessions_balance_schema(conn)
 
 
 def ensure_user(conn, email):
@@ -581,97 +890,33 @@ def _session_matches_resumable(conn, row, target_pool, st, identifiers, catalog_
 
 
 def find_resumable_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
-    """Paid session with time left: shared plus pool, or same owned title."""
-    st, identifiers, catalog_ids = collect_game_identity(
-        conn, service_type, game_identifier, game
-    )
-    account_id = _billing_pool_account_id(conn, user_id, game)
+    """Resume when the matching Plus/Owned residual balance still has minutes."""
+    sess = get_user_session(conn, user_id, for_update=True)
+    if not sess:
+        return None
+    sess = tick_session_balance(conn, sess)
+    if sess.get("Status") == "pending_payment":
+        return None
+    account_id = sess.get("AccountID") or _billing_pool_account_id(conn, user_id, game)
     target_pool = game_billing_pool(conn, account_id, game) if game else "plus"
-    active_statuses = ("active", "grace_no_stream", "renewal_pending")
-    status_ph = ",".join(["%s"] * len(active_statuses))
-
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
-            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-            "WHERE s.UserID = %s AND s.Status IN (" + status_ph + ") AND s.PaidUntil > NOW(3) "
-            "ORDER BY s.PaidUntil DESC",
-            (user_id,) + active_statuses,
-        )
-        rows = cur.fetchall()
-
-    for row in rows:
-        if _session_matches_resumable(
-            conn, row, target_pool, st, identifiers, catalog_ids, game_id
-        ):
-            return row
-
-    # Recover session wrongly ended (e.g. old billing ended same game on re-entry).
-    recover_reasons = ("game_switch", "stream_stopped", "user_exit")
-    reason_ph = ",".join(["%s"] * len(recover_reasons))
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
-            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-            "WHERE s.UserID = %s AND s.Status = 'ended' AND s.PaidUntil > NOW(3) "
-            "AND s.EndReason IN (" + reason_ph + ") "
-            "ORDER BY s.PaidUntil DESC",
-            (user_id,) + recover_reasons,
-        )
-        rows = cur.fetchall()
-
-    for row in rows:
-        if not _session_matches_resumable(
-            conn, row, target_pool, st, identifiers, catalog_ids, game_id
-        ):
-            continue
+    if pool_minutes(sess, target_pool) <= 0:
+        return None
+    # Recover wrongly ended rows that still have wallet time.
+    if sess.get("Status") in ("ended", "failed"):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET Status='grace_no_stream', "
                 "StreamActive=0, EndedAt=NULL, EndReason=NULL, "
                 "UiMessage=%s WHERE ID=%s",
-                ("Восстановлена оплаченная сессия…", row["ID"]),
+                ("Восстановлен остаток оплаченного времени…", sess["ID"]),
             )
-            cur.execute(
-                "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
-                "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-                "WHERE s.ID = %s LIMIT 1",
-                (row["ID"],),
-            )
-            return cur.fetchone()
-    return None
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
+            sess = cur.fetchone()
+    return sess
 
 
 def find_other_active_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
-    """Another session whose paid time is forfeited when starting the requested title."""
-    st, identifiers, catalog_ids = collect_game_identity(
-        conn, service_type, game_identifier, game
-    )
-    account_id = _billing_pool_account_id(conn, user_id, game)
-    target_pool = game_billing_pool(conn, account_id, game) if game else "plus"
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT s.*, g.CatalogID FROM CloudStreaming_Sessions s "
-            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-            "WHERE s.UserID = %s AND s.Status IN ('active','grace_no_stream','renewal_pending') "
-            "AND s.PaidUntil > NOW(3) "
-            "ORDER BY s.PaidUntil DESC",
-            (user_id,),
-        )
-        rows = cur.fetchall()
-
-    for row in rows:
-        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
-            continue
-        row_pool = session_billing_pool(conn, row)
-        # Plus and owned pools bill separately — switching across pools does not forfeit.
-        if target_pool != row_pool:
-            continue
-        if target_pool == "plus":
-            # Any plus-pool session is reused, not forfeited.
-            continue
-        # owned → different owned title: remaining time on the other title is lost.
-        return row
+    """Obsolete with one row + shared pool wallets — never forfeit sibling time."""
     return None
 
 
@@ -945,43 +1190,14 @@ def end_other_active_sessions(
     game=None,
     target_account_id=None,
 ):
-    st, identifiers, catalog_ids = (None, set(), set())
-    target_pool = None
-    if service_type and game_identifier:
-        st, identifiers, catalog_ids = collect_game_identity(
-            conn, service_type, game_identifier, game
-        )
-    if game:
-        acc_id = target_account_id or _billing_pool_account_id(conn, user_id, game)
-        target_pool = game_billing_pool(conn, acc_id, game)
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT s.ID, s.SessionToken, s.ServiceType, s.GameIdentifier, s.GameID, "
-            "s.AccountID, g.CatalogID FROM CloudStreaming_Sessions s "
-            "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-            "WHERE s.UserID = %s AND s.Status IN ('active','grace_no_stream','renewal_pending')",
-            (user_id,),
-        )
-        rows = cur.fetchall()
-    for row in rows:
-        if except_session_id and row["ID"] == except_session_id:
-            continue
-        if st and _session_same_game(row, st, identifiers, catalog_ids, game_id):
-            continue
-        row_pool = session_billing_pool(conn, row)
-        if target_pool and target_pool != row_pool:
-            continue
-        if target_pool == "plus" and row_pool == "plus":
-            continue
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
-                "EndReason='game_switch', StreamActive=0 WHERE ID=%s",
-                (row["ID"],),
-            )
+    """No-op: each player has a single live Sessions row with Plus/Owned wallets."""
+    return
 
 
 def session_payload(conn, sess):
+    if not sess or not sess.get("ID"):
+        return {}
+    sess = tick_session_balance(conn, sess)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.*, g.Name AS GameName, g.HourlyPrice, a.NPSSO, a.Label AS AccountLabel, "
@@ -999,9 +1215,13 @@ def session_payload(conn, sess):
         row = cur.fetchone()
     if not row:
         return {}
-    paid_until = parse_db_datetime(row["PaidUntil"])
-    minutes_left = int(row.get("MinutesLeft") or 0)
-    renew_at = parse_db_datetime(row["RenewAt"])
+    pool = row.get("BillingPool") or "plus"
+    plus_left = int(row.get("PlusMinutesLeft") or 0)
+    owned_left = int(row.get("OwnedMinutesLeft") or 0)
+    minutes_left = owned_left if pool == "owned" else plus_left
+    now = datetime.now()
+    paid_until = now + timedelta(minutes=max(0, minutes_left))
+    renew_at = paid_until - RENEW_LEAD
     region = (row.get("AccountRegion") or "PL").strip().upper() or "PL"
     store_country = "US" if region in AMERICAS_REGIONS else region
     return {
@@ -1016,15 +1236,19 @@ def session_payload(conn, sess):
         "game_identifier": row.get("GameIdentifier"),
         "game_name": row.get("GameName"),
         "hourly_price": float(row.get("HourlyPrice") or DEFAULT_HOURLY),
-        "paid_until": fmt_dt(paid_until) if paid_until else "",
+        "paid_until": fmt_dt(paid_until),
         "minutes_left": minutes_left,
-        "renew_at": fmt_dt(renew_at) if renew_at else "",
+        "plus_minutes_left": plus_left,
+        "owned_minutes_left": owned_left,
+        "billing_pool": pool,
+        "renew_at": fmt_dt(renew_at),
         "renew_soon": minutes_left <= int(RENEW_LEAD.total_seconds() // 60),
         "retention_until": str(row.get("RetentionUntil") or ""),
         "status": row["Status"],
         "stream_active": bool(row.get("StreamActive")),
         "ui_message": row.get("UiMessage") or "",
     }
+
 
 
 def catalog_title_key(name):
@@ -1542,31 +1766,21 @@ def handle_quote(conn, req):
     resumable = find_resumable_session(
         conn, user["ID"], service_type, game_identifier, game["ID"], game
     )
+    account_id = (resumable or {}).get("AccountID") or _billing_pool_account_id(
+        conn, user["ID"], game
+    )
+    target_pool = game_billing_pool(conn, account_id, game)
     if resumable:
         payload = session_payload(conn, resumable)
         mins = payload.get("minutes_left", 0)
-        account_id = resumable.get("AccountID") or _billing_pool_account_id(
-            conn, user["ID"], game
+        pool_label = (
+            "купленных игр" if target_pool == "owned" else "PS Plus / бесплатных игр"
         )
-        target_pool = game_billing_pool(conn, account_id, game)
-        st, identifiers, catalog_ids = collect_game_identity(
-            conn, service_type, game_identifier, game
+        ui_msg = (
+            "У вас осталось %s мин на балансе (%s). "
+            "«%s» можно запустить без дополнительного списания."
+            % (mins, pool_label, game["Name"])
         )
-        same_title = _session_same_game(
-            resumable, st, identifiers, catalog_ids, game["ID"]
-        )
-        if target_pool == "plus" and not same_title:
-            ui_msg = (
-                "У вас осталось %s мин оплаченного времени (PS Plus / бесплатные игры). "
-                "Можно переключиться на «%s» без дополнительного списания."
-                % (mins, game["Name"])
-            )
-        else:
-            ui_msg = (
-                "У вас осталось %s мин оплаченного времени в «%s». "
-                "Дополнительное списание не требуется — можно продолжить игру."
-                % (mins, game["Name"])
-            )
         return reply(
             req_id,
             True,
@@ -1576,45 +1790,28 @@ def handle_quote(conn, req):
             resume_session=True,
             no_charge=True,
             minutes_left=mins,
+            plus_minutes_left=payload.get("plus_minutes_left", 0),
+            owned_minutes_left=payload.get("owned_minutes_left", 0),
             game_name=game["Name"],
             billing_pool=target_pool,
         )
 
     lease = find_active_lease(conn, user["ID"], game)
     reuse = lease is not None
-    other_active = find_other_active_session(
-        conn, user["ID"], service_type, game_identifier, game["ID"], game
-    )
-    account_id = (lease or {}).get("AccountID") or _billing_pool_account_id(
-        conn, user["ID"], game
-    )
-    target_pool = game_billing_pool(conn, account_id, game)
-
+    pool_label = "купленных игр" if target_pool == "owned" else "PS Plus / бесплатных игр"
     if reuse:
         msg = (
             "Будет использован ваш сохранённый аккаунт PS (%s). "
-            "Сейчас спишется %s ₽ за 1 час игры «%s»."
-            % (lease.get("AccountLabel") or "аренда", int(price), game["Name"])
+            "Сейчас спишется %s ₽ за 1 час — время добавится на баланс %s («%s»)."
+            % (lease.get("AccountLabel") or "аренда", int(price), pool_label, game["Name"])
         )
-        if other_active:
-            msg += (
-                " Оставшееся оплаченное время на другой купленной игре не переносится."
-                if target_pool == "owned"
-                else " Оставшееся оплаченное время на другой игре не переносится."
-            )
     else:
         msg = (
             "Сейчас спишется %s ₽ за 1 час игры «%s». "
-            "Вам будет выделен PS-аккаунт с PS Plus. "
-            "Сохранения останутся на этом аккаунте %s дней."
-            % (int(price), game["Name"], RETENTION_DAYS)
+            "Время будет зачислено на баланс %s. "
+            "Вам выделят PS-аккаунт; сохранения хранятся %s дней."
+            % (int(price), game["Name"], pool_label, RETENTION_DAYS)
         )
-        if other_active:
-            msg += (
-                " Оставшееся оплаченное время на другой купленной игре не переносится."
-                if target_pool == "owned"
-                else " Оставшееся оплаченное время на другой игре не переносится."
-            )
 
     return reply(
         req_id,
@@ -1659,23 +1856,12 @@ def handle_start(conn, req):
         conn, user["ID"], service_type, game_identifier, game["ID"], game
     )
     if resumable:
-        st, identifiers, catalog_ids = collect_game_identity(
-            conn, service_type, game_identifier, game
-        )
-        end_other_active_sessions(
-            conn,
-            user["ID"],
-            except_session_id=resumable["ID"],
-            service_type=service_type,
-            game_identifier=game_identifier,
-            game_id=game["ID"],
-            game=game,
-            target_account_id=resumable.get("AccountID"),
-        )
+        account_id = resumable.get("AccountID")
+        target_pool = game_billing_pool(conn, account_id, game)
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT Region FROM CloudStreaming_Accounts WHERE ID=%s LIMIT 1",
-                (resumable["AccountID"],),
+                (account_id,),
             )
             acc_row = cur.fetchone() or {}
         region = (acc_row.get("Region") or "PL").strip().upper()
@@ -1685,45 +1871,29 @@ def handle_start(conn, req):
         if play_id and play_id != game_identifier:
             game_identifier = play_id
             game = ensure_game(conn, service_type, play_id, game_name)
-        need_game_update = (
-            not _session_same_game(resumable, st, identifiers, catalog_ids, game["ID"])
-            or game_identifier != (resumable.get("GameIdentifier") or "")
-        )
-        if need_game_update:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE CloudStreaming_Sessions SET GameID=%s, GameIdentifier=%s, "
-                    "ServiceType=%s WHERE ID=%s",
-                    (game["ID"], game_identifier, service_type, resumable["ID"]),
-                )
-            resumable = dict(resumable)
-            resumable["GameID"] = game["ID"]
-            resumable["GameIdentifier"] = game_identifier
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE CloudStreaming_Sessions SET StreamActive=1, Status='active', "
-                "LastHeartbeatAt=NOW(3) WHERE ID=%s",
-                (resumable["ID"],),
+                "UPDATE CloudStreaming_Sessions SET GameID=%s, GameIdentifier=%s, "
+                "ServiceType=%s, BillingPool=%s, StreamActive=1, Status='active', "
+                "BalanceTickAt=NOW(3), LastHeartbeatAt=NOW(3), "
+                "EndedAt=NULL, EndReason=NULL WHERE ID=%s",
+                (game["ID"], game_identifier, service_type, target_pool, resumable["ID"]),
             )
+        sync_paid_until_fields(
+            conn, resumable["ID"], target_pool, pool_minutes(resumable, target_pool)
+        )
         touch_lease(conn, resumable["LeaseID"])
         conn.commit()
         payload = session_payload(conn, resumable)
         mins = payload.get("minutes_left", 0)
-        account_id = resumable.get("AccountID")
-        target_pool = game_billing_pool(conn, account_id, game)
-        same_title = _session_same_game(
-            resumable, st, identifiers, catalog_ids, game["ID"]
+        ui_msg = (
+            "Запуск «%s». Осталось %s мин на балансе (%s)."
+            % (
+                game["Name"],
+                mins,
+                "купленные" if target_pool == "owned" else "Plus/F2P",
+            )
         )
-        if target_pool == "plus" and not same_title:
-            ui_msg = (
-                "Переключение на «%s». Осталось %s мин (PS Plus / бесплатные игры)."
-                % (game["Name"], mins)
-            )
-        else:
-            ui_msg = (
-                "Продолжение сессии «%s». Осталось %s мин оплаченного времени."
-                % (game["Name"], mins)
-            )
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET UiMessage=%s WHERE ID=%s",
@@ -1734,18 +1904,6 @@ def handle_start(conn, req):
         payload["ui_message"] = ui_msg
         payload["billing_pool"] = target_pool
         return reply(req_id, True, **payload)
-
-    # New payment: only end sessions in the same billing pool (plus vs owned).
-    pre_lease = find_active_lease(conn, user["ID"], game)
-    end_other_active_sessions(
-        conn,
-        user["ID"],
-        service_type=service_type,
-        game_identifier=game_identifier,
-        game_id=game["ID"],
-        game=game,
-        target_account_id=(pre_lease or {}).get("AccountID"),
-    )
 
     lease = find_active_lease(conn, user["ID"], game)
     account = None
@@ -1785,59 +1943,102 @@ def handle_start(conn, req):
             cur.execute("SELECT * FROM CloudStreaming_Leases WHERE ID=%s", (lease_id,))
             lease = cur.fetchone()
 
-    # Bind stream id to the rented account's store region (EP for PL/EU, UP for US).
     region = (account.get("Region") or "PL").strip().upper()
     play_id, _ = resolve_regional_stream_id(conn, service_type, game_identifier, region)
     if play_id and play_id != game_identifier:
         game_identifier = play_id
         game = ensure_game(conn, service_type, game_identifier, game_name)
 
+    target_pool = game_billing_pool(conn, account["ID"], game)
     token = str(uuid.uuid4())
     now = datetime.now()
-    paid_until = now + timedelta(hours=1)
-    renew_at = paid_until - RENEW_LEAD
     ui_msg = (
         "Подготовка к запуску «%s». Списание %s ₽ произойдёт только после успешного "
-        "подключения к игре."
-        % (game["Name"], int(price))
+        "подключения к игре. Время будет зачислено на баланс %s."
+        % (
+            game["Name"],
+            int(price),
+            "купленных игр" if target_pool == "owned" else "Plus/F2P",
+        )
     )
 
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO CloudStreaming_Sessions "
-            "(SessionToken, UserID, LeaseID, AccountID, GameID, ServiceType, GameIdentifier, "
-            "Status, BlockNo, BlockStartedAt, PaidUntil, RenewAt, StreamActive, UiMessage) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,'pending_payment',1,%s,%s,%s,0,%s)",
-            (
-                token,
-                user["ID"],
-                lease["ID"],
-                account["ID"],
-                game["ID"],
-                service_type,
-                game_identifier,
-                fmt_dt(now),
-                fmt_dt(paid_until),
-                fmt_dt(renew_at),
-                ui_msg,
-            ),
-        )
-        session_id = cur.lastrowid
-        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (session_id,))
-        sess = cur.fetchone()
+    existing = get_user_session(conn, user["ID"], for_update=True)
+    if existing:
+        # Snapshot previous finished state, then reuse the single live row.
+        if existing.get("Status") in ("ended", "failed") and (
+            pool_minutes(existing, "plus") + pool_minutes(existing, "owned")
+        ) <= 0:
+            archive_session_row(conn, existing, reason="new_block")
+            existing = None
 
-    touch_lease(conn, lease["ID"])
+    if existing:
+        block_no = int(existing.get("BlockNo") or 0) + 1
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET "
+                "SessionToken=%s, LeaseID=%s, AccountID=%s, GameID=%s, ServiceType=%s, "
+                "GameIdentifier=%s, Status='pending_payment', BlockNo=%s, "
+                "BlockStartedAt=%s, StreamActive=0, BillingPool=%s, "
+                "BalanceTickAt=NULL, LastHeartbeatAt=NULL, EndedAt=NULL, EndReason=NULL, "
+                "UiMessage=%s WHERE ID=%s",
+                (
+                    token,
+                    lease["ID"],
+                    account["ID"],
+                    game["ID"],
+                    service_type,
+                    game_identifier,
+                    block_no,
+                    fmt_dt(now),
+                    target_pool,
+                    ui_msg,
+                    existing["ID"],
+                ),
+            )
+            # Mirror clocks from current residual (payment credits on confirm).
+            mins = pool_minutes(existing, target_pool)
+        sync_paid_until_fields(conn, existing["ID"], target_pool, mins)
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (existing["ID"],))
+            sess = cur.fetchone()
+    else:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO CloudStreaming_Sessions "
+                "(SessionToken, UserID, LeaseID, AccountID, GameID, ServiceType, GameIdentifier, "
+                "Status, BlockNo, BlockStartedAt, PaidUntil, RenewAt, StreamActive, UiMessage, "
+                "PlusMinutesLeft, OwnedMinutesLeft, BillingPool) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,'pending_payment',1,%s,%s,%s,0,%s,0,0,%s)",
+                (
+                    token,
+                    user["ID"],
+                    lease["ID"],
+                    account["ID"],
+                    game["ID"],
+                    service_type,
+                    game_identifier,
+                    fmt_dt(now),
+                    fmt_dt(now),
+                    fmt_dt(now),
+                    ui_msg,
+                    target_pool,
+                ),
+            )
+            session_id = cur.lastrowid
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (session_id,))
+            sess = cur.fetchone()
+
     conn.commit()
-
     payload = session_payload(conn, sess)
     payload["payment_pending"] = True
     payload["hourly_price"] = price
     payload["ui_message"] = ui_msg
+    payload["billing_pool"] = target_pool
     return reply(req_id, True, **payload)
 
 
 def handle_confirm_stream(conn, req):
-    """Charge the reserved hour after Gaikai allocation succeeded."""
+    """Charge the reserved hour after Gaikai allocation succeeded; credit wallet."""
     token = (req.get("session_token") or "").strip()
     email = (req.get("email") or "").strip().lower()
     req_id = req.get("id")
@@ -1867,6 +2068,11 @@ def handle_confirm_stream(conn, req):
 
     price = float(sess["HourlyPrice"])
     block_no = int(sess["BlockNo"])
+    pool = sess.get("BillingPool") or game_billing_pool(conn, sess.get("AccountID"), {
+        "ID": sess.get("GameID"),
+        "ServiceType": sess.get("ServiceType"),
+        "GameIdentifier": sess.get("GameIdentifier"),
+    })
     idem = "cs-%s-b%s" % (token, block_no)
     ok_pay, pay_msg = charge_hour(
         conn, email, sess["ID"], sess["UserID"], block_no, price, sess["GameName"], idem
@@ -1881,11 +2087,13 @@ def handle_confirm_stream(conn, req):
         conn.commit()
         return reply(req_id, False, error=pay_msg, ui_message=pay_msg)
 
+    sess = credit_pool_minutes(conn, sess["ID"], pool, 60)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET Status='active', StreamActive=1, "
-            "LastHeartbeatAt=NOW(3), UiMessage=%s WHERE ID=%s",
-            ("Оплата прошла. Игра запущена.", sess["ID"]),
+            "BillingPool=%s, BalanceTickAt=NOW(3), LastHeartbeatAt=NOW(3), "
+            "EndedAt=NULL, EndReason=NULL, UiMessage=%s WHERE ID=%s",
+            (pool, "Оплата прошла. Игра запущена.", sess["ID"]),
         )
         cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
         sess = cur.fetchone()
@@ -1894,9 +2102,9 @@ def handle_confirm_stream(conn, req):
 
     payload = session_payload(conn, sess)
     payload["ui_message"] = (
-        "Списано %s ₽. Играйте до %s. За 10 минут до конца при активном стриме "
-        "спишется следующий час автоматически."
-        % (int(price), payload.get("paid_until", ""))
+        "Списано %s ₽ (+60 мин на баланс %s). Играйте; за 10 минут до конца при "
+        "активном стриме спишется следующий час автоматически."
+        % (int(price), "купленных" if pool == "owned" else "Plus/F2P")
     )
     return reply(req_id, True, **payload)
 
@@ -1910,8 +2118,7 @@ def handle_heartbeat(conn, req):
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT *, TIMESTAMPDIFF(SECOND, NOW(3), PaidUntil) AS SecsLeft "
-            "FROM CloudStreaming_Sessions WHERE SessionToken=%s LIMIT 1 FOR UPDATE",
+            "SELECT * FROM CloudStreaming_Sessions WHERE SessionToken=%s LIMIT 1 FOR UPDATE",
             (token,),
         )
         sess = cur.fetchone()
@@ -1931,7 +2138,12 @@ def handle_heartbeat(conn, req):
             )
         return reply(req_id, False, error="Сессия завершена", status=sess["Status"])
 
-    if int(sess.get("SecsLeft") or 0) <= 0:
+    # Apply burn for the previous streaming interval before updating StreamActive.
+    if int(sess.get("StreamActive") or 0):
+        sess = tick_session_balance(conn, sess)
+
+    pool = sess.get("BillingPool") or "plus"
+    if pool_minutes(sess, pool) <= 0:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
@@ -1942,18 +2154,27 @@ def handle_heartbeat(conn, req):
         return reply(
             req_id,
             False,
-            error="Оплаченный час истёк",
-            ui_message="Время сессии закончилось. Запустите игру снова для новой оплаты.",
+            error="Оплаченное время истекло",
+            ui_message="Баланс времени закончился. Запустите игру снова для новой оплаты.",
             minutes_left=0,
+            plus_minutes_left=int(sess.get("PlusMinutesLeft") or 0),
+            owned_minutes_left=int(sess.get("OwnedMinutesLeft") or 0),
         )
 
     new_status = "active" if streaming else "grace_no_stream"
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET StreamActive=%s, LastHeartbeatAt=NOW(3), "
-            "Status=%s WHERE ID=%s",
-            (1 if streaming else 0, new_status, sess["ID"]),
+            "Status=%s, BalanceTickAt=IF(%s=1, COALESCE(BalanceTickAt, NOW(3)), BalanceTickAt) "
+            "WHERE ID=%s",
+            (1 if streaming else 0, new_status, 1 if streaming else 0, sess["ID"]),
         )
+        # When pausing stream, freeze wallet (no further burn until resume).
+        if not streaming:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET BalanceTickAt=NULL WHERE ID=%s",
+                (sess["ID"],),
+            )
         cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
         sess = cur.fetchone()
 
@@ -1998,6 +2219,8 @@ def handle_renew(conn, req):
             ui_message="Запустите стрим снова, чтобы продлить сессию.",
         )
 
+    sess = tick_session_balance(conn, sess)
+    pool = sess.get("BillingPool") or "plus"
     block_no = int(sess["BlockNo"]) + 1
     price = float(sess["HourlyPrice"])
     idem = "cs-%s-b%s" % (token, block_no)
@@ -2009,29 +2232,22 @@ def handle_renew(conn, req):
         conn.commit()
         return reply(req_id, False, error=pay_msg, ui_message=pay_msg)
 
-    now = datetime.now()
-    current_paid_until = parse_db_datetime(sess["PaidUntil"])
-    # Stack the new hour on any remaining paid time (e.g. 8 min left + 60 min = 68 min).
-    base = current_paid_until if current_paid_until and current_paid_until > now else now
-    paid_until = base + timedelta(hours=1)
-    renew_at = paid_until - RENEW_LEAD
-    minutes_left = max(0, int((paid_until - now).total_seconds() + 59) // 60)
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE CloudStreaming_Sessions SET BlockNo=%s, BlockStartedAt=%s, "
-            "PaidUntil=%s, RenewAt=%s, Status='active', UiMessage=%s WHERE ID=%s",
+            "UPDATE CloudStreaming_Sessions SET BlockNo=%s, BlockStartedAt=NOW(3) WHERE ID=%s",
+            (block_no, sess["ID"]),
+        )
+    sess = credit_pool_minutes(conn, sess["ID"], pool, 60)
+    minutes_left = pool_minutes(sess, pool)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_Sessions SET Status='active', UiMessage=%s WHERE ID=%s",
             (
-                block_no,
-                fmt_dt(now),
-                fmt_dt(paid_until),
-                fmt_dt(renew_at),
-                "Продлено ещё на 1 час (%s ₽). Всего осталось %s мин."
+                "Продлено ещё на 1 час (%s ₽). На балансе %s мин."
                 % (int(price), minutes_left),
                 sess["ID"],
             ),
         )
-    conn.commit()
-    with conn.cursor() as cur:
         cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
         sess = cur.fetchone()
     payload = session_payload(conn, sess)
@@ -2055,7 +2271,8 @@ def handle_end_stream(conn, req):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
-                "EndReason='payment_aborted', StreamActive=0, UiMessage=%s WHERE ID=%s",
+                "EndReason='payment_aborted', StreamActive=0, BalanceTickAt=NULL, "
+                "UiMessage=%s WHERE ID=%s",
                 ("Запуск не удался — списание не выполнялось.", sess["ID"]),
             )
         conn.commit()
@@ -2066,13 +2283,19 @@ def handle_end_stream(conn, req):
             payment_aborted=True,
         )
 
+    if int(sess.get("StreamActive") or 0):
+        sess = tick_session_balance(conn, sess)
+    pool = sess.get("BillingPool") or "plus"
+    mins = pool_minutes(sess, pool)
+    plus_left = int(sess.get("PlusMinutesLeft") or 0)
+    owned_left = int(sess.get("OwnedMinutesLeft") or 0)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
-            "UiMessage=%s WHERE ID=%s",
+            "BalanceTickAt=NULL, UiMessage=%s WHERE ID=%s",
             (
-                "Стрим приостановлен. Можно вернуться в эту же игру до %s."
-                % str(sess["PaidUntil"]),
+                "Стрим приостановлен. Остаток: Plus %s мин, купленные %s мин."
+                % (plus_left, owned_left),
                 sess["ID"],
             ),
         )
@@ -2085,10 +2308,13 @@ def handle_end_stream(conn, req):
         req_id,
         True,
         ui_message=(
-            "Стрим остановлен. Оплаченное время действует до %s — "
-            "запустите ту же игру снова, чтобы продолжить без новой оплаты."
-            % str(sess["PaidUntil"])
+            "Стрим остановлен. Остаток времени сохранён (Plus: %s мин, купленные: %s мин). "
+            "Запустите игру снова, чтобы продолжить без новой оплаты."
+            % (plus_left, owned_left)
         ),
+        minutes_left=mins,
+        plus_minutes_left=plus_left,
+        owned_minutes_left=owned_left,
     )
 
 
@@ -2174,14 +2400,15 @@ def expire_leases_job():
                     "WHERE l.Status='expired' AND a.Status='leased'"
                 )
                 cur.execute(
-                    "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
-                    "EndReason='lease_expired', StreamActive=0 "
+                    "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
+                    "BalanceTickAt=NULL, "
+                    "UiMessage='Аренда аккаунта истекла по неактивности — баланс времени сохранён.' "
                     "WHERE Status IN ('active','grace_no_stream','renewal_pending') "
                     "AND LeaseID IN (SELECT ID FROM CloudStreaming_Leases WHERE Status='expired')"
                 )
                 cur.execute(
                     "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
-                    "EndReason='payment_aborted', StreamActive=0 "
+                    "EndReason='payment_aborted', StreamActive=0, BalanceTickAt=NULL "
                     "WHERE Status='pending_payment' AND BlockStartedAt < DATE_SUB(NOW(3), INTERVAL 20 MINUTE)"
                 )
             conn.commit()
