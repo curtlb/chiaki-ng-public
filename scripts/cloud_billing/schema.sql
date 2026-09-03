@@ -157,7 +157,8 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Leases (
     Status              ENUM('active','retention','expired','released') NOT NULL DEFAULT 'active',
     FirstAssignedAt     DATETIME(3) NOT NULL,
     LastActivityAt      DATETIME(3) NOT NULL,
-    RetentionUntil      DATETIME(3) NOT NULL COMMENT 'last_activity + 3 days',
+    RetentionUntil      DATETIME(3) NOT NULL COMMENT 'save storage end (when SaveFreezeActive=1)',
+    SaveFreezeActive    TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = saves frozen until RetentionUntil',
     ReleasedAt          DATETIME(3) NULL,
     ReleaseReason       VARCHAR(64) NULL,
     CreatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -168,6 +169,18 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Leases (
     KEY idx_cs_lease_expire (Status, RetentionUntil),
     CONSTRAINT fk_cs_lease_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID),
     CONSTRAINT fk_cs_lease_account FOREIGN KEY (AccountID) REFERENCES CloudStreaming_Accounts(ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Daily active-stream time per user (calendar day Europe/Moscow, server-side)
+CREATE TABLE IF NOT EXISTS CloudStreaming_DailyPlay (
+    UserID              BIGINT UNSIGNED NOT NULL,
+    PlayDateMSK         DATE NOT NULL,
+    StreamSeconds       INT UNSIGNED NOT NULL DEFAULT 0,
+    ExtensionGranted    TINYINT(1) NOT NULL DEFAULT 0,
+    CreatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UpdatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (UserID, PlayDateMSK),
+    CONSTRAINT fk_cs_daily_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------

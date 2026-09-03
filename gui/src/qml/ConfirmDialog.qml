@@ -9,6 +9,7 @@ Dialog {
     property alias text: label.text
     property var callback
     property var rejectCallback
+    property bool infoOnly: false
     property bool newDialogOpen: false
     property Item restoreFocusItem
     parent: Overlay.overlay
@@ -65,7 +66,7 @@ Dialog {
             spacing: 20
 
             Button {
-                text: qsTr("Да")
+                text: infoOnly ? qsTr("OK") : qsTr("Да")
                 Material.background: Material.accent
                 flat: true
                 leftPadding: 50
@@ -86,6 +87,7 @@ Dialog {
             }
 
             Button {
+                visible: !infoOnly
                 Material.background: Material.accent
                 text: qsTr("Нет")
                 flat: true

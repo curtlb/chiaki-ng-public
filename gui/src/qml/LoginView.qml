@@ -155,17 +155,6 @@ Pane {
                 running: authenticating
                 Material.accent: "#2ec4b6"
             }
-
-            Label {
-                Layout.alignment: Qt.AlignHCenter
-                visible: tokenChecking
-                text: qsTr("Не вводите логин и пароль — авторизация уже идёт")
-                font.pixelSize: 12
-                color: "#2ec4b6"
-                wrapMode: Text.WordWrap
-                horizontalAlignment: Text.AlignHCenter
-                Layout.fillWidth: true
-            }
         }
     }
 

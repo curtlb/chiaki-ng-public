@@ -87,6 +87,8 @@ signals:
     // Emitted when game image URL changes
     void gameImageUrlChanged();
     void billingStatusChanged();
+    /** Emitted after cloud stream ends with save-freeze info from billing server. */
+    void saveRetentionDialogRequested(QString message);
 
 private slots:
     void onAllocationProgress(QString message);

@@ -36,6 +36,11 @@ import uuid
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
 BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("CS_ENV_FILE", str(BASE_DIR / ".env")))
 
@@ -107,6 +112,10 @@ UDP_HOST = os.environ.get("CS_BILLING_UDP_HOST", "0.0.0.0")
 UDP_PORT = int(os.environ.get("CS_BILLING_UDP_PORT", "13750"))
 TCP_PORT = int(os.environ.get("CS_BILLING_TCP_PORT", str(UDP_PORT + 1)))
 RETENTION_DAYS = int(os.environ.get("CS_RETENTION_DAYS", "3"))
+SAVE_FREEZE_THRESHOLD_MIN = int(os.environ.get("CS_SAVE_FREEZE_MINUTES", "61"))
+SAVE_INITIAL_RETENTION_HOURS = int(os.environ.get("CS_SAVE_INITIAL_HOURS", "48"))
+SAVE_EXTEND_THRESHOLD_MIN = int(os.environ.get("CS_SAVE_EXTEND_MINUTES", "90"))
+MSK_TZ = ZoneInfo("Europe/Moscow") if ZoneInfo else None
 RENEW_LEAD = timedelta(minutes=int(os.environ.get("CS_RENEW_LEAD_MINUTES", "10")))
 HEARTBEAT_TIMEOUT = int(os.environ.get("CS_HEARTBEAT_TIMEOUT_SEC", "180"))
 DEFAULT_HOURLY = float(os.environ.get("CS_DEFAULT_HOURLY_PRICE", "110"))
@@ -143,6 +152,183 @@ def parse_db_datetime(value):
     if not text:
         return None
     return datetime.strptime(text[:19], DATE_FMT)
+
+
+def msk_now():
+    """Current time in Europe/Moscow (naive datetime for display/storage)."""
+    if MSK_TZ:
+        return datetime.now(MSK_TZ).replace(tzinfo=None)
+    return datetime.now()
+
+
+def msk_today():
+    return msk_now().date()
+
+
+def fmt_dt_msk(dt):
+    if not dt:
+        return ""
+    return fmt_dt(dt) + " (МСК)"
+
+
+def lease_valid_sql():
+    """Lease row still usable for streaming (freeze optional)."""
+    return (
+        "l.Status IN ('active','retention') "
+        "AND (l.SaveFreezeActive = 0 OR l.RetentionUntil > NOW(3))"
+    )
+
+
+def ensure_daily_play_row(conn, user_id, play_date):
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT IGNORE INTO CloudStreaming_DailyPlay "
+            "(UserID, PlayDateMSK, StreamSeconds, ExtensionGranted) VALUES (%s, %s, 0, 0)",
+            (user_id, play_date),
+        )
+        cur.execute(
+            "SELECT * FROM CloudStreaming_DailyPlay "
+            "WHERE UserID=%s AND PlayDateMSK=%s FOR UPDATE",
+            (user_id, play_date),
+        )
+        return cur.fetchone()
+
+
+def fetch_lease_row(conn, lease_id, for_update=False):
+    lock = " FOR UPDATE" if for_update else ""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Leases WHERE ID=%s" + lock,
+            (lease_id,),
+        )
+        return cur.fetchone()
+
+
+def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, daily_row):
+    """Activate 48h freeze at 61 min/day; extend RetentionUntil +1 day once at 90 min/day (MSK)."""
+    lease = fetch_lease_row(conn, lease_id, for_update=True)
+    if not lease:
+        return lease
+    played_min = int(stream_seconds_today) // 60
+    now = datetime.now()
+    freeze_active = bool(int(lease.get("SaveFreezeActive") or 0))
+    retention = parse_db_datetime(lease.get("RetentionUntil"))
+    ext_granted = bool(int(daily_row.get("ExtensionGranted") or 0))
+    new_freeze = freeze_active
+    new_retention = retention
+
+    if not freeze_active and played_min >= SAVE_FREEZE_THRESHOLD_MIN:
+        new_freeze = True
+        new_retention = now + timedelta(hours=SAVE_INITIAL_RETENTION_HOURS)
+
+    if new_freeze and played_min >= SAVE_EXTEND_THRESHOLD_MIN and not ext_granted:
+        base = new_retention if new_retention and new_retention > now else now
+        new_retention = base + timedelta(days=1)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_DailyPlay SET ExtensionGranted=1 "
+                "WHERE UserID=%s AND PlayDateMSK=%s",
+                (user_id, daily_row["PlayDateMSK"]),
+            )
+            daily_row["ExtensionGranted"] = 1
+
+    if new_freeze != freeze_active or (new_retention and new_retention != retention):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Leases SET SaveFreezeActive=%s, RetentionUntil=%s, "
+                "UpdatedAt=NOW(3) WHERE ID=%s",
+                (1 if new_freeze else 0, fmt_dt(new_retention), lease_id),
+            )
+    return fetch_lease_row(conn, lease_id)
+
+
+def record_stream_play_minutes(conn, user_id, lease_id, minutes):
+    """Accumulate active-stream minutes for the current MSK calendar day."""
+    if not user_id or not lease_id or minutes <= 0:
+        return fetch_lease_row(conn, lease_id)
+    play_date = msk_today()
+    daily = ensure_daily_play_row(conn, user_id, play_date)
+    new_seconds = int(daily.get("StreamSeconds") or 0) + int(minutes) * 60
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_DailyPlay SET StreamSeconds=%s "
+            "WHERE UserID=%s AND PlayDateMSK=%s",
+            (new_seconds, user_id, play_date),
+        )
+    daily["StreamSeconds"] = new_seconds
+    return apply_save_retention_rules(conn, user_id, lease_id, new_seconds, daily)
+
+
+def build_save_retention_payload(conn, user_id, lease_id):
+    """Structured fields + dialog text for post-stream save freeze UI."""
+    lease = fetch_lease_row(conn, lease_id) if lease_id else None
+    play_date = msk_today()
+    daily = None
+    if user_id:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM CloudStreaming_DailyPlay WHERE UserID=%s AND PlayDateMSK=%s",
+                (user_id, play_date),
+            )
+            daily = cur.fetchone()
+    played_min = int((daily or {}).get("StreamSeconds") or 0) // 60
+    freeze_active = bool(int((lease or {}).get("SaveFreezeActive") or 0))
+    retention_until = parse_db_datetime((lease or {}).get("RetentionUntil")) if lease else None
+    ext_granted = bool(int((daily or {}).get("ExtensionGranted") or 0))
+    mins_to_freeze = max(0, SAVE_FREEZE_THRESHOLD_MIN - played_min)
+    mins_to_extend = (
+        0 if ext_granted else max(0, SAVE_EXTEND_THRESHOLD_MIN - played_min)
+    )
+
+    if not freeze_active:
+        if mins_to_freeze > 0:
+            message = (
+                "Заморозка сохранений не произойдёт.\n\n"
+                "Чтобы ваши сохранения хранились %s часов после игры, "
+                "нужно отыграть ещё %s мин. сегодня (по московскому времени).\n"
+                "Сегодня отыграно: %s мин из %s мин."
+                % (
+                    SAVE_INITIAL_RETENTION_HOURS,
+                    mins_to_freeze,
+                    played_min,
+                    SAVE_FREEZE_THRESHOLD_MIN,
+                )
+            )
+        else:
+            message = (
+                "Заморозка сохранений будет активирована после достижения порога "
+                "(%s мин за день по МСК)." % SAVE_FREEZE_THRESHOLD_MIN
+            )
+    else:
+        until_str = fmt_dt_msk(retention_until)
+        parts = ["Сохранения заморожены до:\n%s." % until_str]
+        if ext_granted:
+            parts.append(
+                "Продление хранения на +1 день за сегодня уже получено "
+                "(не более одного раза в сутки по МСК)."
+            )
+        elif mins_to_extend > 0:
+            parts.append(
+                "Чтобы продлить хранение сохранений ещё на 1 день, "
+                "отыграйте ещё %s мин. сегодня (по московскому времени).\n"
+                "Сегодня отыграно: %s мин из %s мин."
+                % (mins_to_extend, played_min, SAVE_EXTEND_THRESHOLD_MIN)
+            )
+        else:
+            parts.append(
+                "Порог для продления на +1 день достигнут — срок хранения будет обновлён."
+            )
+        message = "\n\n".join(parts)
+
+    return {
+        "save_freeze_active": freeze_active,
+        "save_retention_until": fmt_dt(retention_until) if retention_until else "",
+        "daily_play_minutes": played_min,
+        "minutes_to_freeze": mins_to_freeze,
+        "minutes_to_extend": mins_to_extend,
+        "extension_granted_today": ext_granted,
+        "save_retention_message": message,
+    }
 
 
 def sql_minutes_left_expr():
@@ -245,6 +431,7 @@ def tick_session_balance(conn, sess):
             (after, sess["ID"]),
         )
     sync_paid_until_fields(conn, sess["ID"], pool, after)
+    record_stream_play_minutes(conn, sess["UserID"], sess["LeaseID"], elapsed)
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
         sess = cur.fetchone()
@@ -776,9 +963,9 @@ def find_any_user_lease(conn, user_id):
             "SELECT l.*, a.NPSSO, a.Label AS AccountLabel, a.HasPsPlus "
             "FROM CloudStreaming_Leases l "
             "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
-            "WHERE l.UserID = %s AND l.Status IN ('active','retention') "
-            "AND l.RetentionUntil > NOW(3) "
-            "ORDER BY l.LastActivityAt DESC LIMIT 1",
+            "WHERE l.UserID = %s AND "
+            + lease_valid_sql()
+            + " ORDER BY l.LastActivityAt DESC LIMIT 1",
             (user_id,),
         )
         return cur.fetchone()
@@ -791,9 +978,9 @@ def find_active_lease(conn, user_id, game):
             "SELECT l.*, a.NPSSO, a.Label AS AccountLabel, a.HasPsPlus "
             "FROM CloudStreaming_Leases l "
             "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
-            "WHERE l.UserID = %s AND l.Status IN ('active','retention') "
-            "AND l.RetentionUntil > NOW(3) "
-            "ORDER BY l.LastActivityAt DESC",
+            "WHERE l.UserID = %s AND "
+            + lease_valid_sql()
+            + " ORDER BY l.LastActivityAt DESC",
             (user_id,),
         )
         leases = cur.fetchall()
@@ -965,13 +1152,12 @@ def ensure_user_catalog_npsso(conn, user_id):
     if not account:
         return None
     now = datetime.now()
-    retention = now + timedelta(days=RETENTION_DAYS)
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO CloudStreaming_Leases "
-            "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil) "
-            "VALUES (%s, %s, 'active', %s, %s, %s)",
-            (user_id, account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(retention)),
+            "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil, SaveFreezeActive) "
+            "VALUES (%s, %s, 'active', %s, %s, %s, 0)",
+            (user_id, account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(now)),
         )
         lease_id = cur.lastrowid
         cur.execute(
@@ -1021,13 +1207,12 @@ def handle_catalog_npsso(conn, req):
 
 def touch_lease(conn, lease_id):
     now = datetime.now()
-    retention = now + timedelta(days=RETENTION_DAYS)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Leases SET "
-            "LastActivityAt = %s, RetentionUntil = %s, Status = 'active', UpdatedAt = NOW(3) "
+            "LastActivityAt = %s, Status = 'active', UpdatedAt = NOW(3) "
             "WHERE ID = %s",
-            (fmt_dt(now), fmt_dt(retention), lease_id),
+            (fmt_dt(now), lease_id),
         )
 
 
@@ -1958,13 +2143,12 @@ def handle_start(conn, req):
                 ui_message="Все аккаунты заняты. Ожидайте освобождения или выберите другую игру.",
             )
         now = datetime.now()
-        retention = now + timedelta(days=RETENTION_DAYS)
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO CloudStreaming_Leases "
-                "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil) "
-                "VALUES (%s, %s, 'active', %s, %s, %s)",
-                (user["ID"], account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(retention)),
+                "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil, SaveFreezeActive) "
+                "VALUES (%s, %s, 'active', %s, %s, %s, 0)",
+                (user["ID"], account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(now)),
             )
             lease_id = cur.lastrowid
             cur.execute(
@@ -2335,6 +2519,7 @@ def handle_end_stream(conn, req):
             "UPDATE CloudStreaming_Leases SET Status='retention' WHERE ID=%s",
             (sess["LeaseID"],),
         )
+    save_info = build_save_retention_payload(conn, sess["UserID"], sess["LeaseID"])
     conn.commit()
     return reply(
         req_id,
@@ -2347,6 +2532,7 @@ def handle_end_stream(conn, req):
         minutes_left=mins,
         plus_minutes_left=plus_left,
         owned_minutes_left=owned_left,
+        **save_info,
     )
 
 
@@ -2422,8 +2608,9 @@ def expire_leases_job():
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE CloudStreaming_Leases SET Status='expired', ReleasedAt=NOW(3), "
-                    "ReleaseReason='inactivity_3d' "
-                    "WHERE Status IN ('active','retention') AND RetentionUntil < NOW(3)"
+                    "ReleaseReason='save_retention_expired' "
+                    "WHERE Status IN ('active','retention') "
+                    "AND SaveFreezeActive = 1 AND RetentionUntil < NOW(3)"
                 )
                 cur.execute(
                     "UPDATE CloudStreaming_Accounts a "

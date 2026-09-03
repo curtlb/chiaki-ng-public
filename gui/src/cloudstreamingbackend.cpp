@@ -160,10 +160,13 @@ void CloudStreamingBackend::notifyStreamStopped()
     CloudLogMessage(QStringLiteral("Session"),
         QStringLiteral("billing end_stream (stream stopped, token=%1…)")
             .arg(billing_session_token.left(8)));
-    CloudBillingClient::endStream(
+    CloudBillingClient::Result res = CloudBillingClient::endStream(
         settings->GetCloudBillingHost(),
         settings->GetCloudBillingPort(),
         billing_session_token);
+    const QString save_msg = res.data.value(QStringLiteral("save_retention_message")).toString().trimmed();
+    if(!save_msg.isEmpty())
+        emit saveRetentionDialogRequested(save_msg);
     billing_session_token.clear();
     billing_npsso.clear();
     billing_game_identifier.clear();

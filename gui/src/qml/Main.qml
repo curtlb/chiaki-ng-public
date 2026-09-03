@@ -133,13 +133,18 @@ Item {
         stack.push(manualHostDialogComponent);
     }
 
-    function showConfirmDialog(title, text, callback, rejectCallback = null) {
+    function showConfirmDialog(title, text, callback, rejectCallback = null, infoOnly = false) {
         confirmDialog.title = title;
         confirmDialog.text = text;
         confirmDialog.callback = callback;
         confirmDialog.rejectCallback = rejectCallback;
+        confirmDialog.infoOnly = infoOnly;
         confirmDialog.restoreFocusItem = Window.window.activeFocusItem;
         confirmDialog.open();
+    }
+
+    function showInfoDialog(title, text, callback = null) {
+        showConfirmDialog(title, text, callback || (() => {}), null, true);
     }
 
     function showRemindDialog(title, text, remotePlay, callback) {
@@ -350,6 +355,15 @@ Item {
 
     RemindDialog {
         id: remindDialog
+    }
+
+    Connections {
+        target: Chiaki.cloudStreaming
+
+        function onSaveRetentionDialogRequested(message) {
+            if (message && message.length > 0)
+                root.showInfoDialog(qsTr("Хранение сохранений"), message);
+        }
     }
 
     Connections {
