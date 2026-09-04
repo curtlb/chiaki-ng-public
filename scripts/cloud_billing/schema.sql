@@ -208,8 +208,8 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
 
     BlockNo             INT NOT NULL DEFAULT 1,
     BlockStartedAt      DATETIME(3) NOT NULL,
-    PaidUntil           DATETIME(3) NOT NULL COMMENT 'mirror of active-pool residual',
-    RenewAt             DATETIME(3) NOT NULL COMMENT 'PaidUntil - 10 minutes',
+    PaidUntil           DATETIME(3) NOT NULL COMMENT 'paid play time valid until (single balance)',
+    RenewAt             DATETIME(3) NOT NULL COMMENT 'PaidUntil - renew lead',
 
     StreamActive        TINYINT(1) NOT NULL DEFAULT 0,
     LastHeartbeatAt     DATETIME(3) NULL,
