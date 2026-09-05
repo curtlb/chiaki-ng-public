@@ -350,8 +350,8 @@ def build_save_retention_payload(conn, user_id, lease_id):
 
 
 def sql_minutes_left_expr():
-    """Remaining paid minutes derived from PaidUntil (read-only, no wallet columns)."""
-    return "GREATEST(0, TIMESTAMPDIFF(MINUTE, NOW(3), s.PaidUntil))"
+    """Single residual play-minute balance (burns only while StreamActive)."""
+    return "GREATEST(0, COALESCE(s.MinutesLeft, 0))"
 
 
 def fetch_minutes_left(conn, session_id):
@@ -369,86 +369,83 @@ def fetch_minutes_left(conn, session_id):
 
 
 def session_minutes_left(sess, now=None):
-    """Compute remaining minutes from PaidUntil without writing to DB."""
-    now = now or datetime.now()
-    paid_until = parse_db_datetime(sess.get("PaidUntil"))
-    if not paid_until or paid_until <= now:
+    """Residual minutes from MinutesLeft (not wall-clock PaidUntil)."""
+    try:
+        return max(0, int(sess.get("MinutesLeft") or 0))
+    except (TypeError, ValueError):
         return 0
-    return max(0, int((paid_until - now).total_seconds() // 60))
 
 
-def session_effective_paid_until(sess, now=None):
-    """Best PaidUntil including legacy Plus/Owned minute columns during migration."""
-    now = now or datetime.now()
-    best = parse_db_datetime(sess.get("PaidUntil"))
-    legacy_mins = int(sess.get("PlusMinutesLeft") or 0) + int(
-        sess.get("OwnedMinutesLeft") or 0
-    )
-    if legacy_mins > 0:
-        legacy_until = now + timedelta(minutes=legacy_mins)
-        if not best or legacy_until > best:
-            best = legacy_until
-    return best
-
-
-def sync_renew_at(conn, sess_id):
+def sync_balance_mirrors(conn, sess_id, minutes_left):
+    """Keep PaidUntil/RenewAt as display mirrors of residual minutes (not source of truth)."""
+    minutes_left = max(0, int(minutes_left or 0))
     renew_min = int(RENEW_LEAD.total_seconds() // 60)
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE CloudStreaming_Sessions SET RenewAt = "
-            "GREATEST(NOW(3), DATE_SUB(PaidUntil, INTERVAL %s MINUTE)) WHERE ID=%s",
-            (renew_min, sess_id),
+            "UPDATE CloudStreaming_Sessions SET "
+            "PaidUntil = DATE_ADD(NOW(3), INTERVAL %s MINUTE), "
+            "RenewAt = DATE_ADD(NOW(3), INTERVAL %s MINUTE) "
+            "WHERE ID = %s",
+            (minutes_left, max(0, minutes_left - renew_min), sess_id),
         )
 
 
-def credit_paid_minutes(conn, sess_id, minutes):
-    """Extend PaidUntil by `minutes` from max(PaidUntil, now)."""
+def credit_minutes(conn, sess_id, minutes):
+    """Add minutes to the single residual balance (does not burn while idle)."""
     minutes = max(0, int(minutes))
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET "
-            "PaidUntil = DATE_ADD(GREATEST(COALESCE(PaidUntil, NOW(3)), NOW(3)), "
-            "INTERVAL %s MINUTE), "
+            "MinutesLeft = GREATEST(0, COALESCE(MinutesLeft, 0)) + %s, "
             "PlusMinutesLeft = 0, OwnedMinutesLeft = 0 "
             "WHERE ID=%s",
             (minutes, sess_id),
         )
-    sync_renew_at(conn, sess_id)
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess_id,))
+        sess = cur.fetchone()
+    sync_balance_mirrors(conn, sess_id, session_minutes_left(sess))
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess_id,))
         return cur.fetchone()
 
 
-def migrate_legacy_wallets_to_paid_until(conn):
-    """One-time: merge Plus/Owned minute columns into PaidUntil."""
+def _legacy_minutes_from_row(sess, now=None):
+    """Recover residual minutes from legacy Plus/Owned or former PaidUntil model."""
+    now = now or datetime.now()
+    wallet = int(sess.get("PlusMinutesLeft") or 0) + int(sess.get("OwnedMinutesLeft") or 0)
+    current = int(sess.get("MinutesLeft") or 0)
+    paid_until = parse_db_datetime(sess.get("PaidUntil"))
+    from_date = 0
+    if paid_until and paid_until > now:
+        from_date = max(0, int((paid_until - now).total_seconds() // 60))
+    return max(current, wallet, from_date)
+
+
+def migrate_to_minutes_balance(conn):
+    """Seed MinutesLeft from legacy Plus/Owned or PaidUntil residual; clear split wallets."""
+    if not _column_exists(conn, "CloudStreaming_Sessions", "MinutesLeft"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_Sessions "
+                "ADD COLUMN MinutesLeft INT NOT NULL DEFAULT 0 AFTER UiMessage"
+            )
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM CloudStreaming_Sessions")
         rows = cur.fetchall()
     now = datetime.now()
     for sess in rows:
-        effective = session_effective_paid_until(sess, now)
-        legacy = int(sess.get("PlusMinutesLeft") or 0) + int(
-            sess.get("OwnedMinutesLeft") or 0
-        )
-        current = parse_db_datetime(sess.get("PaidUntil"))
-        needs = legacy > 0 or (
-            effective and (not current or effective > current)
-        )
-        if not needs:
-            continue
-        if not effective or effective <= now:
-            effective = now
+        mins = _legacy_minutes_from_row(sess, now)
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE CloudStreaming_Sessions SET PaidUntil=%s, "
+                "UPDATE CloudStreaming_Sessions SET MinutesLeft=%s, "
                 "PlusMinutesLeft=0, OwnedMinutesLeft=0 WHERE ID=%s",
-                (fmt_dt(effective), sess["ID"]),
+                (mins, sess["ID"]),
             )
-        sync_renew_at(conn, sess["ID"])
+        sync_balance_mirrors(conn, sess["ID"], mins)
 
 
 def tick_session_balance(conn, sess):
-    """Burn paid time only while the stream is active (updates PaidUntil on tick)."""
+    """Burn residual minutes only while StreamActive=1 (paused stream freezes balance)."""
     if not sess:
         return sess
     if not int(sess.get("StreamActive") or 0):
@@ -470,21 +467,15 @@ def tick_session_balance(conn, sess):
     elapsed = int((now - tick_at).total_seconds() // 60)
     if elapsed <= 0:
         return sess
-    paid_until = session_effective_paid_until(sess, now)
-    before = session_minutes_left({"PaidUntil": paid_until}, now)
-    if not paid_until:
-        paid_until = now
-    new_until = paid_until - timedelta(minutes=elapsed)
-    if new_until < now:
-        new_until = now
-    after = session_minutes_left({"PaidUntil": new_until}, now)
+    before = session_minutes_left(sess)
+    after = max(0, before - elapsed)
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE CloudStreaming_Sessions SET PaidUntil=%s, BalanceTickAt=NOW(3), "
+            "UPDATE CloudStreaming_Sessions SET MinutesLeft=%s, BalanceTickAt=NOW(3), "
             "PlusMinutesLeft=0, OwnedMinutesLeft=0 WHERE ID=%s",
-            (fmt_dt(new_until), sess["ID"]),
+            (after, sess["ID"]),
         )
-    sync_renew_at(conn, sess["ID"])
+    sync_balance_mirrors(conn, sess["ID"], after)
     record_stream_play_minutes(conn, sess["UserID"], sess["LeaseID"], elapsed)
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
@@ -509,12 +500,12 @@ def archive_session_row(conn, sess, reason="consolidate"):
         "ID", "SessionToken", "UserID", "LeaseID", "AccountID", "GameID", "ServiceType",
         "GameIdentifier", "Status", "BlockNo", "BlockStartedAt", "PaidUntil", "RenewAt",
         "StreamActive", "LastHeartbeatAt", "EndedAt", "EndReason", "UiMessage",
-        "PlusMinutesLeft", "OwnedMinutesLeft", "BillingPool", "BalanceTickAt",
+        "MinutesLeft", "PlusMinutesLeft", "OwnedMinutesLeft", "BillingPool", "BalanceTickAt",
         "CreatedAt", "UpdatedAt",
     )
     values = []
     for c in cols:
-        if c in ("PlusMinutesLeft", "OwnedMinutesLeft"):
+        if c in ("MinutesLeft", "PlusMinutesLeft", "OwnedMinutesLeft"):
             values.append(int(sess.get(c) or 0))
         else:
             values.append(sess.get(c))
@@ -569,31 +560,24 @@ def consolidate_user_sessions(conn, user_id=None):
             continue
         rows_sorted = sorted(rows, key=_session_rank)
         keep = dict(rows_sorted[0])
-        now = datetime.now()
-        best_until = None
+        total_mins = sum(_legacy_minutes_from_row(r) for r in rows)
         max_block = max(int(r.get("BlockNo") or 1) for r in rows)
-        for r in rows:
-            effective = session_effective_paid_until(r, now)
-            if effective and (not best_until or effective > best_until):
-                best_until = effective
-        if not best_until or best_until <= now:
-            best_until = now
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE CloudStreaming_Sessions SET PaidUntil=%s, BlockNo=%s, "
+                "UPDATE CloudStreaming_Sessions SET MinutesLeft=%s, BlockNo=%s, "
                 "PlusMinutesLeft=0, OwnedMinutesLeft=0 WHERE ID=%s",
-                (fmt_dt(best_until), max_block, keep["ID"]),
+                (total_mins, max_block, keep["ID"]),
             )
-        sync_renew_at(conn, keep["ID"])
+        sync_balance_mirrors(conn, keep["ID"], total_mins)
         for r in rows:
             if r["ID"] == keep["ID"]:
                 continue
             archive_session_row(conn, r, reason="consolidate")
         log.info(
-            "sessions consolidate user=%s keep=%s paid_until=%s archived=%s",
+            "sessions consolidate user=%s keep=%s minutes=%s archived=%s",
             uid,
             keep["ID"],
-            fmt_dt(best_until),
+            total_mins,
             len(rows) - 1,
         )
 
@@ -622,6 +606,7 @@ def ensure_sessions_balance_schema(conn):
                 EndedAt DATETIME(3) NULL,
                 EndReason VARCHAR(64) NULL,
                 UiMessage VARCHAR(512) NULL,
+                MinutesLeft INT NOT NULL DEFAULT 0,
                 PlusMinutesLeft INT NOT NULL DEFAULT 0,
                 OwnedMinutesLeft INT NOT NULL DEFAULT 0,
                 BillingPool ENUM('plus','owned') NULL,
@@ -646,7 +631,8 @@ def ensure_sessions_balance_schema(conn):
         if cur.fetchone():
             cur.execute("ALTER TABLE CloudStreaming_Charges DROP FOREIGN KEY fk_cs_charge_session")
     for col, ddl in (
-        ("PlusMinutesLeft", "INT NOT NULL DEFAULT 0 AFTER UiMessage"),
+        ("MinutesLeft", "INT NOT NULL DEFAULT 0 AFTER UiMessage"),
+        ("PlusMinutesLeft", "INT NOT NULL DEFAULT 0 AFTER MinutesLeft"),
         ("OwnedMinutesLeft", "INT NOT NULL DEFAULT 0 AFTER PlusMinutesLeft"),
         ("BillingPool", "ENUM('plus','owned') NULL AFTER OwnedMinutesLeft"),
         ("BalanceTickAt", "DATETIME(3) NULL AFTER BillingPool"),
@@ -656,7 +642,13 @@ def ensure_sessions_balance_schema(conn):
                 cur.execute(
                     "ALTER TABLE CloudStreaming_Sessions ADD COLUMN %s %s" % (col, ddl)
                 )
-    migrate_legacy_wallets_to_paid_until(conn)
+    if not _column_exists(conn, "CloudStreaming_SessionsArchive", "MinutesLeft"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_SessionsArchive "
+                "ADD COLUMN MinutesLeft INT NOT NULL DEFAULT 0 AFTER UiMessage"
+            )
+    migrate_to_minutes_balance(conn)
     consolidate_user_sessions(conn)
     with conn.cursor() as cur:
         cur.execute(
@@ -1432,13 +1424,9 @@ def session_payload(conn, sess, billing_pool=None, persist_pool=False):
     if not row:
         return {}
     now = datetime.now()
-    paid_until = parse_db_datetime(row.get("PaidUntil"))
-    minutes_left = session_minutes_left(row, now)
-    renew_at = (
-        paid_until - RENEW_LEAD
-        if paid_until and paid_until > now
-        else now
-    )
+    minutes_left = session_minutes_left(row)
+    paid_until = now + timedelta(minutes=minutes_left)
+    renew_at = paid_until - RENEW_LEAD
     region = (row.get("AccountRegion") or "PL").strip().upper() or "PL"
     store_country = "US" if region in AMERICAS_REGIONS else region
     return {
@@ -1453,7 +1441,7 @@ def session_payload(conn, sess, billing_pool=None, persist_pool=False):
         "game_identifier": row.get("GameIdentifier"),
         "game_name": row.get("GameName"),
         "hourly_price": float(row.get("HourlyPrice") or DEFAULT_HOURLY),
-        "paid_until": fmt_dt(paid_until) if paid_until else "",
+        "paid_until": fmt_dt(paid_until),
         "minutes_left": minutes_left,
         "plus_minutes_left": minutes_left,
         "owned_minutes_left": minutes_left,
@@ -2271,7 +2259,7 @@ def handle_confirm_stream(conn, req):
         conn.commit()
         return reply(req_id, False, error=pay_msg, ui_message=pay_msg)
 
-    sess = credit_paid_minutes(conn, sess["ID"], 60)
+    sess = credit_minutes(conn, sess["ID"], 60)
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Sessions SET Status='active', StreamActive=1, "
@@ -2419,7 +2407,7 @@ def handle_renew(conn, req):
             "UPDATE CloudStreaming_Sessions SET BlockNo=%s, BlockStartedAt=NOW(3) WHERE ID=%s",
             (block_no, sess["ID"]),
         )
-    sess = credit_paid_minutes(conn, sess["ID"], 60)
+    sess = credit_minutes(conn, sess["ID"], 60)
     minutes_left = session_minutes_left(sess)
     with conn.cursor() as cur:
         cur.execute(

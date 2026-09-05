@@ -208,8 +208,8 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
 
     BlockNo             INT NOT NULL DEFAULT 1,
     BlockStartedAt      DATETIME(3) NOT NULL,
-    PaidUntil           DATETIME(3) NOT NULL COMMENT 'paid play time valid until (single balance)',
-    RenewAt             DATETIME(3) NOT NULL COMMENT 'PaidUntil - renew lead',
+    PaidUntil           DATETIME(3) NOT NULL COMMENT 'display mirror: NOW + MinutesLeft',
+    RenewAt             DATETIME(3) NOT NULL COMMENT 'display mirror for renew-soon',
 
     StreamActive        TINYINT(1) NOT NULL DEFAULT 0,
     LastHeartbeatAt     DATETIME(3) NULL,
@@ -218,8 +218,9 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
     EndReason           VARCHAR(64) NULL,
     UiMessage           VARCHAR(512) NULL,
 
-    PlusMinutesLeft     INT NOT NULL DEFAULT 0 COMMENT 'residual minutes for Plus/F2P pool',
-    OwnedMinutesLeft    INT NOT NULL DEFAULT 0 COMMENT 'residual minutes for owned titles',
+    MinutesLeft         INT NOT NULL DEFAULT 0 COMMENT 'single residual play-minute balance; burns only while StreamActive=1',
+    PlusMinutesLeft     INT NOT NULL DEFAULT 0 COMMENT 'legacy; kept for migration, always 0',
+    OwnedMinutesLeft    INT NOT NULL DEFAULT 0 COMMENT 'legacy; kept for migration, always 0',
     BillingPool         ENUM('plus','owned') NULL,
     BalanceTickAt       DATETIME(3) NULL COMMENT 'last burn tick while StreamActive=1',
 
@@ -259,6 +260,7 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_SessionsArchive (
     EndedAt             DATETIME(3) NULL,
     EndReason           VARCHAR(64) NULL,
     UiMessage           VARCHAR(512) NULL,
+    MinutesLeft         INT NOT NULL DEFAULT 0,
     PlusMinutesLeft     INT NOT NULL DEFAULT 0,
     OwnedMinutesLeft    INT NOT NULL DEFAULT 0,
     BillingPool         ENUM('plus','owned') NULL,
