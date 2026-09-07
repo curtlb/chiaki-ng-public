@@ -5,20 +5,9 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ---------------------------------------------------------------------------
--- Users (4cloud email)
+-- Users: existing 4cloud `tableu` (Email). CloudStreaming_* .UserID -> tableu.ID
+-- Do not use/alter tableu.UserID (legacy Telegram IDs).
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS CloudStreaming_Users (
-    ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    User            VARCHAR(255) NOT NULL COMMENT '4cloud email',
-    PlayedMinutes   INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'aggregate stat only',
-    LastPlayedAt    DATETIME(3) NULL,
-    MaxConcurrent   TINYINT UNSIGNED NOT NULL DEFAULT 2,
-    Status          ENUM('active','blocked') NOT NULL DEFAULT 'active',
-    CreatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    UpdatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    PRIMARY KEY (ID),
-    UNIQUE KEY uq_cs_user_email (User)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
 -- Cloud gaming payment credentials (separate from console rental `autobilling`)
@@ -26,8 +15,8 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Users (
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS CloudStreaming_PaymentMethods (
     ID              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    UserID          BIGINT UNSIGNED NOT NULL,
-    Email           VARCHAR(255) NOT NULL COMMENT '4cloud email',
+    UserID          BIGINT UNSIGNED NOT NULL COMMENT 'FK tableu.ID (not tableu.UserID)',
+    Email           VARCHAR(255) NOT NULL COMMENT '4cloud email (= tableu.Email)',
     StartPaymentID  VARCHAR(64) NOT NULL COMMENT 'Robokassa recurring parent invoice',
     Status          ENUM('active','disabled') NOT NULL DEFAULT 'active',
     CreatedAt       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -35,7 +24,7 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_PaymentMethods (
     PRIMARY KEY (ID),
     UNIQUE KEY uq_cs_pay_user (UserID),
     UNIQUE KEY uq_cs_pay_email (Email),
-    CONSTRAINT fk_cs_pay_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID) ON DELETE CASCADE
+    CONSTRAINT fk_cs_pay_user FOREIGN KEY (UserID) REFERENCES tableu(ID) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -167,20 +156,20 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Leases (
     KEY idx_cs_lease_user (UserID, Status, RetentionUntil),
     KEY idx_cs_lease_account (AccountID, Status, RetentionUntil),
     KEY idx_cs_lease_expire (Status, RetentionUntil),
-    CONSTRAINT fk_cs_lease_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID),
+    CONSTRAINT fk_cs_lease_user FOREIGN KEY (UserID) REFERENCES tableu(ID),
     CONSTRAINT fk_cs_lease_account FOREIGN KEY (AccountID) REFERENCES CloudStreaming_Accounts(ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Daily active-stream time per user (calendar day Europe/Moscow, server-side)
 CREATE TABLE IF NOT EXISTS CloudStreaming_DailyPlay (
-    UserID              BIGINT UNSIGNED NOT NULL,
+    UserID              BIGINT UNSIGNED NOT NULL COMMENT 'FK tableu.ID',
     PlayDateMSK         DATE NOT NULL,
     StreamSeconds       INT UNSIGNED NOT NULL DEFAULT 0,
     ExtensionGranted    TINYINT(1) NOT NULL DEFAULT 0,
     CreatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UpdatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (UserID, PlayDateMSK),
-    CONSTRAINT fk_cs_daily_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID) ON DELETE CASCADE
+    CONSTRAINT fk_cs_daily_user FOREIGN KEY (UserID) REFERENCES tableu(ID) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
@@ -235,7 +224,7 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Sessions (
     KEY idx_cs_sess_renew (Status, RenewAt),
     KEY idx_cs_sess_paid (Status, PaidUntil),
 
-    CONSTRAINT fk_cs_sess_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID),
+    CONSTRAINT fk_cs_sess_user FOREIGN KEY (UserID) REFERENCES tableu(ID),
     CONSTRAINT fk_cs_sess_lease FOREIGN KEY (LeaseID) REFERENCES CloudStreaming_Leases(ID),
     CONSTRAINT fk_cs_sess_account FOREIGN KEY (AccountID) REFERENCES CloudStreaming_Accounts(ID),
     CONSTRAINT fk_cs_sess_game FOREIGN KEY (GameID) REFERENCES CloudStreaming_Games(ID)
@@ -295,7 +284,7 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Charges (
     UNIQUE KEY uq_cs_charge_idem (IdempotencyKey),
     UNIQUE KEY uq_cs_charge_session_block (SessionID, BlockNo),
     KEY idx_cs_charge_user (UserID, CreatedAt),
-    CONSTRAINT fk_cs_charge_user FOREIGN KEY (UserID) REFERENCES CloudStreaming_Users(ID)
+    CONSTRAINT fk_cs_charge_user FOREIGN KEY (UserID) REFERENCES tableu(ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

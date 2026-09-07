@@ -765,8 +765,8 @@ def resolve_client_from_payload(conn, payload, out=None):
         if user_id is None and out.get("session_token"):
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT u.ID AS UserID, u.User AS Email FROM CloudStreaming_Sessions s "
-                    "JOIN CloudStreaming_Users u ON u.ID = s.UserID "
+                    "SELECT u.ID AS UserID, u.Email AS Email FROM CloudStreaming_Sessions s "
+                    "JOIN tableu u ON u.ID = s.UserID "
                     "WHERE s.SessionToken=%s LIMIT 1",
                     (out.get("session_token"),),
                 )
@@ -783,8 +783,8 @@ def resolve_client_from_payload(conn, payload, out=None):
     if not email and payload.get("session_token"):
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT u.ID AS UserID, u.User AS Email FROM CloudStreaming_Sessions s "
-                "JOIN CloudStreaming_Users u ON u.ID = s.UserID "
+                "SELECT u.ID AS UserID, u.Email AS Email FROM CloudStreaming_Sessions s "
+                "JOIN tableu u ON u.ID = s.UserID "
                 "WHERE s.SessionToken=%s LIMIT 1",
                 (payload.get("session_token"),),
             )
@@ -821,6 +821,8 @@ SCHEMA_MIGRATION_MSG = (
 
 
 def friendly_db_error(exc):
+    if isinstance(exc, LookupError):
+        return str(exc)
     msg = str(exc)
     if "1054" in msg and "CatalogID" in msg:
         return SCHEMA_MIGRATION_MSG
@@ -868,17 +870,22 @@ def verify_schema(conn):
 
 
 def ensure_user(conn, email):
+    """Resolve 4cloud user from `tableu` by Email. Uses tableu.ID (not tableu.UserID)."""
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("Укажите email")
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM CloudStreaming_Users WHERE User = %s LIMIT 1", (email,))
-        row = cur.fetchone()
-        if row:
-            return row
         cur.execute(
-            "INSERT INTO CloudStreaming_Users (User) VALUES (%s)",
+            "SELECT ID, Email FROM tableu WHERE LOWER(TRIM(Email)) = %s "
+            "ORDER BY ID DESC LIMIT 1",
             (email,),
         )
-        cur.execute("SELECT * FROM CloudStreaming_Users WHERE User = %s LIMIT 1", (email,))
-        return cur.fetchone()
+        row = cur.fetchone()
+    if not row:
+        raise LookupError(
+            "Пользователь %s не найден в tableu. Войдите в аккаунт 4cloud.pro." % email
+        )
+    return {"ID": int(row["ID"]), "User": (row.get("Email") or email).strip()}
 
 
 def find_catalog_match(conn, service_type, game_identifier):
@@ -2759,9 +2766,9 @@ def auto_renew_job():
             with conn.cursor() as cur:
                 renew_min = int(RENEW_LEAD.total_seconds() // 60)
                 cur.execute(
-                    "SELECT s.SessionToken, u.User AS Email, s.MinutesLeft "
+                    "SELECT s.SessionToken, u.Email AS Email, s.MinutesLeft "
                     "FROM CloudStreaming_Sessions s "
-                    "JOIN CloudStreaming_Users u ON u.ID = s.UserID "
+                    "JOIN tableu u ON u.ID = s.UserID "
                     "WHERE s.Status='active' AND s.StreamActive=1 "
                     "AND COALESCE(s.MinutesLeft, 0) > 0 "
                     "AND COALESCE(s.MinutesLeft, 0) <= %s",

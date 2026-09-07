@@ -26,7 +26,7 @@ mysql -h <DB_HOST> -u <DB_USER> -p <DB_NAME> < schema.sql
 mysql ... < seed_example.sql
 ```
 
-Tables: `CloudStreaming_Catalog` (filled by `../cloud_catalog_sync`), `CloudStreaming_Users`, ...
+Tables: `CloudStreaming_Catalog` (filled by `../cloud_catalog_sync`), users via existing **`tableu`** (`Email` / `ID`; do not use `tableu.UserID`), ...
 
 Fresh install:
 
@@ -63,12 +63,19 @@ Then run `migrate_catalog_v2.sql` again.
 Users need a row in **`CloudStreaming_PaymentMethods`** with `StartPaymentID` (Robokassa parent invoice for **cloud gaming only**). This is **not** the console rental `autobilling` table.
 
 ```sql
--- After user exists in CloudStreaming_Users:
+-- After user exists in tableu (4cloud login). UserID = tableu.ID (not Telegram UserID):
 INSERT INTO CloudStreaming_PaymentMethods (UserID, Email, StartPaymentID)
-SELECT u.ID, u.User, 'PARENT_INVOICE_FROM_ROBOKASSA'
-FROM CloudStreaming_Users u
-WHERE u.User = 'user@example.com'
+SELECT u.ID, u.Email, 'PARENT_INVOICE_FROM_ROBOKASSA'
+FROM tableu u
+WHERE LOWER(u.Email) = 'user@example.com'
+ORDER BY u.ID DESC
 LIMIT 1;
+```
+
+Existing installs migrating off `CloudStreaming_Users`:
+
+```bash
+mysql ... < migrate_users_to_tableu_v7.sql
 ```
 
 ## 2. VM setup (5.183.190.150)

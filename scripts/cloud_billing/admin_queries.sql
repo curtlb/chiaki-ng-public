@@ -44,12 +44,13 @@ FROM CloudStreaming_Catalog
 GROUP BY ServiceType, Category;
 
 -- 6) Cloud gaming payment (NOT console autobilling)
-SELECT u.User, pm.StartPaymentID, pm.Status, pm.UpdatedAt
+SELECT u.Email, pm.StartPaymentID, pm.Status, pm.UpdatedAt
 FROM CloudStreaming_PaymentMethods pm
-JOIN CloudStreaming_Users u ON u.ID = pm.UserID;
+JOIN tableu u ON u.ID = pm.UserID;
 
 INSERT INTO CloudStreaming_PaymentMethods (UserID, Email, StartPaymentID)
-SELECT u.ID, u.User, 'ROBOKASSA_PARENT_INVOICE_ID'
-FROM CloudStreaming_Users u
-WHERE u.User = 'curtlb@yandex.ru'
+SELECT u.ID, u.Email, 'ROBOKASSA_PARENT_INVOICE_ID'
+FROM tableu u
+WHERE LOWER(u.Email) = 'curtlb@yandex.ru'
+ORDER BY u.ID DESC
 LIMIT 1;
