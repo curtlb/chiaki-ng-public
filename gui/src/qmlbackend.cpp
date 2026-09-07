@@ -2159,7 +2159,7 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
     const bool cloudRestore = settings->GetCloudGamesAccess();
 
     qCInfo(chiakiGui) << "Loading chiaki config from:" << chiaki_url;
-    QNetworkRequest configRequest(QUrl(chiaki_url));
+    QNetworkRequest configRequest{QUrl(chiaki_url)};
     QNetworkReply *configReply = network_manager->get(configRequest);
     connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore,
             portToRestore, nps4ToRestore, jwtPsnToRestore, subscriptionExpiryToRestore,
