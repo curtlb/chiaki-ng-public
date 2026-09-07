@@ -138,6 +138,7 @@ private:
     QString billing_status_message;
     int billing_minutes_left = 0;
     QTimer billing_heartbeat_timer;
+    std::atomic<bool> billing_heartbeat_inflight{false};
 
     QHash<quint64, QJSValue> pending_callbacks; // GUI thread only
     quint64 next_request_id = 0;

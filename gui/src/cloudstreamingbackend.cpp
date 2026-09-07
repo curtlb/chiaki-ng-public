@@ -22,6 +22,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QUrlQuery>
+#include <QMetaObject>
 #include <functional>
 #include <thread>
 #include <cstring>
@@ -123,33 +124,59 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
 {
     if(!settings || billing_session_token.isEmpty())
         return;
-    const auto res = CloudBillingClient::heartbeat(
-        settings->GetCloudBillingHost(),
-        settings->GetCloudBillingPort(),
-        billing_session_token,
-        streaming);
-    if(!res.ok) {
-        setBillingStatus(res.ui_message.isEmpty() ? res.error : res.ui_message);
-        if(res.error.contains(QStringLiteral("истёк")) || res.error.contains(QStringLiteral("закончилось")))
-            stopBillingHeartbeat();
+    // Do not stack blocking UDP waits on the GUI/stream thread.
+    bool expected = false;
+    if(!billing_heartbeat_inflight.compare_exchange_strong(expected, true))
         return;
-    }
-    noteBillingIdentity(settings, parent(), res.data);
-    const int mins = billingMinutesFromResponse(res.data);
-    setBillingMinutesOnly(mins);
-    if(res.data.value(QStringLiteral("should_renew")).toBool()) {
-        const QString email = settings->GetFourCloudEmail();
-        setAllocationProgress(tr("Списание за следующий час…"));
-        const auto renew_res = CloudBillingClient::renew(
-            settings->GetCloudBillingHost(),
-            settings->GetCloudBillingPort(),
-            email,
-            billing_session_token);
-        if(renew_res.ok)
-            setBillingMinutesOnly(billingMinutesFromResponse(renew_res.data));
-        else
-            setBillingStatus(renew_res.ui_message.isEmpty() ? renew_res.error : renew_res.ui_message, mins);
-    }
+
+    const QString host = settings->GetCloudBillingHost();
+    const quint16 port = settings->GetCloudBillingPort();
+    const QString token = billing_session_token;
+    const QString email = settings->GetFourCloudEmail();
+    const bool streaming_flag = streaming;
+    QPointer<CloudStreamingBackend> self(this);
+    QPointer<QObject> ctx(parent());
+
+    std::thread([self, ctx, host, port, token, email, streaming_flag]() {
+        CloudBillingClient::Result res = CloudBillingClient::heartbeat(host, port, token, streaming_flag);
+        CloudBillingClient::Result renew_res;
+        bool did_renew = false;
+        if(res.ok && res.data.value(QStringLiteral("should_renew")).toBool() && !email.isEmpty()) {
+            renew_res = CloudBillingClient::renew(host, port, email, token);
+            did_renew = true;
+        }
+
+        if(!self)
+            return;
+        QMetaObject::invokeMethod(self, [self, ctx, token, res, renew_res, did_renew]() {
+            if(!self)
+                return;
+            self->billing_heartbeat_inflight.store(false);
+            if(self->billing_session_token != token)
+                return;
+
+            if(!res.ok) {
+                self->setBillingStatus(res.ui_message.isEmpty() ? res.error : res.ui_message);
+                if(res.error.contains(QStringLiteral("истёк")) || res.error.contains(QStringLiteral("закончилось")))
+                    self->stopBillingHeartbeat();
+                return;
+            }
+
+            if(self->settings)
+                noteBillingIdentity(self->settings, ctx, res.data);
+            int mins = billingMinutesFromResponse(res.data);
+            self->setBillingMinutesOnly(mins);
+
+            if(did_renew) {
+                if(renew_res.ok)
+                    self->setBillingMinutesOnly(billingMinutesFromResponse(renew_res.data));
+                else
+                    self->setBillingStatus(
+                        renew_res.ui_message.isEmpty() ? renew_res.error : renew_res.ui_message,
+                        mins);
+            }
+        }, Qt::QueuedConnection);
+    }).detach();
 }
 
 void CloudStreamingBackend::notifyStreamStopped()
