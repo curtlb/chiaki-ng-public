@@ -421,6 +421,27 @@ def _legacy_minutes_from_row(sess, now=None):
     return max(current, wallet, from_date)
 
 
+def recover_minutes_if_needed(conn, sess):
+    """If MinutesLeft is empty, seed once from legacy columns / PaidUntil residual."""
+    if not sess:
+        return sess
+    if session_minutes_left(sess) > 0:
+        return sess
+    recovered = _legacy_minutes_from_row(sess)
+    if recovered <= 0:
+        return sess
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_Sessions SET MinutesLeft=%s, "
+            "PlusMinutesLeft=0, OwnedMinutesLeft=0 WHERE ID=%s",
+            (recovered, sess["ID"]),
+        )
+    sync_balance_mirrors(conn, sess["ID"], recovered)
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
+        return cur.fetchone()
+
+
 def migrate_to_minutes_balance(conn):
     """Seed MinutesLeft from legacy Plus/Owned or PaidUntil residual; clear split wallets."""
     if not _column_exists(conn, "CloudStreaming_Sessions", "MinutesLeft"):
@@ -432,9 +453,13 @@ def migrate_to_minutes_balance(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM CloudStreaming_Sessions")
         rows = cur.fetchall()
-    now = datetime.now()
     for sess in rows:
-        mins = _legacy_minutes_from_row(sess, now)
+        # Only fill empty wallets — never overwrite an existing MinutesLeft from PaidUntil.
+        if session_minutes_left(sess) > 0:
+            continue
+        mins = _legacy_minutes_from_row(sess)
+        if mins <= 0:
+            continue
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET MinutesLeft=%s, "
@@ -445,29 +470,35 @@ def migrate_to_minutes_balance(conn):
 
 
 def tick_session_balance(conn, sess):
-    """Burn residual minutes only while StreamActive=1 (paused stream freezes balance)."""
+    """Burn residual minutes only while StreamActive=1 (elapsed computed in MySQL)."""
     if not sess:
         return sess
     if not int(sess.get("StreamActive") or 0):
         return sess
     if sess.get("Status") == "pending_payment":
         return sess
-    now = datetime.now()
-    tick_at = parse_db_datetime(sess.get("BalanceTickAt")) or parse_db_datetime(
-        sess.get("LastHeartbeatAt")
-    )
-    if not tick_at:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(MinutesLeft, 0) AS MinutesLeft, "
+            "TIMESTAMPDIFF(MINUTE, "
+            "  COALESCE(BalanceTickAt, LastHeartbeatAt, NOW(3)), "
+            "  NOW(3)"
+            ") AS ElapsedMin "
+            "FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1",
+            (sess["ID"],),
+        )
+        row = cur.fetchone() or {}
+    elapsed = int(row.get("ElapsedMin") or 0)
+    before = max(0, int(row.get("MinutesLeft") or 0))
+    if elapsed <= 0:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE CloudStreaming_Sessions SET BalanceTickAt=NOW(3) WHERE ID=%s",
+                "UPDATE CloudStreaming_Sessions SET "
+                "BalanceTickAt = COALESCE(BalanceTickAt, NOW(3)) WHERE ID=%s",
                 (sess["ID"],),
             )
             cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
             return cur.fetchone()
-    elapsed = int((now - tick_at).total_seconds() // 60)
-    if elapsed <= 0:
-        return sess
-    before = session_minutes_left(sess)
     after = max(0, before - elapsed)
     with conn.cursor() as cur:
         cur.execute(
@@ -477,6 +508,13 @@ def tick_session_balance(conn, sess):
         )
     sync_balance_mirrors(conn, sess["ID"], after)
     record_stream_play_minutes(conn, sess["UserID"], sess["LeaseID"], elapsed)
+    log.info(
+        "balance tick session=%s burned=%s before=%s after=%s",
+        sess["ID"],
+        elapsed,
+        before,
+        after,
+    )
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
         sess = cur.fetchone()
@@ -1096,15 +1134,31 @@ def _session_matches_resumable(conn, row, target_pool, st, identifiers, catalog_
 
 
 def find_resumable_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
-    """Resume when the shared paid-time balance still has minutes."""
+    """Resume whenever the shared MinutesLeft balance still has time (any game)."""
     sess = get_user_session(conn, user_id, for_update=True)
     if not sess:
         return None
+    sess = recover_minutes_if_needed(conn, sess)
     sess = tick_session_balance(conn, sess)
-    if sess.get("Status") == "pending_payment":
-        return None
     if session_minutes_left(sess) <= 0:
         return None
+    # Stuck pending_payment with remaining balance must NOT trigger a new charge.
+    if sess.get("Status") == "pending_payment":
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET Status='grace_no_stream', "
+                "StreamActive=0, EndedAt=NULL, EndReason=NULL, "
+                "UiMessage=%s WHERE ID=%s",
+                ("Оплата не требуется — на балансе осталось время.", sess["ID"]),
+            )
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
+            sess = cur.fetchone()
+        log.info(
+            "resume cleared pending_payment user=%s session=%s minutes=%s",
+            user_id,
+            sess["ID"],
+            session_minutes_left(sess),
+        )
     # Recover wrongly ended rows that still have wallet time.
     if sess.get("Status") in ("ended", "failed"):
         with conn.cursor() as cur:
@@ -1117,6 +1171,68 @@ def find_resumable_session(conn, user_id, service_type, game_identifier, game_id
             cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1", (sess["ID"],))
             sess = cur.fetchone()
     return sess
+
+
+def ensure_session_lease(conn, sess, game):
+    """
+    Make sure the session points at a usable leased PS account.
+    Keeps MinutesLeft. Allocates a new account only when the old lease expired.
+    """
+    if not sess:
+        return sess, None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT l.*, a.Status AS AccountStatus, a.NPSSO "
+            "FROM CloudStreaming_Leases l "
+            "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
+            "WHERE l.ID=%s AND l.Status IN ('active','retention') "
+            "AND (l.SaveFreezeActive = 0 OR l.RetentionUntil > NOW(3)) "
+            "LIMIT 1",
+            (sess["LeaseID"],),
+        )
+        lease = cur.fetchone()
+    if lease:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
+                "LastUsedAt=NOW(3) WHERE ID=%s",
+                (lease["ID"], lease["AccountID"]),
+            )
+        touch_lease(conn, lease["ID"])
+        return sess, lease
+
+    account = allocate_account(conn, game) if game else allocate_catalog_account(conn)
+    if not account:
+        return sess, None
+    now = datetime.now()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO CloudStreaming_Leases "
+            "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil, SaveFreezeActive) "
+            "VALUES (%s, %s, 'active', %s, %s, %s, 0)",
+            (sess["UserID"], account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(now)),
+        )
+        lease_id = cur.lastrowid
+        cur.execute(
+            "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
+            "LastUsedAt=NOW(3) WHERE ID=%s",
+            (lease_id, account["ID"]),
+        )
+        cur.execute(
+            "UPDATE CloudStreaming_Sessions SET LeaseID=%s, AccountID=%s WHERE ID=%s",
+            (lease_id, account["ID"], sess["ID"]),
+        )
+        cur.execute("SELECT * FROM CloudStreaming_Leases WHERE ID=%s", (lease_id,))
+        lease = cur.fetchone()
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
+        sess = cur.fetchone()
+    log.info(
+        "session %s reattached to new lease=%s account=%s (previous lease expired)",
+        sess["ID"],
+        lease_id,
+        account["ID"],
+    )
+    return sess, lease
 
 
 def find_other_active_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
@@ -2049,6 +2165,15 @@ def handle_start(conn, req):
         conn, user["ID"], service_type, game_identifier, game["ID"], game
     )
     if resumable:
+        resumable, lease = ensure_session_lease(conn, resumable, game)
+        if not lease:
+            conn.rollback()
+            return reply(
+                req_id,
+                False,
+                error="Нет свободных PS-аккаунтов для этой игры. Попробуйте позже.",
+                ui_message="Все аккаунты заняты. Ожидайте освобождения или выберите другую игру.",
+            )
         account_id = resumable.get("AccountID")
         with conn.cursor() as cur:
             cur.execute(
@@ -2066,10 +2191,17 @@ def handle_start(conn, req):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Sessions SET GameID=%s, GameIdentifier=%s, "
-                "ServiceType=%s, StreamActive=1, Status='active', "
+                "ServiceType=%s, LeaseID=%s, AccountID=%s, StreamActive=1, Status='active', "
                 "BalanceTickAt=NOW(3), LastHeartbeatAt=NOW(3), "
                 "EndedAt=NULL, EndReason=NULL WHERE ID=%s",
-                (game["ID"], game_identifier, service_type, resumable["ID"]),
+                (
+                    game["ID"],
+                    game_identifier,
+                    service_type,
+                    resumable["LeaseID"],
+                    resumable["AccountID"],
+                    resumable["ID"],
+                ),
             )
         touch_lease(conn, resumable["LeaseID"])
         conn.commit()
@@ -2092,6 +2224,7 @@ def handle_start(conn, req):
             )
         conn.commit()
         payload["resumed"] = True
+        payload["payment_pending"] = False
         payload["ui_message"] = ui_msg
         payload["minutes_left"] = mins
         return reply(req_id, True, **payload)
@@ -2242,6 +2375,38 @@ def handle_confirm_stream(conn, req):
     if sess["Status"] != "pending_payment":
         conn.rollback()
         return reply(req_id, False, error="Сессия не ожидает подтверждения", status=sess["Status"])
+
+    sess = recover_minutes_if_needed(conn, sess)
+    # Safety net: never charge again while residual minutes remain.
+    if session_minutes_left(sess) > 0:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Sessions SET Status='active', StreamActive=1, "
+                "BalanceTickAt=NOW(3), LastHeartbeatAt=NOW(3), "
+                "EndedAt=NULL, EndReason=NULL, UiMessage=%s WHERE ID=%s",
+                (
+                    "Запуск без списания — на балансе %s мин."
+                    % session_minutes_left(sess),
+                    sess["ID"],
+                ),
+            )
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
+            sess = cur.fetchone()
+        touch_lease(conn, sess["LeaseID"])
+        conn.commit()
+        payload = session_payload(conn, sess)
+        payload["resumed"] = True
+        payload["payment_pending"] = False
+        payload["ui_message"] = (
+            "Списание не выполнялось. Осталось %s мин на балансе."
+            % session_minutes_left(sess)
+        )
+        log.info(
+            "confirm_stream skipped charge session=%s minutes=%s",
+            sess["ID"],
+            session_minutes_left(sess),
+        )
+        return reply(req_id, True, **payload)
 
     price = float(sess["HourlyPrice"])
     block_no = int(sess["BlockNo"])
@@ -2592,11 +2757,15 @@ def auto_renew_job():
         try:
             conn = db_connect()
             with conn.cursor() as cur:
+                renew_min = int(RENEW_LEAD.total_seconds() // 60)
                 cur.execute(
-                    "SELECT s.SessionToken, u.User AS Email "
+                    "SELECT s.SessionToken, u.User AS Email, s.MinutesLeft "
                     "FROM CloudStreaming_Sessions s "
                     "JOIN CloudStreaming_Users u ON u.ID = s.UserID "
-                    "WHERE s.Status='active' AND s.StreamActive=1 AND s.RenewAt <= NOW(3)"
+                    "WHERE s.Status='active' AND s.StreamActive=1 "
+                    "AND COALESCE(s.MinutesLeft, 0) > 0 "
+                    "AND COALESCE(s.MinutesLeft, 0) <= %s",
+                    (renew_min,),
                 )
                 rows = cur.fetchall()
             conn.close()
