@@ -90,6 +90,18 @@ Pane {
         if (Chiaki.ensureFourcloudPolling)
             Chiaki.ensureFourcloudPolling();
     }
+
+    Connections {
+        target: Chiaki.settings
+        function onFourCloudEmailChanged() {
+            // After account switch / logout / login, refresh cloud auth banner.
+            Qt.callLater(() => loadUnifiedCatalog());
+        }
+        function onCloudBillingUserIdChanged() {
+            if (visible)
+                applySearchFilter();
+        }
+    }
     
     onVisibleChanged: {
         if (visible) {

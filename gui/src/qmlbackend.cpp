@@ -52,7 +52,7 @@ Q_DECLARE_LOGGING_CATEGORY(chiakiGui)
 static void syncFourCloudEmailFromJwtDecode(Settings *settings, QmlSettings *qmlSettings,
 	CloudCatalogBackend *catalog, const QJsonObject &decodeObj)
 {
-	if(!settings || !settings->GetFourCloudEmail().isEmpty())
+	if(!settings)
 		return;
 	QString email = decodeObj.value(QStringLiteral("Email")).toString().trimmed();
 	if(email.isEmpty())
@@ -67,12 +67,16 @@ static void syncFourCloudEmailFromJwtDecode(Settings *settings, QmlSettings *qml
 		email = decodeObj.value(QStringLiteral("login")).toString().trimmed();
 	if(email.isEmpty())
 		return;
+	email = email.toLower();
+	if(settings->GetFourCloudEmail().compare(email, Qt::CaseInsensitive) == 0
+		&& !settings->GetFourCloudEmail().isEmpty())
+		return;
 	settings->SetFourCloudEmail(email);
 	if(qmlSettings)
 		qmlSettings->refreshFourCloudEmail();
 	if(catalog)
 		catalog->invalidateCache();
-	qCInfo(chiakiGui) << "Restored 4cloud billing email from JWT decode:" << email;
+	qCInfo(chiakiGui) << "Synced 4cloud billing email from JWT/session:" << email;
 }
 
 static void ResizeWindowForStream(QmlMainWindow *window, Settings *settings, unsigned int width, unsigned int height)
@@ -1957,22 +1961,7 @@ void QmlBackend::fetchFourcloudState()
 
 void QmlBackend::ensureFourcloudPolling()
 {
-    if (settings && settings->GetCloudBillingEnabled()
-            && !settings->GetFourCloudEmail().isEmpty()
-            && !settings->GetCloudBillingHost().isEmpty()
-            && settings->GetCloudBillingUserId() <= 0) {
-        const auto who = CloudBillingClient::whoami(
-            settings->GetCloudBillingHost(),
-            settings->GetCloudBillingPort(),
-            settings->GetFourCloudEmail());
-        if (who.ok) {
-            const qint64 uid = who.data.value(QStringLiteral("user_id")).toVariant().toLongLong();
-            if (uid > 0 && settings_qml)
-                settings_qml->setCloudBillingUserId(uid);
-            else if (uid > 0)
-                settings->SetCloudBillingUserId(uid);
-        }
-    }
+    resolveCloudBillingIdentity();
     if (settings->GetNps4().isEmpty())
         return;
     if (!fourcloud_state_timer || fourcloud_state_timer->isActive())
@@ -1981,18 +1970,54 @@ void QmlBackend::ensureFourcloudPolling()
     fourcloud_state_timer->start(15000);
 }
 
+void QmlBackend::resolveCloudBillingIdentity()
+{
+    if (!settings || !settings->GetCloudBillingEnabled())
+        return;
+    const QString email = settings->GetFourCloudEmail().trimmed();
+    const QString host = settings->GetCloudBillingHost();
+    if (email.isEmpty() || host.isEmpty())
+        return;
+    if (settings->GetCloudBillingUserId() > 0)
+        return;
+
+    const quint16 port = settings->GetCloudBillingPort();
+    auto *watcher = new QFutureWatcher<CloudBillingClient::Result>(this);
+    connect(watcher, &QFutureWatcher<CloudBillingClient::Result>::finished, this, [this, watcher]() {
+        const CloudBillingClient::Result who = watcher->result();
+        watcher->deleteLater();
+        if (!who.ok || !settings)
+            return;
+        const qint64 uid = who.data.value(QStringLiteral("user_id")).toVariant().toLongLong();
+        if (uid <= 0)
+            return;
+        settings->SetCloudBillingUserId(uid);
+        if (settings_qml)
+            settings_qml->refreshCloudBillingUserId();
+        qCInfo(chiakiGui) << "Cloud billing UID resolved:" << uid;
+    });
+    watcher->setFuture(QtConcurrent::run([host, port, email]() {
+        return CloudBillingClient::whoami(host, port, email);
+    }));
+}
+
 void QmlBackend::logoutFourcloud()
 {
     if (settings) {
         settings->SetJwtToken("");
         settings->SetJwtPort(0);
         settings->SetNps4("");
-		settings->SetSubscriptionExpiryDate("");
+        settings->SetSubscriptionExpiryDate("");
         settings->SetCloudBillingUserId(0);
+        settings->SetFourCloudEmail("");
         clearAuthEntitlements();
     }
-    if (settings_qml)
+    if (settings_qml) {
         settings_qml->refreshCloudBillingUserId();
+        settings_qml->refreshFourCloudEmail();
+    }
+    if (cloud_catalog_backend)
+        cloud_catalog_backend->invalidateCache();
     clearFourcloudState();
     emit jwtTokenExpired();
 }
@@ -2062,8 +2087,13 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
 
     syncFourCloudEmailFromJwtDecode(settings, settings_qml, cloud_catalog_backend, decodeObj);
 
-    const QString email = session.value(QStringLiteral("email")).toString().trimmed();
-    if (!email.isEmpty() && settings->GetFourCloudEmail().isEmpty()) {
+    QString email = session.value(QStringLiteral("email")).toString().trimmed();
+    if (email.isEmpty())
+        email = decodeObj.value(QStringLiteral("Email")).toString().trimmed();
+    if (email.isEmpty())
+        email = decodeObj.value(QStringLiteral("email")).toString().trimmed();
+    if (!email.isEmpty()) {
+        email = email.toLower();
         settings->SetFourCloudEmail(email);
         if (settings_qml)
             settings_qml->refreshFourCloudEmail();
@@ -2115,15 +2145,18 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
         subscription_expiry_timer->stop();
 
     auto finishOk = [this, from_login]() {
+        resolveCloudBillingIdentity();
         if (from_login) {
             qCInfo(chiakiGui) << "Authentication successful via UDP auth"
                               << "console=" << settings->GetConsoleCatalogAccess()
-                              << "cloud=" << settings->GetCloudGamesAccess();
+                              << "cloud=" << settings->GetCloudGamesAccess()
+                              << "email=" << settings->GetFourCloudEmail();
             emit authenticationSuccess();
         } else {
             qCInfo(chiakiGui) << "JWT session valid via UDP auth"
                               << "console=" << settings->GetConsoleCatalogAccess()
-                              << "cloud=" << settings->GetCloudGamesAccess();
+                              << "cloud=" << settings->GetCloudGamesAccess()
+                              << "email=" << settings->GetFourCloudEmail();
             emit jwtTokenValid();
         }
     };
@@ -2155,6 +2188,7 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
     QString nps4ToRestore = settings->GetNps4();
     QString jwtPsnToRestore = settings->GetJwtPsn();
     QString subscriptionExpiryToRestore = settings->GetSubscriptionExpiryDate();
+    QString emailToRestore = settings->GetFourCloudEmail();
     const bool consoleRestore = settings->GetConsoleCatalogAccess();
     const bool cloudRestore = settings->GetCloudGamesAccess();
 
@@ -2163,7 +2197,7 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
     QNetworkReply *configReply = network_manager->get(configRequest);
     connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore,
             portToRestore, nps4ToRestore, jwtPsnToRestore, subscriptionExpiryToRestore,
-            consoleRestore, cloudRestore, finishOk]() {
+            emailToRestore, consoleRestore, cloudRestore, finishOk]() {
         configReply->deleteLater();
         if (configReply->error() != QNetworkReply::NoError) {
             qCWarning(chiakiGui) << "Failed to download chiaki config:" << configReply->errorString();
@@ -2189,9 +2223,16 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
         settings->SetSubscriptionExpiryDate(subscriptionExpiryToRestore);
         settings->SetConsoleCatalogAccess(consoleRestore);
         settings->SetCloudGamesAccess(cloudRestore);
+        // ImportSettings() clears QSettings — restore 4cloud identity after import.
+        settings->SetFourCloudEmail(emailToRestore);
+        settings->SetCloudBillingUserId(0);
+        if (settings_qml) {
+            settings_qml->refreshFourCloudEmail();
+            settings_qml->refreshCloudBillingUserId();
+        }
         settings->SetHardwareDecoder("d3d11va");
         emit authEntitlementsChanged();
-        qCInfo(chiakiGui) << "Chiaki config imported successfully";
+        qCInfo(chiakiGui) << "Chiaki config imported successfully, email restored:" << emailToRestore;
         finishOk();
     });
 }
@@ -3499,8 +3540,13 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
 void QmlBackend::authenticate(const QString &email, const QString &password)
 {
     qCInfo(chiakiGui) << "Authentication request (UDP token) for email:" << email;
-    settings->SetFourCloudEmail(email);
-    settings_qml->refreshFourCloudEmail();
+    // Drop previous account identity before switching users.
+    settings->SetCloudBillingUserId(0);
+    settings->SetFourCloudEmail(email.trimmed().toLower());
+    if (settings_qml) {
+        settings_qml->refreshCloudBillingUserId();
+        settings_qml->refreshFourCloudEmail();
+    }
     if (cloud_catalog_backend)
         cloud_catalog_backend->invalidateCache();
 
@@ -3511,6 +3557,7 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
         return;
     }
 
+    const QString login_email = email.trimmed().toLower();
     auto *watcher = new QFutureWatcher<CloudBillingClient::Result>(this);
     connect(watcher, &QFutureWatcher<CloudBillingClient::Result>::finished, this, [this, watcher]() {
         const CloudBillingClient::Result result = watcher->result();
@@ -3530,8 +3577,8 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
         }
         applyAuthSession(result.data, true);
     });
-    watcher->setFuture(QtConcurrent::run([host, port, email, password]() {
-        return CloudBillingClient::authSignIn(host, port, email, password);
+    watcher->setFuture(QtConcurrent::run([host, port, login_email, password]() {
+        return CloudBillingClient::authSignIn(host, port, login_email, password);
     }));
 }
 

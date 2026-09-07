@@ -62,11 +62,15 @@ static void noteBillingIdentity(Settings *settings, QObject *context, const QJso
         }
     }
     const QString email = data.value(QStringLiteral("email")).toString().trimmed();
-    if(!email.isEmpty() && settings->GetFourCloudEmail().isEmpty()) {
-        settings->SetFourCloudEmail(email);
-        if(auto *backend = qobject_cast<QmlBackend*>(context)) {
-            if(QmlSettings *qs = backend->qmlSettings())
-                qs->refreshFourCloudEmail();
+    if(!email.isEmpty()) {
+        const QString normalized = email.toLower();
+        if(settings->GetFourCloudEmail().compare(normalized, Qt::CaseInsensitive) != 0
+            || settings->GetFourCloudEmail().isEmpty()) {
+            settings->SetFourCloudEmail(normalized);
+            if(auto *backend = qobject_cast<QmlBackend*>(context)) {
+                if(QmlSettings *qs = backend->qmlSettings())
+                    qs->refreshFourCloudEmail();
+            }
         }
     }
 }

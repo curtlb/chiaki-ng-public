@@ -415,6 +415,7 @@ private:
     void fetchYandexIamByJwt(const QString &jwt);
     void applyAuthSession(const QJsonObject &session, bool from_login);
     void clearAuthEntitlements();
+    void resolveCloudBillingIdentity();
     QString subscription_time_remaining;
     QTimer *subscription_expiry_timer = nullptr;
     void fetchSubscriptionExpiry();
