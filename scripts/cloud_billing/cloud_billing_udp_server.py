@@ -2562,13 +2562,38 @@ def handle_renew(conn, req):
             ui_message="Запустите стрим снова, чтобы продлить сессию.",
         )
 
+    # tick_session_balance reloads the row without game JOIN fields — keep them.
+    price = float(sess.get("HourlyPrice") or DEFAULT_HOURLY)
+    game_name = sess.get("GameName") or "cloud"
+    game_id = sess.get("GameID")
     sess = tick_session_balance(conn, sess)
+    if sess.get("HourlyPrice") is None and game_id:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT Name, HourlyPrice FROM CloudStreaming_Games WHERE ID=%s LIMIT 1",
+                (game_id,),
+            )
+            game = cur.fetchone() or {}
+        price = float(game.get("HourlyPrice") or price or DEFAULT_HOURLY)
+        game_name = game.get("Name") or game_name
+
+    renew_min = int(RENEW_LEAD.total_seconds() // 60)
+    minutes_left = session_minutes_left(sess)
+    if minutes_left > renew_min:
+        # Spurious renew (stale client / mirror) — do not charge.
+        conn.commit()
+        payload = session_payload(conn, sess)
+        payload["ui_message"] = (
+            "Продление не требуется: на балансе ещё %s мин." % minutes_left
+        )
+        payload["renewed"] = False
+        return reply(req_id, True, **payload)
+
     block_no = int(sess["BlockNo"]) + 1
-    price = float(sess["HourlyPrice"])
     idem = "cs-%s-b%s" % (token, block_no)
 
     ok_pay, pay_msg = charge_hour(
-        conn, email, sess["ID"], sess["UserID"], block_no, price, sess["GameName"], idem
+        conn, email, sess["ID"], sess["UserID"], block_no, price, game_name, idem
     )
     if not ok_pay:
         conn.commit()
