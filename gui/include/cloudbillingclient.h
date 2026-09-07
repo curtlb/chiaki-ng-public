@@ -40,6 +40,14 @@ public:
 	static Result fetchCatalog(const QString &host, quint16 port,
 		const QString &service_type = QString(), const QString &platform = QString(),
 		bool only_billable = false);
+
+	/** Auth UDP (default port 13752). Credentials go as RSA+AES encrypted token only. */
+	static Result authSignIn(const QString &host, quint16 port, const QString &email, const QString &password);
+	static Result authCheckSession(const QString &host, quint16 port, const QString &jwt);
+
+private:
+	/** Opaque login token: CA1.<b64 rsa-oaep aes-key>.<b64 iv+ct+tag>. No salt in client. */
+	static QString encryptAuthCredentialsToken(const QString &email, const QString &password, QString *error_out);
 };
 
 #endif

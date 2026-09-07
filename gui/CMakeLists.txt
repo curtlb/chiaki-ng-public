@@ -150,6 +150,10 @@ target_link_libraries(placebo-libav-impl PkgConfig::LIBPLACEBO FFMPEG::avcodec F
 target_link_libraries(chiaki PkgConfig::LIBPLACEBO placebo-libav-impl FFMPEG::swscale)
 
 target_link_libraries(chiaki chiaki-lib)
+if(NOT CHIAKI_LIB_ENABLE_MBEDTLS)
+	find_package(OpenSSL REQUIRED)
+	target_link_libraries(chiaki OpenSSL::Crypto)
+endif()
 if(CHIAKI_ENABLE_CLI)
 	add_definitions(-DCHIAKI_ENABLE_CLI)
 	target_link_libraries(chiaki chiaki-cli-lib)

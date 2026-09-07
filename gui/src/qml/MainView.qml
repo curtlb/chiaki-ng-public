@@ -216,8 +216,31 @@ Pane {
         }
     }
 
+    readonly property bool showConsoleTab: Chiaki.showConsoleCatalogTab
+    readonly property bool showCloudTab: Chiaki.showCloudGamesTab
+    readonly property int consoleTabIndex: showConsoleTab ? 0 : -1
+    readonly property int cloudTabIndex: showCloudTab ? (showConsoleTab ? 1 : 0) : -1
+    readonly property bool showMainTabs: showConsoleTab && showCloudTab
+
+    function syncMainTabSelection() {
+        if (showCloudTab)
+            consolePane.cloudPlayPinned = true
+        if (showMainTabs)
+            return
+        mainTabBar.currentIndex = 0
+    }
+
+    Connections {
+        target: Chiaki
+        function onAuthEntitlementsChanged() { syncMainTabSelection() }
+    }
+
+    Component.onCompleted: syncMainTabSelection()
+
     TabBar {
         id: mainTabBar
+        visible: showMainTabs
+        height: visible ? implicitHeight : 0
         anchors {
             top: toolBar.bottom
             left: parent.left
@@ -234,17 +257,21 @@ Pane {
             }
         }
         TabButton {
-            text: qsTr("Remote Play")
+            text: qsTr("Консоль с дисковым каталогом")
             font.pixelSize: 14
             font.weight: Font.DemiBold
+            visible: showConsoleTab
+            width: visible ? implicitWidth : 0
         }
         TabButton {
-            text: qsTr("Облако")
+            text: qsTr("Облако цифровых игр")
             font.pixelSize: 14
             font.weight: Font.DemiBold
+            visible: showCloudTab
+            width: visible ? implicitWidth : 0
         }
         onCurrentIndexChanged: {
-            if (currentIndex === 1)
+            if (currentIndex === cloudTabIndex)
                 consolePane.cloudPlayPinned = true
         }
     }
@@ -252,9 +279,9 @@ Pane {
     ListView {
         id: hostsView
         keyNavigationWraps: true
-        visible: mainTabBar.currentIndex === 0
+        visible: showConsoleTab && mainTabBar.currentIndex === consoleTabIndex
         anchors {
-            top: mainTabBar.bottom
+            top: showMainTabs ? mainTabBar.bottom : toolBar.bottom
             left: parent.left
             right: parent.right
             bottom: parent.bottom
@@ -555,13 +582,13 @@ Pane {
     Loader {
         id: cloudPlayLoader
         anchors {
-            top: mainTabBar.bottom
+            top: showMainTabs ? mainTabBar.bottom : toolBar.bottom
             left: parent.left
             right: parent.right
             bottom: parent.bottom
         }
         active: consolePane.cloudPlayPinned
-        visible: mainTabBar.currentIndex === 1
+        visible: showCloudTab && mainTabBar.currentIndex === cloudTabIndex
         source: "CloudPlayView.qml"
         onStatusChanged: {
             if (status === Loader.Error) {
@@ -581,19 +608,19 @@ Pane {
     }
 
     Label {
-        visible: mainTabBar.currentIndex === 1 && cloudPlayLoader.status === Loader.Error
+        visible: showCloudTab && mainTabBar.currentIndex === cloudTabIndex && cloudPlayLoader.status === Loader.Error
         anchors.centerIn: cloudPlayLoader
         width: parent.width * 0.8
         wrapMode: Text.Wrap
         horizontalAlignment: Text.AlignHCenter
         color: "#F44336"
         font.pixelSize: 16
-        text: qsTr("Не удалось загрузить вкладку «Облако». Проверьте, что QRCodeDialog.qml и GameShortcutDialog.qml включены в сборку.")
+        text: qsTr("Не удалось загрузить вкладку «Облако цифровых игр». Проверьте, что QRCodeDialog.qml и GameShortcutDialog.qml включены в сборку.")
         z: 10
     }
 
     RoundButton {
-        visible: mainTabBar.currentIndex === 0
+        visible: showConsoleTab && mainTabBar.currentIndex === consoleTabIndex
         anchors {
             left: parent.left
             bottom: parent.bottom
@@ -631,7 +658,7 @@ Pane {
     }
 
     Label {
-        visible: mainTabBar.currentIndex === 0
+        visible: showConsoleTab && mainTabBar.currentIndex === consoleTabIndex
         anchors {
             right: parent.right
             bottom: parent.bottom
@@ -644,7 +671,7 @@ Pane {
 
     Image {
         id: logoImage
-        visible: mainTabBar.currentIndex === 0
+        visible: showConsoleTab && mainTabBar.currentIndex === consoleTabIndex
         anchors.centerIn: parent
         source: "qrc:/icons/chiaking-logo-white.svg"
         sourceSize: Qt.size(Math.min(parent.width, parent.height) / 2, Math.min(parent.width, parent.height) / 2)

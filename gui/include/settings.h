@@ -406,6 +406,12 @@ class Settings : public QObject
 	void SetCloudBillingHost(const QString &host);
 	quint16 GetCloudBillingPort() const;
 	void SetCloudBillingPort(quint16 port);
+	quint16 GetCloudAuthPort() const;
+	void SetCloudAuthPort(quint16 port);
+	bool GetConsoleCatalogAccess() const;
+	void SetConsoleCatalogAccess(bool enabled);
+	bool GetCloudGamesAccess() const;
+	void SetCloudGamesAccess(bool enabled);
 
 	// PSCloud / PSNOW cloud streaming settings
 	int GetCloudResolutionPSCloud() const;

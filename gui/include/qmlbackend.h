@@ -109,6 +109,8 @@ class QmlBackend : public QObject
     Q_PROPERTY(QString cloudLogPathAlt READ cloudLogPathAlt CONSTANT)
     Q_PROPERTY(bool cloudSteamShortcutEnabled READ cloudSteamShortcutEnabled CONSTANT)
     Q_PROPERTY(bool cloudSessionReconnecting READ cloudSessionReconnecting NOTIFY cloudSessionReconnectingChanged)
+    Q_PROPERTY(bool showConsoleCatalogTab READ showConsoleCatalogTab NOTIFY authEntitlementsChanged)
+    Q_PROPERTY(bool showCloudGamesTab READ showCloudGamesTab NOTIFY authEntitlementsChanged)
 
 public:
 
@@ -189,6 +191,9 @@ public:
 
     bool cloudSessionReconnecting() const { return cloud_session_reconnecting; }
     void setCloudSessionReconnecting(bool reconnecting);
+
+    bool showConsoleCatalogTab() const;
+    bool showCloudGamesTab() const;
 
     void finishAutoRegister(const ChiakiRegisteredHost &host);
 
@@ -300,6 +305,7 @@ signals:
     void authenticationError(const QString &errorMessage);
     void jwtTokenExpired();
     void jwtTokenValid();
+    void authEntitlementsChanged();
     void subscriptionExpired(const QString &message);
     void subscriptionTimeRemainingChanged();
     void showPingTimeoutDialogChanged();
@@ -407,6 +413,8 @@ private:
     CloudCatalogBackend *cloud_catalog_backend = {};
     void clearFourcloudState();
     void fetchYandexIamByJwt(const QString &jwt);
+    void applyAuthSession(const QJsonObject &session, bool from_login);
+    void clearAuthEntitlements();
     QString subscription_time_remaining;
     QTimer *subscription_expiry_timer = nullptr;
     void fetchSubscriptionExpiry();

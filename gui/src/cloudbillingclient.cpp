@@ -11,6 +11,13 @@
 #include <QUdpSocket>
 #include <QUuid>
 
+#ifndef CHIAKI_LIB_ENABLE_MBEDTLS
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rand.h>
+#include <openssl/rsa.h>
+#endif
+
 CloudBillingClient::Result CloudBillingClient::request(const QJsonObject &payload, int timeout_ms)
 {
 	Result result;
@@ -360,4 +367,135 @@ CloudBillingClient::Result CloudBillingClient::fetchCatalog(const QString &host,
 		result.data.insert(QStringLiteral("totalGames"), games.size());
 	result.ok = true;
 	return result;
+}
+
+
+// Auth VM public key only (encrypt). Private key + password salt stay on the auth server.
+static const char kCloudAuthPublicKeyPem[] =
+	"-----BEGIN PUBLIC KEY-----\n"
+	"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApj2jWV4Y3y47V3H/NKiD\n"
+	"1BncACWNFnR9EB0Elg5yKdh+Z3PujHTWDa7zUtKqudJtJLn+oAfmCCqS5/a2pF9M\n"
+	"mFTaZB77SfneRu8OfoTK8Jd9l8+XqOh4zpvZzxRJRS4zZGdZdmpWYXMmw1Jcmc0y\n"
+	"hDAur2mYucIviRqrqprf8DDzNq+aPxDtSenHA7bfC6HqdDhnAXLKloLysowkvSC4\n"
+	"rGgm7YJhtgCs7pD7BMD0deSgth2IsHU/Hz/vtniGrAVNwqNcXn+rmsR+J5HWrZh6\n"
+	"RjGUi5G9TgmQDjd5KPqeiZ0hVwxFUuvVig3J6BWcUiTUeEXoRCUFNXOLME5h2fQC\n"
+	"iQIDAQAB\n"
+	"-----END PUBLIC KEY-----\n";
+
+QString CloudBillingClient::encryptAuthCredentialsToken(const QString &email, const QString &password, QString *error_out)
+{
+#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
+	if(error_out)
+		*error_out = QStringLiteral("Шифрование входа требует OpenSSL");
+	return {};
+#else
+	QJsonObject payload;
+	payload.insert(QStringLiteral("email"), email.trimmed().toLower());
+	payload.insert(QStringLiteral("password"), password);
+	payload.insert(QStringLiteral("ts"), QDateTime::currentSecsSinceEpoch());
+	const QByteArray plain = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+
+	unsigned char aes_key[32];
+	unsigned char iv[12];
+	if(RAND_bytes(aes_key, sizeof(aes_key)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
+		if(error_out)
+			*error_out = QStringLiteral("Не удалось сгенерировать ключ шифрования");
+		return {};
+	}
+
+	QByteArray ciphertext;
+	ciphertext.resize(plain.size());
+	unsigned char tag[16];
+	int out_len = 0;
+	int total_len = 0;
+	EVP_CIPHER_CTX *cctx = EVP_CIPHER_CTX_new();
+	if(!cctx) {
+		if(error_out)
+			*error_out = QStringLiteral("Ошибка OpenSSL (cipher ctx)");
+		return {};
+	}
+	bool ok = EVP_EncryptInit_ex(cctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1
+		&& EVP_CIPHER_CTX_ctrl(cctx, EVP_CTRL_GCM_SET_IVLEN, sizeof(iv), nullptr) == 1
+		&& EVP_EncryptInit_ex(cctx, nullptr, nullptr, aes_key, iv) == 1
+		&& EVP_EncryptUpdate(cctx, reinterpret_cast<unsigned char *>(ciphertext.data()), &out_len,
+			reinterpret_cast<const unsigned char *>(plain.constData()), plain.size()) == 1;
+	total_len = out_len;
+	ok = ok && EVP_EncryptFinal_ex(cctx, reinterpret_cast<unsigned char *>(ciphertext.data()) + total_len, &out_len) == 1;
+	total_len += out_len;
+	ok = ok && EVP_CIPHER_CTX_ctrl(cctx, EVP_CTRL_GCM_GET_TAG, sizeof(tag), tag) == 1;
+	EVP_CIPHER_CTX_free(cctx);
+	if(!ok) {
+		if(error_out)
+			*error_out = QStringLiteral("Ошибка AES-GCM шифрования");
+		return {};
+	}
+	ciphertext.resize(total_len);
+
+	BIO *bio = BIO_new_mem_buf(kCloudAuthPublicKeyPem, -1);
+	if(!bio) {
+		if(error_out)
+			*error_out = QStringLiteral("Ошибка OpenSSL (BIO)");
+		return {};
+	}
+	EVP_PKEY *pkey = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+	BIO_free(bio);
+	if(!pkey) {
+		if(error_out)
+			*error_out = QStringLiteral("Не удалось загрузить публичный ключ авторизации");
+		return {};
+	}
+
+	EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new(pkey, nullptr);
+	size_t enc_len = 0;
+	QByteArray enc_key;
+	ok = pctx
+		&& EVP_PKEY_encrypt_init(pctx) == 1
+		&& EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_OAEP_PADDING) == 1
+		&& EVP_PKEY_CTX_set_rsa_oaep_md(pctx, EVP_sha256()) == 1
+		&& EVP_PKEY_encrypt(pctx, nullptr, &enc_len, aes_key, sizeof(aes_key)) == 1;
+	if(ok) {
+		enc_key.resize(static_cast<int>(enc_len));
+		ok = EVP_PKEY_encrypt(pctx, reinterpret_cast<unsigned char *>(enc_key.data()), &enc_len, aes_key, sizeof(aes_key)) == 1;
+		enc_key.resize(static_cast<int>(enc_len));
+	}
+	EVP_PKEY_CTX_free(pctx);
+	EVP_PKEY_free(pkey);
+	if(!ok) {
+		if(error_out)
+			*error_out = QStringLiteral("Ошибка RSA шифрования токена входа");
+		return {};
+	}
+
+	QByteArray body;
+	body.append(reinterpret_cast<const char *>(iv), sizeof(iv));
+	body.append(reinterpret_cast<const char *>(tag), sizeof(tag));
+	body.append(ciphertext);
+
+	return QStringLiteral("CA1.")
+		+ QString::fromLatin1(enc_key.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals))
+		+ QLatin1Char('.')
+		+ QString::fromLatin1(body.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+#endif
+}
+
+CloudBillingClient::Result CloudBillingClient::authSignIn(const QString &host, quint16 port,
+	const QString &email, const QString &password)
+{
+	QString enc_error;
+	const QString token = encryptAuthCredentialsToken(email, password, &enc_error);
+	if(token.isEmpty()) {
+		Result r;
+		r.error = enc_error.isEmpty() ? QStringLiteral("Не удалось зашифровать данные входа") : enc_error;
+		return r;
+	}
+	QJsonObject o = baseReq(host, port, QStringLiteral("sign_in"));
+	o[QStringLiteral("token")] = token;
+	return request(o, 15000);
+}
+
+CloudBillingClient::Result CloudBillingClient::authCheckSession(const QString &host, quint16 port, const QString &jwt)
+{
+	QJsonObject o = baseReq(host, port, QStringLiteral("check_session"));
+	o[QStringLiteral("jwt")] = jwt;
+	return request(o, 15000);
 }

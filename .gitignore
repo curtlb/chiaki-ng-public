@@ -43,3 +43,6 @@ site/
 __pycache__/
 *.pyc
 
+# Local auth service with DB credentials (deploy on VM only)
+scripts/cloud_auth/
+

@@ -63,9 +63,8 @@ Pane {
             Label {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.bottomMargin: 8
-                text: tokenChecking
-                      ? qsTr("Проверяем сохранённый вход — подождите")
-                      : qsTr("Войдите, чтобы запускать облачные игры")
+                visible: tokenChecking
+                text: qsTr("Проверяем сохранённый вход — подождите")
                 font.pixelSize: 13
                 color: "#8b9aab"
                 wrapMode: Text.WordWrap

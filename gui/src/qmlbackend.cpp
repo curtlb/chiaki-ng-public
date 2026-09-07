@@ -35,6 +35,7 @@
 #include <QDesktopServices>
 #include <QTimer>
 #include <QtConcurrent>
+#include <QFutureWatcher>
 #include <QTemporaryFile>
 #include <QNetworkCookie>
 #include <QJsonDocument>
@@ -1988,11 +1989,211 @@ void QmlBackend::logoutFourcloud()
         settings->SetNps4("");
 		settings->SetSubscriptionExpiryDate("");
         settings->SetCloudBillingUserId(0);
+        clearAuthEntitlements();
     }
     if (settings_qml)
         settings_qml->refreshCloudBillingUserId();
     clearFourcloudState();
     emit jwtTokenExpired();
+}
+
+bool QmlBackend::showConsoleCatalogTab() const
+{
+    return settings && settings->GetConsoleCatalogAccess();
+}
+
+bool QmlBackend::showCloudGamesTab() const
+{
+    return settings && settings->GetCloudGamesAccess();
+}
+
+void QmlBackend::clearAuthEntitlements()
+{
+    if (!settings)
+        return;
+    const bool changed = settings->GetConsoleCatalogAccess() || settings->GetCloudGamesAccess();
+    settings->SetConsoleCatalogAccess(false);
+    settings->SetCloudGamesAccess(false);
+    if (changed)
+        emit authEntitlementsChanged();
+}
+
+void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
+{
+    const QString jwt = session.value(QStringLiteral("jwt")).toString().trimmed();
+    if (jwt.isEmpty()) {
+        if (from_login)
+            emit authenticationError(QStringLiteral("Ответ не содержит JWT токена"));
+        else {
+            settings->SetJwtToken("");
+            settings->SetJwtPort(0);
+            settings->SetNps4("");
+            clearAuthEntitlements();
+            clearFourcloudState();
+            emit jwtTokenExpired();
+        }
+        return;
+    }
+
+    const bool console_access = session.value(QStringLiteral("console_access")).toBool();
+    const bool cloud_access = session.value(QStringLiteral("cloud_access")).toBool();
+    if (!console_access && !cloud_access) {
+        settings->SetJwtToken("");
+        settings->SetJwtPort(0);
+        settings->SetNps4("");
+        settings->SetSubscriptionExpiryDate("");
+        clearAuthEntitlements();
+        clearFourcloudState();
+        if (from_login)
+            emit authenticationError(QStringLiteral("Нет активной подписки"));
+        else
+            emit subscriptionExpired(QStringLiteral("Нет активной подписки"));
+        return;
+    }
+
+    settings->SetJwtToken(jwt);
+    settings->SetConsoleCatalogAccess(console_access);
+    settings->SetCloudGamesAccess(cloud_access);
+    emit authEntitlementsChanged();
+
+    QJsonObject decodeObj = session.value(QStringLiteral("decode")).toObject();
+    if (decodeObj.isEmpty())
+        decodeObj = session;
+
+    syncFourCloudEmailFromJwtDecode(settings, settings_qml, cloud_catalog_backend, decodeObj);
+
+    const QString email = session.value(QStringLiteral("email")).toString().trimmed();
+    if (!email.isEmpty() && settings->GetFourCloudEmail().isEmpty()) {
+        settings->SetFourCloudEmail(email);
+        if (settings_qml)
+            settings_qml->refreshFourCloudEmail();
+        if (cloud_catalog_backend)
+            cloud_catalog_backend->invalidateCache();
+    }
+
+    int portVal = session.value(QStringLiteral("Port")).toInt(0);
+    if (portVal <= 0)
+        portVal = decodeObj.value(QStringLiteral("Port")).toInt(0);
+    settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
+    if (settings->GetJwtPort() != 0)
+        discovery_manager.RefreshManualServices();
+
+    QString nps4 = session.value(QStringLiteral("NP")).toString().trimmed();
+    if (nps4.isEmpty())
+        nps4 = session.value(QStringLiteral("NPS4")).toString().trimmed();
+    if (nps4.isEmpty())
+        nps4 = decodeObj.value(QStringLiteral("NP")).toString().trimmed();
+    if (nps4.isEmpty())
+        nps4 = decodeObj.value(QStringLiteral("NPS4")).toString().trimmed();
+    settings->SetNps4(console_access ? nps4 : QString());
+
+    QString jwt_psn = session.value(QStringLiteral("PSN")).toString().trimmed();
+    if (jwt_psn.isEmpty())
+        jwt_psn = decodeObj.value(QStringLiteral("PSN")).toString().trimmed();
+    settings->SetJwtPsn(console_access ? jwt_psn : QString());
+
+    QString dateExp = session.value(QStringLiteral("Date_exp")).toString().trimmed();
+    if (dateExp.isEmpty())
+        dateExp = decodeObj.value(QStringLiteral("Date_exp")).toString().trimmed();
+    if (console_access && !dateExp.isEmpty() && dateExp.toLower() != QLatin1String("null"))
+        settings->SetSubscriptionExpiryDate(dateExp);
+    else
+        settings->SetSubscriptionExpiryDate(QString());
+
+    if (console_access && !settings->GetNps4().isEmpty()) {
+        fetchFourcloudState();
+        if (fourcloud_state_timer)
+            fourcloud_state_timer->start(15000);
+    } else {
+        clearFourcloudState();
+    }
+
+    fetchYandexIamByJwt(jwt);
+    if (console_access)
+        startSubscriptionExpiryTimer();
+    else if (subscription_expiry_timer && subscription_expiry_timer->isActive())
+        subscription_expiry_timer->stop();
+
+    auto finishOk = [this, from_login]() {
+        if (from_login) {
+            qCInfo(chiakiGui) << "Authentication successful via UDP auth"
+                              << "console=" << settings->GetConsoleCatalogAccess()
+                              << "cloud=" << settings->GetCloudGamesAccess();
+            emit authenticationSuccess();
+        } else {
+            qCInfo(chiakiGui) << "JWT session valid via UDP auth"
+                              << "console=" << settings->GetConsoleCatalogAccess()
+                              << "cloud=" << settings->GetCloudGamesAccess();
+            emit jwtTokenValid();
+        }
+    };
+
+    QString chiaki_url = session.value(QStringLiteral("chiaki_url")).toString().trimmed();
+    if (chiaki_url.isEmpty())
+        chiaki_url = decodeObj.value(QStringLiteral("chiaki_url")).toString().trimmed();
+
+    if (!from_login || !console_access || chiaki_url.isEmpty()) {
+        finishOk();
+        return;
+    }
+
+    QString lastLoadedNps4 = settings->GetLastLoadedNps4();
+    QString currentNps4 = settings->GetNps4();
+    bool consoleChanged = !currentNps4.isEmpty()
+        && (lastLoadedNps4.isEmpty() || (currentNps4 != lastLoadedNps4));
+    bool needLoadConfig = chiaki_url != settings->GetLastLoadedChiakiConfigUrl() || consoleChanged;
+    if (!needLoadConfig) {
+        finishOk();
+        return;
+    }
+
+    if (!network_manager)
+        network_manager = new QNetworkAccessManager(this);
+
+    QString jwtToRestore = settings->GetJwtToken();
+    uint16_t portToRestore = settings->GetJwtPort();
+    QString nps4ToRestore = settings->GetNps4();
+    QString jwtPsnToRestore = settings->GetJwtPsn();
+    QString subscriptionExpiryToRestore = settings->GetSubscriptionExpiryDate();
+    const bool consoleRestore = settings->GetConsoleCatalogAccess();
+    const bool cloudRestore = settings->GetCloudGamesAccess();
+
+    qCInfo(chiakiGui) << "Loading chiaki config from:" << chiaki_url;
+    QNetworkRequest configRequest(QUrl(chiaki_url));
+    QNetworkReply *configReply = network_manager->get(configRequest);
+    connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore,
+            portToRestore, nps4ToRestore, jwtPsnToRestore, subscriptionExpiryToRestore,
+            consoleRestore, cloudRestore, finishOk]() {
+        configReply->deleteLater();
+        if (configReply->error() != QNetworkReply::NoError) {
+            qCWarning(chiakiGui) << "Failed to download chiaki config:" << configReply->errorString();
+            finishOk();
+            return;
+        }
+        QByteArray configData = configReply->readAll();
+        QTemporaryFile tempFile;
+        if (!tempFile.open()) {
+            qCWarning(chiakiGui) << "Failed to create temp file for config";
+            finishOk();
+            return;
+        }
+        tempFile.write(configData);
+        tempFile.flush();
+        settings->ImportSettings(tempFile.fileName());
+        settings->SetLastLoadedChiakiConfigUrl(chiaki_url);
+        settings->SetLastLoadedNps4(nps4ToRestore);
+        settings->SetJwtToken(jwtToRestore);
+        settings->SetJwtPort(portToRestore);
+        settings->SetNps4(nps4ToRestore);
+        settings->SetJwtPsn(jwtPsnToRestore);
+        settings->SetSubscriptionExpiryDate(subscriptionExpiryToRestore);
+        settings->SetConsoleCatalogAccess(consoleRestore);
+        settings->SetCloudGamesAccess(cloudRestore);
+        settings->SetHardwareDecoder("d3d11va");
+        emit authEntitlementsChanged();
+        qCInfo(chiakiGui) << "Chiaki config imported successfully";
+        finishOk();
+    });
 }
 
 void QmlBackend::fetchYandexIamByJwt(const QString &jwt)
@@ -3297,313 +3498,41 @@ void QmlBackend::startAutoConfig(const QString &login, const QString &password)
 
 void QmlBackend::authenticate(const QString &email, const QString &password)
 {
-    qCInfo(chiakiGui) << "Authentication request for email:" << email;
+    qCInfo(chiakiGui) << "Authentication request (UDP token) for email:" << email;
     settings->SetFourCloudEmail(email);
     settings_qml->refreshFourCloudEmail();
     if (cloud_catalog_backend)
         cloud_catalog_backend->invalidateCache();
-    
-    if (!network_manager) {
-        network_manager = new QNetworkAccessManager(this);
+
+    const QString host = settings->GetCloudBillingHost();
+    const quint16 port = settings->GetCloudAuthPort();
+    if (host.isEmpty()) {
+        emit authenticationError(QStringLiteral("Не задан адрес сервера авторизации"));
+        return;
     }
-    
-    // Формируем URL для авторизации
-    QUrl url("https://4cloud.pro/.new/api.php");
-    QUrlQuery query;
-    query.addQueryItem("method", "sign-in");
-    query.addQueryItem("Email", email);
-    query.addQueryItem("Password", password);
-    url.setQuery(query);
-    
-    qCInfo(chiakiGui) << "Auth request URL:" << url.toString();
-    
-    QNetworkRequest request(url);
-    QNetworkReply *reply = network_manager->get(request);
-    
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        QByteArray responseData = reply->readAll();
-        int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        
-        qCInfo(chiakiGui) << "Auth response - Status:" << statusCode << "Body length:" << responseData.length();
-        reply->deleteLater();
-        
-        if (reply->error() != QNetworkReply::NoError && responseData.isEmpty()) {
-            QString errorMsg = QString("Ошибка сети: %1").arg(reply->errorString());
-            qCWarning(chiakiGui) << "Auth error:" << errorMsg;
-            emit authenticationError(errorMsg);
-            return;
-        }
-        
-        QJsonParseError parseError;
-        QJsonDocument doc = QJsonDocument::fromJson(responseData, &parseError);
-        
-        if (parseError.error != QJsonParseError::NoError) {
-            QString errorMsg = QString("Ошибка парсинга ответа: %1").arg(parseError.errorString());
-            qCWarning(chiakiGui) << "Auth parse error:" << errorMsg;
-            emit authenticationError(errorMsg);
-            return;
-        }
-        
-        QJsonObject obj = doc.object();
-        QString status = obj.value("status").toString();
-        
-        if (status == "error") {
-            QString errorMsg = obj.value("message").toString();
-            if (errorMsg.isEmpty()) {
-                errorMsg = "Неверный логин или пароль";
-            }
-            qCWarning(chiakiGui) << "Authentication failed:" << errorMsg;
-            emit authenticationError(errorMsg);
-            return;
-        }
-        
-        if (status == "success") {
-            QString jwt = obj.value("jwt").toString();
-            if (jwt.isEmpty()) {
-                QString errorMsg = "Ответ не содержит JWT токена";
-                qCWarning(chiakiGui) << "Auth error:" << errorMsg;
-                emit authenticationError(errorMsg);
-                return;
-            }
-            
-            // Сохраняем JWT токен временно
-            settings->SetJwtToken(jwt);
-            qCInfo(chiakiGui) << "Authentication successful, JWT token received, checking subscription...";
 
-            // IAM-токен Yandex Cloud для переводчика по JWT (без хранения пароля)
-            fetchYandexIamByJwt(jwt);
-            
-            // Проверяем подписку через decode-jwt API
-            QUrl decodeUrl("https://4cloud.pro/api.php");
-            QUrlQuery decodeQuery;
-            decodeQuery.addQueryItem("method", "decode-jwt");
-            decodeQuery.addQueryItem("jwt", jwt);
-            decodeUrl.setQuery(decodeQuery);
-            
-            QNetworkRequest decodeRequest(decodeUrl);
-            QNetworkReply *decodeReply = network_manager->get(decodeRequest);
-            
-            connect(decodeReply, &QNetworkReply::finished, this, [this, decodeReply, jwt]() {
-                QByteArray decodeResponseData = decodeReply->readAll();
-                decodeReply->deleteLater();
-                
-                qCInfo(chiakiGui) << "Auth decode-jwt response:" << decodeResponseData;
-                
-                QJsonParseError parseError2;
-                QJsonDocument decodeDoc = QJsonDocument::fromJson(decodeResponseData, &parseError2);
-                
-                if (parseError2.error != QJsonParseError::NoError) {
-                    qCWarning(chiakiGui) << "Failed to parse decode-jwt response during auth";
-                    settings->SetJwtToken("");
-                    settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                    emit authenticationError("Ошибка проверки подписки");
-                    return;
-                }
-                
-                QJsonObject decodeObj = decodeDoc.object();
-                
-                // Проверяем наличие Date_exp
-                if (!decodeObj.contains("Date_exp")) {
-                    qCWarning(chiakiGui) << "No active subscription (Date_exp key missing)";
-                    settings->SetJwtToken("");
-                    settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                    emit authenticationError("Нет активной подписки");
-                    return;
-                }
-                
-                QJsonValue dateExpValue = decodeObj.value("Date_exp");
-                QJsonValue::Type valueType = dateExpValue.type();
-                
-                QString dateExp = dateExpValue.toString();
-                QString dateExpTrimmed = dateExp.trimmed();
-                QString dateExpLower = dateExpTrimmed.toLower();
-                
-                qCInfo(chiakiGui) << "Auth Date_exp check - Type:" << valueType 
-                                  << "Value:'" << dateExp << "' Trimmed:'" << dateExpTrimmed << "'";
-                
-                bool isNullType = (valueType == QJsonValue::Null) || (valueType == QJsonValue::Undefined);
-                bool isEmptyString = dateExp.isEmpty() || dateExpTrimmed.isEmpty();
-                bool isNullString = (dateExpTrimmed == "null") || (dateExpLower == "null");
-                
-                if (isNullType || isEmptyString || isNullString) {
-                    qCWarning(chiakiGui) << "No active subscription (Date_exp is null/empty)";
-                    settings->SetJwtToken("");
-                    settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                    emit authenticationError("Нет активной подписки");
-                    return;
-                }
-
-                syncFourCloudEmailFromJwtDecode(settings, settings_qml, cloud_catalog_backend, decodeObj);
-                
-                // Извлекаем Port из JWT для кастомных портов (4cloud)
-                int portVal = decodeObj.value("Port").toInt(0);
-                settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
-                if (settings->GetJwtPort() != 0) {
-                    qCInfo(chiakiGui) << "Auth custom port from JWT:" << settings->GetJwtPort();
-                    discovery_manager.RefreshManualServices();
-                }
-                // Номер консоли для статуса через API 4cloud (status_console.php?NPS4=) — в JWT поле "NP"
-                QString nps4 = decodeObj.value("NP").toString().trimmed();
-                if (nps4.isEmpty())
-                    nps4 = decodeObj.value("NPS4").toString().trimmed();
-                if (nps4.isEmpty())
-                    nps4 = decodeObj.value("NSP4").toString().trimmed();
-                settings->SetNps4(nps4);
-                QString jwt_psn = decodeObj.value("PSN").toString().trimmed();
-                if (jwt_psn.isEmpty())
-                    jwt_psn = decodeObj.value("psn").toString().trimmed();
-                settings->SetJwtPsn(jwt_psn);
-                if (!nps4.isEmpty()) {
-                    qCInfo(chiakiGui) << "Auth NPS4 from JWT:" << nps4;
-                    fetchFourcloudState();
-                    fourcloud_state_timer->start(15000);
-                }
-                
-                // URL конфига Chiaki (4cloud) — подгружаем только при первом входе (при повторных не подгружаем)
-                QString chiaki_url = decodeObj.value("chiaki_url").toString().trimmed();
-                if (!chiaki_url.isEmpty())
-                    qCInfo(chiakiGui) << "Auth chiaki_url from JWT:" << chiaki_url;
-                
-                // Если Date_exp есть, проверяем срок действия подписки
-                // Получаем текущую дату для сравнения
-                QUrl currentDateUrl("https://4cloud.pro/api.php");
-                QUrlQuery currentDateQuery;
-                currentDateQuery.addQueryItem("method", "get-date-now");
-                currentDateUrl.setQuery(currentDateQuery);
-                
-                QNetworkRequest currentDateRequest(currentDateUrl);
-                QNetworkReply *currentDateReply = network_manager->get(currentDateRequest);
-                
-                connect(currentDateReply, &QNetworkReply::finished, this, [this, currentDateReply, dateExp, dateExpTrimmed, jwt, chiaki_url]() {
-                    QByteArray currentDateData = currentDateReply->readAll();
-                    currentDateReply->deleteLater();
-                    
-                    QJsonParseError parseError3;
-                    QJsonDocument currentDateDoc = QJsonDocument::fromJson(currentDateData, &parseError3);
-                    
-                    if (parseError3.error != QJsonParseError::NoError) {
-                        qCWarning(chiakiGui) << "Failed to parse current date response during auth";
-                        settings->SetJwtToken("");
-                        settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                        emit authenticationError("Ошибка проверки подписки");
-                        return;
-                    }
-                    
-                    QJsonArray array = currentDateDoc.array();
-                    if (array.isEmpty()) {
-                        qCWarning(chiakiGui) << "Current date array is empty during auth";
-                        settings->SetJwtToken("");
-                        settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                        emit authenticationError("Ошибка проверки подписки");
-                        return;
-                    }
-                    
-                    QJsonObject nowObj = array[0].toObject();
-                    QString nowStr = nowObj.value("Now").toString();
-                    
-                    if (nowStr.isEmpty()) {
-                        qCWarning(chiakiGui) << "Current date Now field is empty during auth";
-                        settings->SetJwtToken("");
-                        settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                        emit authenticationError("Ошибка проверки подписки");
-                        return;
-                    }
-                    
-                    // Парсим даты
-                    QDateTime subscriptionExpiry = QDateTime::fromString(dateExp, "dd.MM.yyyy HH:mm");
-                    QDateTime currentDateTime = QDateTime::fromString(nowStr, "yyyy-MM-dd HH:mm:ss");
-                    
-                    if (!subscriptionExpiry.isValid()) {
-                        qCWarning(chiakiGui) << "Invalid subscription expiry date format during auth:" << dateExp;
-                        settings->SetJwtToken("");
-                        settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                        emit authenticationError("Ошибка проверки подписки");
-                        return;
-                    }
-                    
-                    if (!currentDateTime.isValid()) {
-                        qCWarning(chiakiGui) << "Invalid current date format during auth:" << nowStr;
-                        settings->SetJwtToken("");
-                        settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                        emit authenticationError("Ошибка проверки подписки");
-                        return;
-                    }
-                    
-                    // Проверяем, не истекла ли подписка
-                    if (currentDateTime >= subscriptionExpiry) {
-                        qCWarning(chiakiGui) << "Subscription has expired during auth";
-                        settings->SetJwtToken("");
-                        settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                        settings->SetSubscriptionExpiryDate("");
-                        emit authenticationError("Нет активной подписки");
-                        return;
-                    }
-                    
-                    // Подписка активна. При первом входе подгружаем конфиг из chiaki_url (при повторных — уже не подгружаем)
-                    // Но если подписка/консоль поменялись (NPS4 в JWT другой), конфиг нужно переимпортировать,
-                    // даже когда chiaki_url совпадает.
-                    settings->SetSubscriptionExpiryDate(dateExpTrimmed);
-                    QString lastLoadedNps4 = settings->GetLastLoadedNps4();
-                    QString currentNps4 = settings->GetNps4();
-                    bool consoleChanged = !currentNps4.isEmpty()
-                        && (lastLoadedNps4.isEmpty() || (currentNps4 != lastLoadedNps4));
-                    bool needLoadConfig = !chiaki_url.isEmpty()
-                        && (chiaki_url != settings->GetLastLoadedChiakiConfigUrl() || consoleChanged);
-                    if (!needLoadConfig) {
-                        qCInfo(chiakiGui) << "Authentication successful, subscription is active";
-                        startSubscriptionExpiryTimer();
-                        emit authenticationSuccess();
-                        return;
-                    }
-                    // Сохраняем JWT и порт до импорта конфига: ImportSettings перезаписывает настройки из ini и затирает их
-                    QString jwtToRestore = settings->GetJwtToken();
-                    uint16_t portToRestore = settings->GetJwtPort();
-                    QString nps4ToRestore = settings->GetNps4();
-                    QString jwtPsnToRestore = settings->GetJwtPsn();
-                    QString subscriptionExpiryToRestore = settings->GetSubscriptionExpiryDate();
-                    qCInfo(chiakiGui) << "Authentication successful, loading chiaki config from:" << chiaki_url;
-                    QUrl configUrlObj(chiaki_url);
-                    QNetworkRequest configRequest(configUrlObj);
-                    QNetworkReply *configReply = network_manager->get(configRequest);
-                    connect(configReply, &QNetworkReply::finished, this, [this, configReply, chiaki_url, jwtToRestore, portToRestore, nps4ToRestore, jwtPsnToRestore, subscriptionExpiryToRestore]() {
-                        configReply->deleteLater();
-                        if (configReply->error() != QNetworkReply::NoError) {
-                            qCWarning(chiakiGui) << "Failed to download chiaki config:" << configReply->errorString();
-                            startSubscriptionExpiryTimer();
-                            emit authenticationSuccess();
-                            return;
-                        }
-                        QByteArray configData = configReply->readAll();
-                        QTemporaryFile tempFile;
-                        if (!tempFile.open()) {
-                            qCWarning(chiakiGui) << "Failed to create temp file for config";
-                            startSubscriptionExpiryTimer();
-                            emit authenticationSuccess();
-                            return;
-                        }
-                        tempFile.write(configData);
-                        tempFile.flush();
-                        settings->ImportSettings(tempFile.fileName());
-                        settings->SetLastLoadedChiakiConfigUrl(chiaki_url);
-                        settings->SetLastLoadedNps4(nps4ToRestore);
-                        settings->SetJwtToken(jwtToRestore);
-                        settings->SetJwtPort(portToRestore);
-                        settings->SetNps4(nps4ToRestore);
-                        settings->SetJwtPsn(jwtPsnToRestore);
-                        settings->SetSubscriptionExpiryDate(subscriptionExpiryToRestore);
-                        settings->SetHardwareDecoder("d3d11va");
-                        qCInfo(chiakiGui) << "Chiaki config imported successfully, JWT/port/NPS4 restored, hardware decoder set to d3d11va";
-                        startSubscriptionExpiryTimer();
-                        emit authenticationSuccess();
-                    });
-                });
-            });
-        } else {
-            QString errorMsg = "Неизвестный статус ответа: " + status;
-            qCWarning(chiakiGui) << "Auth error:" << errorMsg;
-            emit authenticationError(errorMsg);
+    auto *watcher = new QFutureWatcher<CloudBillingClient::Result>(this);
+    connect(watcher, &QFutureWatcher<CloudBillingClient::Result>::finished, this, [this, watcher]() {
+        const CloudBillingClient::Result result = watcher->result();
+        watcher->deleteLater();
+        if (!result.ok) {
+            QString msg = result.ui_message;
+            if (msg.isEmpty())
+                msg = result.error;
+            if (msg.isEmpty())
+                msg = result.data.value(QStringLiteral("message")).toString();
+            if (msg.isEmpty())
+                msg = QStringLiteral("Ошибка авторизации");
+            qCWarning(chiakiGui) << "UDP auth failed:" << msg;
+            clearAuthEntitlements();
+            emit authenticationError(msg);
+            return;
         }
+        applyAuthSession(result.data, true);
     });
+    watcher->setFuture(QtConcurrent::run([host, port, email, password]() {
+        return CloudBillingClient::authSignIn(host, port, email, password);
+    }));
 }
 
 void QmlBackend::checkJwtToken()
@@ -3611,256 +3540,70 @@ void QmlBackend::checkJwtToken()
     QString jwt = settings->GetJwtToken();
     if (jwt.isEmpty()) {
         qCInfo(chiakiGui) << "No JWT token to check";
+        clearAuthEntitlements();
         emit jwtTokenExpired();
         return;
     }
 
-    // Быстрая локальная проверка подписки при входе без пароля:
-    // если мы уже знаем Date_exp из decode-jwt, не ходим в сеть, а сразу разлогиниваем.
+    // Local console expiry only logs out when cloud access is also absent.
     QString localExpiryStr = settings->GetSubscriptionExpiryDate();
-    if (!localExpiryStr.isEmpty()) {
+    if (!localExpiryStr.isEmpty() && settings->GetConsoleCatalogAccess()) {
         QDateTime localExpiry = QDateTime::fromString(localExpiryStr, "dd.MM.yyyy HH:mm");
-        if (localExpiry.isValid() && QDateTime::currentDateTime() >= localExpiry) {
+        if (localExpiry.isValid() && QDateTime::currentDateTime() >= localExpiry
+            && !settings->GetCloudGamesAccess()) {
             qCWarning(chiakiGui) << "Local subscription expiry reached, logging out";
             settings->SetJwtToken("");
             settings->SetJwtPort(0);
             settings->SetNps4("");
             settings->SetSubscriptionExpiryDate("");
+            clearAuthEntitlements();
             clearFourcloudState();
             emit subscriptionExpired("Нет активной подписки");
             return;
         }
     }
-    
-    qCInfo(chiakiGui) << "Checking JWT token validity...";
-    
-    if (!network_manager) {
-        network_manager = new QNetworkAccessManager(this);
+
+    const QString host = settings->GetCloudBillingHost();
+    const quint16 port = settings->GetCloudAuthPort();
+    if (host.isEmpty()) {
+        qCWarning(chiakiGui) << "Auth host empty, treating JWT as expired";
+        settings->SetJwtToken("");
+        clearAuthEntitlements();
+        clearFourcloudState();
+        emit jwtTokenExpired();
+        return;
     }
-    
-    // Проверяем JWT через decode-jwt API
-    QUrl url("https://4cloud.pro/api.php");
-    QUrlQuery query;
-    query.addQueryItem("method", "decode-jwt");
-    query.addQueryItem("jwt", jwt);
-    url.setQuery(query);
-    
-    qCInfo(chiakiGui) << "JWT check request URL:" << url.toString();
-    
-    QNetworkRequest request(url);
-    QNetworkReply *reply = network_manager->get(request);
-    
-    connect(reply, &QNetworkReply::finished, this, [this, reply, jwt]() {
-        QByteArray responseData = reply->readAll();
-        int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        
-        qCInfo(chiakiGui) << "JWT check response - Status:" << statusCode << "Body length:" << responseData.length();
-        reply->deleteLater();
-        
-        if (reply->error() != QNetworkReply::NoError && responseData.isEmpty()) {
-            QString errorMsg = QString("Ошибка сети: %1").arg(reply->errorString());
-            qCWarning(chiakiGui) << "JWT check network error:" << errorMsg;
-            // При ошибке сети считаем токен невалидным
-            settings->SetJwtToken("");
-            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-            emit jwtTokenExpired();
-            return;
-        }
-        
-        QJsonParseError parseError;
-        QJsonDocument doc = QJsonDocument::fromJson(responseData, &parseError);
-        
-        if (parseError.error != QJsonParseError::NoError) {
-            QString errorMsg = QString("Ошибка парсинга ответа: %1").arg(parseError.errorString());
-            qCWarning(chiakiGui) << "JWT check parse error:" << errorMsg;
-            settings->SetJwtToken("");
-            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-            emit jwtTokenExpired();
-            return;
-        }
-        
-        QJsonObject obj = doc.object();
-        
-        // Логируем весь ответ для отладки
-        qCInfo(chiakiGui) << "JWT decode response JSON:" << QJsonDocument(obj).toJson(QJsonDocument::Compact);
-        
-        // Любая ошибка в ответе API (Token has expired, No subscription и т.д.) — выкидываем на авторизацию
-        if (obj.contains("error")) {
-            QString error = obj.value("error").toString().trimmed();
-            if (!error.isEmpty()) {
-                qCInfo(chiakiGui) << "JWT check API error:" << error;
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit jwtTokenExpired();
-                return;
-            }
-        }
-        
-        // Проверяем наличие Date_exp (при повторном входе подписка проверяется так же: decode-jwt → Date_exp → get-date-now → сравнение дат)
-        if (!obj.contains("Date_exp")) {
-            qCWarning(chiakiGui) << "No active subscription (Date_exp key missing)";
-            settings->SetJwtToken("");
-            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-            settings->SetSubscriptionExpiryDate("");
-            emit subscriptionExpired("Нет активной подписки");
-            return;
-        }
-        
-        QJsonValue dateExpValue = obj.value("Date_exp");
-        QJsonValue::Type valueType = dateExpValue.type();
-        
-        qCInfo(chiakiGui) << "Date_exp check - Type:" << valueType 
-                          << "isNull:" << dateExpValue.isNull()
-                          << "isUndefined:" << (valueType == QJsonValue::Undefined)
-                          << "isNullType:" << (valueType == QJsonValue::Null);
-        
-        // Сначала проверяем строковое представление (toString() на null возвращает пустую строку)
-        QString dateExp = dateExpValue.toString();
-        QString dateExpTrimmed = dateExp.trimmed();
-        QString dateExpLower = dateExpTrimmed.toLower();
-        
-        qCInfo(chiakiGui) << "Date_exp string value: '" << dateExp << "' isEmpty:" << dateExp.isEmpty() 
-                          << "Trimmed:'" << dateExpTrimmed << "' Lower:'" << dateExpLower << "'";
-        
-        // Проверяем, является ли значение JSON null, undefined или пустой строкой
-        bool isNullType = (valueType == QJsonValue::Null) || (valueType == QJsonValue::Undefined);
-        bool isEmptyString = dateExp.isEmpty() || dateExpTrimmed.isEmpty();
-        bool isNullString = (dateExpTrimmed == "null") || (dateExpLower == "null");
-        
-        qCInfo(chiakiGui) << "Date_exp validation - isNullType:" << isNullType 
-                          << "isEmptyString:" << isEmptyString 
-                          << "isNullString:" << isNullString;
-        
-        if (isNullType || isEmptyString || isNullString) {
-            qCWarning(chiakiGui) << "No active subscription (Date_exp is null/empty). Type:" << valueType 
-                                 << "Value:'" << dateExp << "' Trimmed:'" << dateExpTrimmed << "'";
-            settings->SetJwtToken("");
-            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-            settings->SetSubscriptionExpiryDate("");
-            emit subscriptionExpired("Нет активной подписки");
-            return;
-        }
 
-        // Сохраняем expiry дату для локальной проверки при следующем входе без пароля.
-        settings->SetSubscriptionExpiryDate(dateExpTrimmed);
-
-        syncFourCloudEmailFromJwtDecode(settings, settings_qml, cloud_catalog_backend, obj);
-        
-        // Обновляем Port и номер консоли (NP) из JWT для кастомных портов и статуса консоли (4cloud)
-        int portVal = obj.value("Port").toInt(0);
-        settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
-        if (settings->GetJwtPort() != 0)
-            discovery_manager.RefreshManualServices();
-        QString nps4 = obj.value("NP").toString().trimmed();
-        if (nps4.isEmpty())
-            nps4 = obj.value("NPS4").toString().trimmed();
-        if (nps4.isEmpty())
-            nps4 = obj.value("NSP4").toString().trimmed();
-        settings->SetNps4(nps4);
-        QString jwt_psn = obj.value("PSN").toString().trimmed();
-        if (jwt_psn.isEmpty())
-            jwt_psn = obj.value("psn").toString().trimmed();
-        settings->SetJwtPsn(jwt_psn);
-        if (!nps4.isEmpty()) {
-            fetchFourcloudState();
-            fourcloud_state_timer->start(15000);
+    qCInfo(chiakiGui) << "Checking JWT via UDP auth" << host << port;
+    auto *watcher = new QFutureWatcher<CloudBillingClient::Result>(this);
+    connect(watcher, &QFutureWatcher<CloudBillingClient::Result>::finished, this, [this, watcher]() {
+        const CloudBillingClient::Result result = watcher->result();
+        watcher->deleteLater();
+        if (!result.ok) {
+            QString msg = result.ui_message;
+            if (msg.isEmpty())
+                msg = result.error;
+            if (msg.isEmpty())
+                msg = result.data.value(QStringLiteral("message")).toString();
+            qCWarning(chiakiGui) << "UDP check_session failed:" << msg;
+            settings->SetJwtToken("");
+            settings->SetJwtPort(0);
+            settings->SetNps4("");
+            settings->SetSubscriptionExpiryDate("");
+            clearAuthEntitlements();
+            clearFourcloudState();
+            if (msg.contains(QStringLiteral("подписк"), Qt::CaseInsensitive)
+                || msg.contains(QStringLiteral("no_access"), Qt::CaseInsensitive))
+                emit subscriptionExpired(msg.isEmpty() ? QStringLiteral("Нет активной подписки") : msg);
+            else
+                emit jwtTokenExpired();
+            return;
         }
-        
-        qCInfo(chiakiGui) << "Subscription expiry date:" << dateExp;
-        
-        // Проверка подписки через get-date-exp-jwt: при отсутствии подписки API возвращает [{"Date": "Error"}]
-        QUrl dateExpUrl("https://4cloud.pro/api.php");
-        QUrlQuery dateExpQuery;
-        dateExpQuery.addQueryItem("method", "get-date-exp-jwt");
-        dateExpQuery.addQueryItem("jwt", jwt);
-        dateExpUrl.setQuery(dateExpQuery);
-        
-        QNetworkRequest dateExpRequest(dateExpUrl);
-        QNetworkReply *dateExpReply = network_manager->get(dateExpRequest);
-        
-        connect(dateExpReply, &QNetworkReply::finished, this, [this, dateExpReply, jwt]() {
-            QByteArray responseData = dateExpReply->readAll();
-            dateExpReply->deleteLater();
-            
-            qCInfo(chiakiGui) << "get-date-exp-jwt response:" << responseData;
-            
-            QJsonParseError parseError2;
-            QJsonDocument doc = QJsonDocument::fromJson(responseData, &parseError2);
-            
-            if (parseError2.error != QJsonParseError::NoError) {
-                qCWarning(chiakiGui) << "Failed to parse get-date-exp-jwt response";
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit jwtTokenExpired();
-                return;
-            }
-            
-            QJsonArray array = doc.array();
-            if (array.isEmpty()) {
-                qCWarning(chiakiGui) << "get-date-exp-jwt array is empty";
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit jwtTokenExpired();
-                return;
-            }
-            
-            QJsonObject item = array[0].toObject();
-            QString dateStr = item.value("Date").toString().trimmed();
-            
-            if (dateStr.compare("Error", Qt::CaseInsensitive) == 0) {
-                qCWarning(chiakiGui) << "No active subscription (Date == Error)";
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit subscriptionExpired("Нет активной подписки");
-                return;
-            }
-            
-            QString nowStr = item.value("Now").toString();
-            if (nowStr.isEmpty()) {
-                qCWarning(chiakiGui) << "get-date-exp-jwt Now is empty";
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit jwtTokenExpired();
-                return;
-            }
-            
-            // Формат Date: ДД.ММ.ГГГГ ЧЧ:ММ, Now: ГГГГ-ММ-ДД ЧЧ:ММ:СС
-            QDateTime subscriptionExpiry = QDateTime::fromString(dateStr, "dd.MM.yyyy HH:mm");
-            QDateTime currentDateTime = QDateTime::fromString(nowStr, "yyyy-MM-dd HH:mm:ss");
-            
-            if (!subscriptionExpiry.isValid()) {
-                qCWarning(chiakiGui) << "Invalid subscription expiry date format:" << dateStr;
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit jwtTokenExpired();
-                return;
-            }
-            
-            if (!currentDateTime.isValid()) {
-                qCWarning(chiakiGui) << "Invalid current date format:" << nowStr;
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit jwtTokenExpired();
-                return;
-            }
-            
-            qCInfo(chiakiGui) << "Subscription expires:" << subscriptionExpiry.toString();
-            qCInfo(chiakiGui) << "Current date:" << currentDateTime.toString();
-            
-            if (currentDateTime >= subscriptionExpiry) {
-                qCInfo(chiakiGui) << "Subscription has expired";
-                settings->SetJwtToken("");
-                settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
-                emit subscriptionExpired("Нет активной подписки");
-                return;
-            }
-            
-            qCInfo(chiakiGui) << "JWT token is valid, subscription is active";
-            fetchYandexIamByJwt(jwt);
-            startSubscriptionExpiryTimer();
-            emit jwtTokenValid();
-        });
+        applyAuthSession(result.data, false);
     });
+    watcher->setFuture(QtConcurrent::run([host, port, jwt]() {
+        return CloudBillingClient::authCheckSession(host, port, jwt);
+    }));
 }
 
 void PsnConnectionWorker::ConnectPsnConnection(StreamSession *session, const QString &duid, const bool &ps5)

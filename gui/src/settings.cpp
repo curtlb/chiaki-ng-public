@@ -2533,6 +2533,38 @@ void Settings::SetCloudBillingPort(quint16 port)
 	settings.setValue("settings/cloud_billing_port", port);
 }
 
+quint16 Settings::GetCloudAuthPort() const
+{
+	return static_cast<quint16>(settings.value("settings/cloud_auth_port", 13752).toUInt());
+}
+
+void Settings::SetCloudAuthPort(quint16 port)
+{
+	if(settings.value("settings/cloud_auth_port", 13752).toUInt() == port)
+		return;
+	settings.setValue("settings/cloud_auth_port", port);
+}
+
+bool Settings::GetConsoleCatalogAccess() const
+{
+	return settings.value("settings/console_catalog_access", false).toBool();
+}
+
+void Settings::SetConsoleCatalogAccess(bool enabled)
+{
+	settings.setValue("settings/console_catalog_access", enabled);
+}
+
+bool Settings::GetCloudGamesAccess() const
+{
+	return settings.value("settings/cloud_games_access", false).toBool();
+}
+
+void Settings::SetCloudGamesAccess(bool enabled)
+{
+	settings.setValue("settings/cloud_games_access", enabled);
+}
+
 QString Settings::GetLastSelectedCloudSection() const
 {
 	return settings.value("settings/last_selected_cloud_section", "catalog").toString();
