@@ -177,8 +177,9 @@ def fmt_dt_msk(dt):
 def lease_valid_sql():
     """Lease row still usable for streaming.
 
-    Without SaveFreezeActive the hold is only for the current play session
-    (active lease while streaming / grace). Retention without freeze is not kept.
+    With SaveFreezeActive the hold lasts until RetentionUntil.
+    Without freeze the lease stays 'active' through the first MSK day
+    (minutes accumulate across sessions); afterward it is released.
     """
     return (
         "l.Status IN ('active','retention') "
@@ -283,6 +284,13 @@ def fetch_lease_row(conn, lease_id, for_update=False):
         return cur.fetchone()
 
 
+def msk_day_end(day=None):
+    """Last second of the given MSK calendar day (23:59:59)."""
+    if day is None:
+        day = msk_today()
+    return datetime.combine(day, datetime.max.time()).replace(microsecond=0)
+
+
 def is_lease_first_msk_day(lease):
     """True on the MSK calendar day when the PS account was first assigned."""
     first = parse_db_datetime((lease or {}).get("FirstAssignedAt"))
@@ -371,19 +379,21 @@ def build_save_retention_payload(conn, user_id, lease_id):
 
     if not freeze_active:
         if first_day and mins_to_freeze > 0:
+            hold_until = msk_day_end()
             message = (
                 "Заморозка сохранений пока не активирована.\n\n"
                 "В первый день после выдачи аккаунта нужно суммарно отыграть "
                 "%s мин (можно за несколько сессий) по московскому времени.\n"
                 "Сегодня отыграно: %s мин из %s мин — осталось ещё %s мин.\n"
                 "После этого сохранения будут храниться %s часов.\n"
-                "Аккаунт закреплён за вами до конца сегодняшнего дня (МСК)."
+                "Аккаунт закреплён за вами до %s МСК."
                 % (
                     SAVE_FREEZE_THRESHOLD_MIN,
                     played_min,
                     SAVE_FREEZE_THRESHOLD_MIN,
                     mins_to_freeze,
                     SAVE_INITIAL_RETENTION_HOURS,
+                    fmt_dt(hold_until),
                 )
             )
         elif first_day:
@@ -2683,10 +2693,11 @@ def handle_end_stream(conn, req):
     elif not save_info.get("save_freeze_active"):
         left = int(save_info.get("minutes_to_freeze") or 0)
         if left > 0:
+            hold_until = msk_day_end()
             ui_extra = (
-                " Аккаунт закреплён: до заморозки сейвов осталось %s мин "
-                "суммарно за сегодня (МСК)."
-                % left
+                " Аккаунт закреплён до %s МСК: до заморозки сейвов осталось %s мин "
+                "суммарно за сегодня."
+                % (fmt_dt(hold_until), left)
             )
     return reply(
         req_id,

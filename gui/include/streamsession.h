@@ -251,6 +251,7 @@ class StreamSession : public QObject
 		bool mouse_touch_enabled;
 		bool dpad_regular;
 		bool dpad_regular_touch_switched;
+		bool stream_menu_shortcut_held = false;
 		uint dpad_touch_shortcut1;
 		uint dpad_touch_shortcut2;
 		uint dpad_touch_shortcut3;

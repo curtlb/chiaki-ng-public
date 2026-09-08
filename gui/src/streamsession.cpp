@@ -1348,6 +1348,29 @@ void StreamSession::SendFeedbackState()
 		if(dpad_touch_id >= 0 && !dpad_touch_stop_timer->isActive())
 			dpad_touch_stop_timer->start(NEW_DPAD_TOUCH_INTERVAL_MS);
 	}
+
+	// L1+R1+L3+R3 (configurable) → toggle fullscreen on release.
+	// Detected here because during an active stream QmlController UI shortcuts
+	// are unreliable while the session owns the pad feedback path.
+	if(settings && settings->GetStreamMenuEnabled())
+	{
+		auto bit_for = [](uint idx) -> uint32_t {
+			return idx > 0 ? (1u << (idx - 1)) : 0u;
+		};
+		const uint32_t sc =
+			bit_for(settings->GetStreamMenuShortcut1()) |
+			bit_for(settings->GetStreamMenuShortcut2()) |
+			bit_for(settings->GetStreamMenuShortcut3()) |
+			bit_for(settings->GetStreamMenuShortcut4());
+		if(sc && (state.buttons & sc) == sc)
+			stream_menu_shortcut_held = true;
+		else if(stream_menu_shortcut_held)
+		{
+			stream_menu_shortcut_held = false;
+			emit PsChordFired();
+		}
+	}
+
 	chiaki_controller_state_or(&state, &state, &dpad_touch_state);
 	chiaki_session_set_controller_state(&session, &state);
 }

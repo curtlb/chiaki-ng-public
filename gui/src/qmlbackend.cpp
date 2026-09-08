@@ -344,6 +344,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
                 session->deleteLater();
                 session = nullptr;
                 emit sessionChanged(session);
+                updateStreamShortcut();
                 if (cloud_streaming_backend) {
                     QTimer::singleShot(3000, cloud_streaming_backend, [this]() {
                         if (cloud_streaming_backend)
@@ -370,8 +371,13 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
             session->deleteLater();
             session = nullptr;
             emit sessionChanged(session);
-            startSubscriptionExpiryTimer();
-            ensureFourcloudPolling();
+            updateStreamShortcut();
+            // Console Date_exp polling is unrelated to cloud sessions; calling it
+            // after every cloud quit logged out cloud-only users (API "Error").
+            if (settings && settings->GetConsoleCatalogAccess()) {
+                startSubscriptionExpiryTimer();
+                ensureFourcloudPolling();
+            }
 
             sleep_inhibit->release();
             setDiscoveryEnabled(true);
@@ -383,6 +389,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
         });
 
         emit sessionChanged(session);
+        updateStreamShortcut();
 
         bool fullscreen = session->GetFullscreen();
         bool zoom = session->GetZoom();
@@ -1154,6 +1161,7 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
         session->deleteLater();
         session = nullptr;
         emit sessionChanged(session);
+        updateStreamShortcut();
         startSubscriptionExpiryTimer();
         // Сразу запускаем опрос статуса 4cloud, чтобы обновить «Онлайн/Спит/Оффлайн» на главном экране
         ensureFourcloudPolling();
@@ -2341,7 +2349,11 @@ void QmlBackend::fetchSubscriptionExpiry()
         QJsonObject item = arr[0].toObject();
         QString dateStr = item.value("Date").toString().trimmed();
         if (dateStr.compare("Error", Qt::CaseInsensitive) == 0) {
-            // Нет активной подписки — выход из профиля, иначе висит «Проверка…»
+            // Нет console Date_exp — для cloud-only это нормально, JWT не трогаем.
+            subscription_time_remaining.clear();
+            emit subscriptionTimeRemainingChanged();
+            if (settings->GetCloudGamesAccess())
+                return;
             settings->SetJwtToken("");
             settings->SetJwtPort(0);
             settings->SetNps4("");
@@ -2365,6 +2377,16 @@ void QmlBackend::fetchSubscriptionExpiry()
             return;
         }
         if (now >= expiry) {
+            subscription_time_remaining.clear();
+            emit subscriptionTimeRemainingChanged();
+            if (settings->GetCloudGamesAccess()) {
+                // Console rental expired, but cloud access remains — keep JWT.
+                settings->SetJwtPort(0);
+                settings->SetNps4("");
+                settings->SetSubscriptionExpiryDate("");
+                clearFourcloudState();
+                return;
+            }
             settings->SetJwtToken("");
             settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
             emit subscriptionExpired("Срок подписки истёк");
@@ -2429,7 +2451,9 @@ uint32_t QmlBackend::getStreamShortcut() const
 
 void QmlBackend::updateStreamShortcut()
 {
-    uint32_t shortcut = getStreamShortcut();
+    // While streaming, fullscreen chord is handled in StreamSession to avoid
+    // double-toggle with synthetic F11 from QmlController.
+    uint32_t shortcut = session ? 0u : getStreamShortcut();
     for (const auto &controller : std::as_const(controllers)) {
        controller->setEscapeShortcut(shortcut);
     }

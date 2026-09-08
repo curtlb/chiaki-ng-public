@@ -65,7 +65,7 @@ QmlController::QmlController(Controller *c, uint32_t shortcut, QObject *t, QObje
         }
 
         if ((old_buttons & escape_shortcut) == escape_shortcut && (buttons & escape_shortcut) != escape_shortcut)
-            sendKey(Qt::Key_O, Qt::ControlModifier);
+            sendKey(Qt::Key_F11);
 
         old_buttons = buttons;
     });

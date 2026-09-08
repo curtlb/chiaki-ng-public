@@ -78,17 +78,8 @@ Item {
                     horizontalCenter: spinner.horizontalCenter
                     topMargin: 30
                 }
-                text: {
-                    var base = qsTr("L1+R1+L3+R3 (или ctrl+O) – меню трансляции") + "\n"
-                        + qsTr("L1+R1+L2+R2 (или двойной клик ПКМ) – во весь экран") + "\n"
-                        + qsTr("ALT+T – включить AI-переводчик") + "\n"
-                        + qsTr("ALT+Y – скрыть перевод") + "\n"
-                        + qsTr("F2 — проигр. слот2 | Ctrl+F2 — проигр. слот2, затем дозапись в slot_02.json (F10 — сохранить) | F10 — запись/auto | F12 — стоп/слот12 | Ctrl+F1–F12 — проигр.+дозапись | slot_NN_cycle — цикл, повтор Fn — стоп | Звук: начало/конец проигрыша (Windows)");
-                    if (Chiaki.settings.audioVideoDisabled === 0x01)
-                        return qsTr("Audio Disabled in settings") + "\n" + base;
-                    return base;
-                }
-                visible: sessionLoading
+                text: qsTr("Audio Disabled in settings")
+                visible: sessionLoading && Chiaki.settings.audioVideoDisabled === 0x01
             }
 
             Label {
