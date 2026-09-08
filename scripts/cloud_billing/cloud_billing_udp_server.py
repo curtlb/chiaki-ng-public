@@ -7,8 +7,11 @@ JSON over UDP (request/response share the same "id" field).
 Default bind: 0.0.0.0:13750
 
 Actions:
-  ping, catalog, catalog_npsso, quote, start, confirm_stream, heartbeat, renew,
-  end_stream, status, whoami
+  ping, catalog, catalog_npsso (read-only NPSSO of site-assigned account),
+  quote, start, confirm_stream, heartbeat, renew, end_stream, status, whoami
+
+PS accounts are assigned only via the website personal cabinet.
+This service never auto-leases from the available pool.
 
 Deploy:
   cp .env.example .env   # fill in secrets locally (never commit .env)
@@ -172,11 +175,87 @@ def fmt_dt_msk(dt):
 
 
 def lease_valid_sql():
-    """Lease row still usable for streaming (freeze optional)."""
+    """Lease row still usable for streaming.
+
+    Without SaveFreezeActive the hold is only for the current play session
+    (active lease while streaming / grace). Retention without freeze is not kept.
+    """
     return (
         "l.Status IN ('active','retention') "
-        "AND (l.SaveFreezeActive = 0 OR l.RetentionUntil > NOW(3))"
+        "AND ("
+        "  (l.SaveFreezeActive = 1 AND l.RetentionUntil > NOW(3))"
+        "  OR (l.SaveFreezeActive = 0 AND l.Status = 'active')"
+        ")"
     )
+
+
+def release_lease(conn, lease_id, reason):
+    """Expire lease and free the PS account if it still points at this lease."""
+    if not lease_id:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_Leases SET Status='expired', ReleasedAt=NOW(3), "
+            "ReleaseReason=%s, UpdatedAt=NOW(3) "
+            "WHERE ID=%s AND Status IN ('active','retention')",
+            (reason, lease_id),
+        )
+        cur.execute(
+            "UPDATE CloudStreaming_Accounts SET Status='available', CurrentLeaseID=NULL "
+            "WHERE CurrentLeaseID=%s AND Status='leased'",
+            (lease_id,),
+        )
+
+
+def finalize_lease_after_stream(conn, user_id, lease_id):
+    """
+    After a stream ends:
+    - Freeze active → keep account in retention until RetentionUntil.
+    - First MSK day after assignment, freeze not yet earned → keep lease active
+      so the player can accumulate ≥61 minutes across multiple sessions that day.
+    - After the first MSK day without freeze → release account immediately.
+    """
+    lease = fetch_lease_row(conn, lease_id, for_update=True)
+    if not lease:
+        return build_save_retention_payload(conn, user_id, lease_id)
+
+    freeze_active = bool(int(lease.get("SaveFreezeActive") or 0))
+    if freeze_active:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Leases SET Status='retention', UpdatedAt=NOW(3) "
+                "WHERE ID=%s",
+                (lease_id,),
+            )
+        return build_save_retention_payload(conn, user_id, lease_id)
+
+    # First calendar day (MSK) after account assignment: hold the lease so
+    # play minutes can accumulate across sessions toward the 61-min freeze.
+    if is_lease_first_msk_day(lease):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Leases SET Status='active', UpdatedAt=NOW(3) "
+                "WHERE ID=%s AND Status IN ('active','retention')",
+                (lease_id,),
+            )
+        payload = build_save_retention_payload(conn, user_id, lease_id)
+        payload["lease_released"] = False
+        payload["save_freeze_active"] = False
+        return payload
+
+    release_lease(conn, lease_id, "no_save_freeze")
+    payload = build_save_retention_payload(conn, user_id, lease_id)
+    base = (payload.get("save_retention_message") or "").strip()
+    released_note = (
+        "Аккаунт освобождён: заморозка сохранений не активирована в первый день "
+        "после выдачи аккаунта, поэтому аренда не удерживается."
+    )
+    payload["save_retention_message"] = (
+        (base + "\n\n" + released_note) if base else released_note
+    )
+    payload["lease_released"] = True
+    payload["save_freeze_active"] = False
+    return payload
 
 
 def ensure_daily_play_row(conn, user_id, play_date):
@@ -293,28 +372,32 @@ def build_save_retention_payload(conn, user_id, lease_id):
     if not freeze_active:
         if first_day and mins_to_freeze > 0:
             message = (
-                "Заморозка сохранений не произойдёт.\n\n"
-                "Чтобы ваши сохранения хранились %s часов после игры, "
-                "нужно отыграть ещё %s мин. сегодня (по московскому времени).\n"
-                "Сегодня отыграно: %s мин из %s мин.\n"
-                "Первоначальная заморозка доступна только в первый день после выдачи аккаунта."
+                "Заморозка сохранений пока не активирована.\n\n"
+                "В первый день после выдачи аккаунта нужно суммарно отыграть "
+                "%s мин (можно за несколько сессий) по московскому времени.\n"
+                "Сегодня отыграно: %s мин из %s мин — осталось ещё %s мин.\n"
+                "После этого сохранения будут храниться %s часов.\n"
+                "Аккаунт закреплён за вами до конца сегодняшнего дня (МСК)."
                 % (
-                    SAVE_INITIAL_RETENTION_HOURS,
-                    mins_to_freeze,
+                    SAVE_FREEZE_THRESHOLD_MIN,
                     played_min,
                     SAVE_FREEZE_THRESHOLD_MIN,
+                    mins_to_freeze,
+                    SAVE_INITIAL_RETENTION_HOURS,
                 )
             )
         elif first_day:
             message = (
-                "Заморозка сохранений будет активирована после достижения порога "
-                "(%s мин за первый день по МСК)." % SAVE_FREEZE_THRESHOLD_MIN
+                "Порог для заморозки (%s мин суммарно за первый день по МСК) "
+                "достигнут — заморозка будет активирована."
+                % SAVE_FREEZE_THRESHOLD_MIN
             )
         else:
             message = (
                 "Заморозка сохранений не активна.\n\n"
                 "Первоначальная заморозка (48 ч) доступна только в первый день "
-                "после выдачи аккаунта (не менее %s мин. игры за этот день по МСК)."
+                "после выдачи аккаунта: нужно суммарно отыграть не менее %s мин "
+                "за этот день по МСК (можно за несколько сессий)."
                 % SAVE_FREEZE_THRESHOLD_MIN
             )
     else:
@@ -1180,10 +1263,17 @@ def find_resumable_session(conn, user_id, service_type, game_identifier, game_id
     return sess
 
 
+NO_ASSIGNED_ACCOUNT_ERROR = "Нет назначенного PS-аккаунта"
+NO_ASSIGNED_ACCOUNT_UI = (
+    "PS-аккаунт не выдан. Оформите аренду в личном кабинете на сайте 4cloud.pro, "
+    "затем повторите запуск."
+)
+
+
 def ensure_session_lease(conn, sess, game):
     """
-    Make sure the session points at a usable leased PS account.
-    Keeps MinutesLeft. Allocates a new account only when the old lease expired.
+    Bind session to the user's existing site-assigned lease.
+    Never auto-allocates from the available pool — assignment is website-only.
     """
     if not sess:
         return sess, None
@@ -1193,52 +1283,42 @@ def ensure_session_lease(conn, sess, game):
             "FROM CloudStreaming_Leases l "
             "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
             "WHERE l.ID=%s AND l.Status IN ('active','retention') "
-            "AND (l.SaveFreezeActive = 0 OR l.RetentionUntil > NOW(3)) "
+            "AND ("
+            "  (l.SaveFreezeActive = 1 AND l.RetentionUntil > NOW(3))"
+            "  OR (l.SaveFreezeActive = 0 AND l.Status = 'active')"
+            ") "
             "LIMIT 1",
             (sess["LeaseID"],),
         )
         lease = cur.fetchone()
-    if lease:
+    if not lease:
+        # Previous lease expired — reuse another valid lease already assigned to this user.
+        lease = find_active_lease(conn, sess["UserID"], game) if game else None
+        if not lease:
+            lease = find_any_user_lease(conn, sess["UserID"])
+        if not lease:
+            return sess, None
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
-                "LastUsedAt=NOW(3) WHERE ID=%s",
-                (lease["ID"], lease["AccountID"]),
+                "UPDATE CloudStreaming_Sessions SET LeaseID=%s, AccountID=%s WHERE ID=%s",
+                (lease["ID"], lease["AccountID"], sess["ID"]),
             )
-        touch_lease(conn, lease["ID"])
-        return sess, lease
-
-    account = allocate_account(conn, game) if game else allocate_catalog_account(conn)
-    if not account:
-        return sess, None
-    now = datetime.now()
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO CloudStreaming_Leases "
-            "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil, SaveFreezeActive) "
-            "VALUES (%s, %s, 'active', %s, %s, %s, 0)",
-            (sess["UserID"], account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(now)),
+            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
+            sess = cur.fetchone()
+        log.info(
+            "session %s reattached to existing user lease=%s account=%s",
+            sess["ID"],
+            lease["ID"],
+            lease["AccountID"],
         )
-        lease_id = cur.lastrowid
+
+    with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
             "LastUsedAt=NOW(3) WHERE ID=%s",
-            (lease_id, account["ID"]),
+            (lease["ID"], lease["AccountID"]),
         )
-        cur.execute(
-            "UPDATE CloudStreaming_Sessions SET LeaseID=%s, AccountID=%s WHERE ID=%s",
-            (lease_id, account["ID"], sess["ID"]),
-        )
-        cur.execute("SELECT * FROM CloudStreaming_Leases WHERE ID=%s", (lease_id,))
-        lease = cur.fetchone()
-        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
-        sess = cur.fetchone()
-    log.info(
-        "session %s reattached to new lease=%s account=%s (previous lease expired)",
-        sess["ID"],
-        lease_id,
-        account["ID"],
-    )
+    touch_lease(conn, lease["ID"])
     return sess, lease
 
 
@@ -1247,75 +1327,25 @@ def find_other_active_session(conn, user_id, service_type, game_identifier, game
     return None
 
 
-def allocate_account(conn, game):
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM CloudStreaming_Accounts "
-            "WHERE Status = 'available' ORDER BY LastUsedAt IS NULL DESC, LastUsedAt ASC "
-            "FOR UPDATE"
-        )
-        accounts = cur.fetchall()
-    for acc in accounts:
-        if account_can_play_game(conn, acc, game):
-            return acc
-    return None
-
-
-def allocate_catalog_account(conn):
-    """Soft-assign any free PS account for catalog/search (prefer PS+)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM CloudStreaming_Accounts "
-            "WHERE Status = 'available' "
-            "ORDER BY HasPsPlus DESC, LastUsedAt IS NULL DESC, LastUsedAt ASC "
-            "FOR UPDATE"
-        )
-        return cur.fetchone()
-
-
 def ensure_user_catalog_npsso(conn, user_id):
     """
-    NPSSO from the player's first assigned CloudStreaming_Accounts row.
-    If the player has no active/retention lease yet, soft-assign one (same lease
-    table as start) so search uses the same PS Now account they will stream on.
+    NPSSO from the player's already-assigned CloudStreaming_Accounts row.
+    No soft-assign: account must be issued via the website personal cabinet.
     """
     lease = find_any_user_lease(conn, user_id)
-    if lease:
-        return {
-            "npsso": lease.get("NPSSO") or "",
-            "account_id": lease.get("AccountID"),
-            "account_label": lease.get("AccountLabel") or "",
-            "lease_id": lease.get("ID"),
-            "soft_assigned": False,
-        }
-    account = allocate_catalog_account(conn)
-    if not account:
+    if not lease:
         return None
-    now = datetime.now()
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO CloudStreaming_Leases "
-            "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil, SaveFreezeActive) "
-            "VALUES (%s, %s, 'active', %s, %s, %s, 0)",
-            (user_id, account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(now)),
-        )
-        lease_id = cur.lastrowid
-        cur.execute(
-            "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
-            "LastUsedAt=NOW(3) WHERE ID=%s",
-            (lease_id, account["ID"]),
-        )
     return {
-        "npsso": account.get("NPSSO") or "",
-        "account_id": account["ID"],
-        "account_label": account.get("Label") or "",
-        "lease_id": lease_id,
-        "soft_assigned": True,
+        "npsso": lease.get("NPSSO") or "",
+        "account_id": lease.get("AccountID"),
+        "account_label": lease.get("AccountLabel") or "",
+        "lease_id": lease.get("ID"),
+        "soft_assigned": False,
     }
 
 
 def handle_catalog_npsso(conn, req):
-    """Return NPSSO of the player's assigned PS account for PS Now search/catalog."""
+    """Return NPSSO of the player's site-assigned PS account (read-only)."""
     email = (req.get("email") or "").strip().lower()
     req_id = req.get("id")
     if not email:
@@ -1326,14 +1356,14 @@ def handle_catalog_npsso(conn, req):
         return reply(
             req_id,
             False,
-            error="Нет свободных PS-аккаунтов для каталога. Попробуйте позже.",
-            ui_message="Все аккаунты заняты. Ожидайте освобождения.",
+            error=NO_ASSIGNED_ACCOUNT_ERROR,
+            ui_message=NO_ASSIGNED_ACCOUNT_UI,
         )
     log.info(
-        "catalog_npsso user=%s account_id=%s soft_assigned=%s",
+        "catalog_npsso user=%s account_id=%s lease_id=%s",
         user["ID"],
         info.get("account_id"),
-        info.get("soft_assigned"),
+        info.get("lease_id"),
     )
     return reply(
         req_id,
@@ -1341,7 +1371,7 @@ def handle_catalog_npsso(conn, req):
         npsso=info["npsso"],
         account_id=info["account_id"],
         account_label=info.get("account_label") or "",
-        soft_assigned=bool(info.get("soft_assigned")),
+        soft_assigned=False,
     )
 
 
@@ -2178,8 +2208,8 @@ def handle_start(conn, req):
             return reply(
                 req_id,
                 False,
-                error="Нет свободных PS-аккаунтов для этой игры. Попробуйте позже.",
-                ui_message="Все аккаунты заняты. Ожидайте освобождения или выберите другую игру.",
+                error=NO_ASSIGNED_ACCOUNT_ERROR,
+                ui_message=NO_ASSIGNED_ACCOUNT_UI,
             )
         account_id = resumable.get("AccountID")
         with conn.cursor() as cur:
@@ -2247,31 +2277,13 @@ def handle_start(conn, req):
             account = cur.fetchone()
         touch_lease(conn, lease["ID"])
     else:
-        account = allocate_account(conn, game)
-        if not account:
-            conn.rollback()
-            return reply(
-                req_id,
-                False,
-                error="Нет свободных PS-аккаунтов для этой игры. Попробуйте позже.",
-                ui_message="Все аккаунты заняты. Ожидайте освобождения или выберите другую игру.",
-            )
-        now = datetime.now()
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO CloudStreaming_Leases "
-                "(UserID, AccountID, Status, FirstAssignedAt, LastActivityAt, RetentionUntil, SaveFreezeActive) "
-                "VALUES (%s, %s, 'active', %s, %s, %s, 0)",
-                (user["ID"], account["ID"], fmt_dt(now), fmt_dt(now), fmt_dt(now)),
-            )
-            lease_id = cur.lastrowid
-            cur.execute(
-                "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
-                "LastUsedAt=NOW(3) WHERE ID=%s",
-                (lease_id, account["ID"]),
-            )
-            cur.execute("SELECT * FROM CloudStreaming_Leases WHERE ID=%s", (lease_id,))
-            lease = cur.fetchone()
+        conn.rollback()
+        return reply(
+            req_id,
+            False,
+            error=NO_ASSIGNED_ACCOUNT_ERROR,
+            ui_message=NO_ASSIGNED_ACCOUNT_UI,
+        )
 
     region = (account.get("Region") or "PL").strip().upper()
     play_id, _ = resolve_regional_stream_id(conn, service_type, game_identifier, region)
@@ -2662,19 +2674,27 @@ def handle_end_stream(conn, req):
                 sess["ID"],
             ),
         )
-        cur.execute(
-            "UPDATE CloudStreaming_Leases SET Status='retention' WHERE ID=%s",
-            (sess["LeaseID"],),
-        )
-    save_info = build_save_retention_payload(conn, sess["UserID"], sess["LeaseID"])
+    # Freeze / first-day hold / release — see finalize_lease_after_stream.
+    save_info = finalize_lease_after_stream(conn, sess["UserID"], sess["LeaseID"])
     conn.commit()
+    ui_extra = ""
+    if save_info.get("lease_released"):
+        ui_extra = " Аккаунт освобождён (заморозка сейвов не активирована)."
+    elif not save_info.get("save_freeze_active"):
+        left = int(save_info.get("minutes_to_freeze") or 0)
+        if left > 0:
+            ui_extra = (
+                " Аккаунт закреплён: до заморозки сейвов осталось %s мин "
+                "суммарно за сегодня (МСК)."
+                % left
+            )
     return reply(
         req_id,
         True,
         ui_message=(
             "Стрим остановлен. Остаток времени на балансе: %s мин. "
-            "Запустите игру снова, чтобы продолжить без новой оплаты."
-            % mins
+            "Запустите игру снова, чтобы продолжить без новой оплаты.%s"
+            % (mins, ui_extra)
         ),
         minutes_left=mins,
         plus_minutes_left=mins,
@@ -2752,13 +2772,57 @@ def expire_leases_job():
     while True:
         try:
             conn = db_connect()
+            hb_timeout = max(60, int(HEARTBEAT_TIMEOUT))
             with conn.cursor() as cur:
+                # Save freeze window ended → free account.
                 cur.execute(
                     "UPDATE CloudStreaming_Leases SET Status='expired', ReleasedAt=NOW(3), "
                     "ReleaseReason='save_retention_expired' "
                     "WHERE Status IN ('active','retention') "
                     "AND SaveFreezeActive = 1 AND RetentionUntil < NOW(3)"
                 )
+                # Candidates without freeze — decide in Python so first MSK day
+                # after assignment is always held (minutes accumulate across sessions).
+                cur.execute(
+                    "SELECT ID, FirstAssignedAt, Status, LastActivityAt "
+                    "FROM CloudStreaming_Leases "
+                    "WHERE Status IN ('active','retention') "
+                    "AND COALESCE(SaveFreezeActive, 0) = 0"
+                )
+                no_freeze_leases = cur.fetchall() or []
+
+            for lease in no_freeze_leases:
+                # Hold the PS account for the entire first MSK calendar day.
+                if is_lease_first_msk_day(lease):
+                    continue
+                lease_id = lease["ID"]
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT 1 FROM CloudStreaming_Sessions s
+                        WHERE s.LeaseID = %s
+                          AND (
+                            (
+                              s.Status = 'pending_payment'
+                              AND s.BlockStartedAt > DATE_SUB(NOW(3), INTERVAL 20 MINUTE)
+                            )
+                            OR (
+                              s.Status IN ('active','grace_no_stream','renewal_pending')
+                              AND COALESCE(s.LastHeartbeatAt, s.BlockStartedAt)
+                                  > DATE_SUB(NOW(3), INTERVAL %s SECOND)
+                            )
+                          )
+                        LIMIT 1
+                        """,
+                        (lease_id, hb_timeout),
+                    )
+                    fresh = cur.fetchone()
+                if fresh:
+                    # Still mid-session after first day — wait until stream ends.
+                    continue
+                release_lease(conn, lease_id, "no_save_freeze")
+
+            with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE CloudStreaming_Accounts a "
                     "JOIN CloudStreaming_Leases l ON l.ID = a.CurrentLeaseID "
@@ -2768,7 +2832,8 @@ def expire_leases_job():
                 cur.execute(
                     "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
                     "BalanceTickAt=NULL, "
-                    "UiMessage='Аренда аккаунта истекла по неактивности — баланс времени сохранён.' "
+                    "UiMessage='Аренда аккаунта истекла — баланс времени сохранён. "
+                    "При следующем запуске будет выдан другой аккаунт (сейвы не заморожены).' "
                     "WHERE Status IN ('active','grace_no_stream','renewal_pending') "
                     "AND LeaseID IN (SELECT ID FROM CloudStreaming_Leases WHERE Status='expired')"
                 )
