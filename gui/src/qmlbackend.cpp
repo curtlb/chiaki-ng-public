@@ -374,7 +374,7 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
             updateStreamShortcut();
             // Console Date_exp polling is unrelated to cloud sessions; calling it
             // after every cloud quit logged out cloud-only users (API "Error").
-            if (settings && settings->GetConsoleCatalogAccess()) {
+            if (this->settings && this->settings->GetConsoleCatalogAccess()) {
                 startSubscriptionExpiryTimer();
                 ensureFourcloudPolling();
             }
