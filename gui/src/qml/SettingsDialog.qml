@@ -467,7 +467,7 @@ DialogView {
                                     leftMargin: parent.paintedWidth + 20
                                 }
                                 text: "Открыть"
-                                onClicked: Qt.openUrlExternally("file://" + parent.text);
+                                onClicked: Chiaki.settings.openLogDirectory()
                                 Material.roundedScale: Material.SmallScale
                             }
                         }

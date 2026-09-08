@@ -617,6 +617,7 @@ public:
     void refreshAllPlaceboKeys();
 
     QString logDirectory() const;
+    Q_INVOKABLE void openLogDirectory();
     QStringList availableDecoders() const;
     QStringList availableAudioOutDevices() const;
     QStringList availableAudioInDevices() const;

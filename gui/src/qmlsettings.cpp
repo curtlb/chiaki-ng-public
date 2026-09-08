@@ -1,6 +1,8 @@
 #include "qmlsettings.h"
 #include "sessionlog.h"
 
+#include <QDesktopServices>
+#include <QUrl>
 #include <QSet>
 #include <QKeySequence>
 #include <QFutureWatcher>
@@ -1740,6 +1742,14 @@ void QmlSettings::setPlaceboToneMappingContrastSmoothness(float smoothness)
 QString QmlSettings::logDirectory() const
 {
     return GetLogBaseDir();
+}
+
+void QmlSettings::openLogDirectory()
+{
+    const QString dir = GetLogBaseDir();
+    if (dir.isEmpty())
+        return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 void QmlSettings::clearKeyMapping()
