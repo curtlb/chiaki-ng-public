@@ -2573,18 +2573,21 @@ DialogView {
                         text: qsTr("Почасовая оплата (4cloud)")
                         font.bold: true
                         font.pixelSize: 14
+                        visible: false
                     }
 
                     C.CheckBox {
                         text: qsTr("Включить почасовую оплату при запуске облачных игр")
                         checked: Chiaki.settings.cloudBillingEnabled
                         onToggled: Chiaki.settings.cloudBillingEnabled = checked
+                        visible: false
                     }
 
                     Label {
                         wrapMode: Text.Wrap
                         opacity: 0.85
                         font.pixelSize: 12
+                        visible: false
                         text: {
                             let email = Chiaki.settings.fourCloudEmail || "";
                             return email.length > 0
@@ -2596,6 +2599,7 @@ DialogView {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
+                        visible: false
 
                         Label {
                             text: qsTr("Сервер биллинга (UDP):")
@@ -2632,6 +2636,7 @@ DialogView {
                         wrapMode: Text.Wrap
                         opacity: 0.8
                         font.pixelSize: 12
+                        visible: false
                         text: qsTr("Перед запуском игры показывается сумма за 1 час. Списание с карты, привязанной для облачного гейминга. PS-аккаунт сохраняется 3 дня для ваших сохранений.")
                     }
 
@@ -2639,11 +2644,13 @@ DialogView {
                         Layout.topMargin: 16
                         text: qsTr("NPSSO токен (каталог облака)")
                         wrapMode: Text.Wrap
+                        visible: false
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
+                        visible: false
 
                         C.TextField {
                             id: npssoTokenField
@@ -2687,17 +2694,20 @@ DialogView {
                         wrapMode: Text.Wrap
                         opacity: 0.8
                         font.pixelSize: 12
+                        visible: false
                         text: qsTr("Войдите на playstation.com, откройте страницу NPSSO и скопируйте токен. Токен сохраняется до ручной замены. Не создавайте chiaki_cloud.log вручную — файл появится сам при запуске.")
                     }
 
                     Label {
                         text: qsTr("NPSSO для подключения к игре (тест)")
                         wrapMode: Text.Wrap
+                        visible: false
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
+                        visible: false
 
                         C.TextField {
                             id: npssoSecondaryTokenField
@@ -2735,6 +2745,7 @@ DialogView {
                         wrapMode: Text.Wrap
                         opacity: 0.8
                         font.pixelSize: 12
+                        visible: false
                         text: qsTr("Если заполнено — каталог грузится с основным NPSSO, а Gaikai/Kamaji при старте игры используют этот токен. Пустое поле = без подмены.")
                     }
 
@@ -2743,18 +2754,21 @@ DialogView {
                         text: qsTr("Почасовая оплата (4cloud.pro)")
                         font.bold: true
                         font.pixelSize: 14
+                        visible: false
                     }
 
                     C.CheckBox {
                         text: qsTr("Включить почасовую оплату и аренду PS-аккаунта")
                         checked: Chiaki.settings.cloudBillingEnabled
                         onToggled: Chiaki.settings.cloudBillingEnabled = checked
+                        visible: false
                     }
 
                     Label {
                         wrapMode: Text.Wrap
                         opacity: 0.85
                         font.pixelSize: 12
+                        visible: false
                         text: Chiaki.settings.fourCloudEmail.length > 0
                             ? qsTr("Аккаунт 4cloud: %1").arg(Chiaki.settings.fourCloudEmail)
                             : qsTr("Войдите в 4cloud.pro в приложении — email подставится автоматически.")
@@ -2763,7 +2777,7 @@ DialogView {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
-                        visible: Chiaki.settings.cloudBillingEnabled
+                        visible: false
 
                         Label { text: qsTr("Сервер биллинга:") }
 
@@ -2793,7 +2807,7 @@ DialogView {
                         wrapMode: Text.Wrap
                         opacity: 0.8
                         font.pixelSize: 12
-                        visible: Chiaki.settings.cloudBillingEnabled
+                        visible: false
                         text: qsTr("Перед запуском игры показывается сумма списания. Оплата с карты для облачного гейминга (отдельно от аренды консоли). Сохранения на PS-аккаунте — 3 дня.")
                     }
 
@@ -2808,105 +2822,113 @@ DialogView {
                         wrapMode: Text.Wrap
                         opacity: 0.8
                         font.pixelSize: 12
-                        text: qsTr("Разрешение и битрейт для облака отдельные от Remote Play. Декодер, Placebo и тип окна — из общих настроек. PS5 Cloud всегда H.265, PSNOW — H.264.")
+                        text: qsTr("Только облачные игры. Не влияет на Remote Play. Декодер, Placebo и тип окна — из общих настроек.")
                     }
 
-                    Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: qsTr("PS5 Cloud — разрешение:")
-                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 2
+                        columnSpacing: 28
+                        rowSpacing: 10
 
-                    C.ComboBox {
-                        Layout.preferredWidth: 400
-                        model: ["720p", "1080p", "1440p", "2160p"]
-                        currentIndex: {
-                            let res = Chiaki.settings.cloudResolutionPSCloud;
-                            if (res === 720) return 0;
-                            if (res === 1440) return 2;
-                            if (res === 2160) return 3;
-                            return 1;
-                        }
-                        onActivated: index => {
-                            if (index === 0) Chiaki.settings.cloudResolutionPSCloud = 720;
-                            else if (index === 2) Chiaki.settings.cloudResolutionPSCloud = 1440;
-                            else if (index === 3) Chiaki.settings.cloudResolutionPSCloud = 2160;
-                            else Chiaki.settings.cloudResolutionPSCloud = 1080;
-                        }
-                    }
-
-                    Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: qsTr("PS5 Cloud — битрейт:")
-                    }
-
-                    RowLayout {
-                        Layout.preferredWidth: 400
-                        C.Slider {
-                            id: cloudBitratePSCloudSlider
-                            Layout.fillWidth: true
-                            from: 2
-                            to: 100
-                            stepSize: 1
-                            value: Chiaki.settings.cloudBitratePSCloud / 1000
-                            onMoved: Chiaki.settings.cloudBitratePSCloud = value * 1000
+                        Label {
+                            text: qsTr("Разрешение PS4 игр")
+                            font.bold: true
                         }
                         Label {
-                            text: Math.round(cloudBitratePSCloudSlider.value) + " Mbps"
-                            Layout.preferredWidth: 70
+                            text: qsTr("Разрешение PS5 игр")
+                            font.bold: true
                         }
-                    }
 
-                    Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: qsTr("PSNOW — разрешение:")
-                    }
-
-                    C.ComboBox {
-                        Layout.preferredWidth: 400
-                        model: ["720p", "1080p", "1440p", "2160p"]
-                        currentIndex: {
-                            let res = Chiaki.settings.cloudResolutionPSNOW;
-                            if (res === 720) return 0;
-                            if (res === 1440) return 2;
-                            if (res === 2160) return 3;
-                            return 1;
-                        }
-                        onActivated: index => {
-                            if (index === 0) Chiaki.settings.cloudResolutionPSNOW = 720;
-                            else if (index === 2) Chiaki.settings.cloudResolutionPSNOW = 1440;
-                            else if (index === 3) Chiaki.settings.cloudResolutionPSNOW = 2160;
-                            else Chiaki.settings.cloudResolutionPSNOW = 1080;
-                        }
-                    }
-
-                    Label {
-                        Layout.alignment: Qt.AlignRight
-                        text: qsTr("PSNOW — битрейт:")
-                    }
-
-                    RowLayout {
-                        Layout.preferredWidth: 400
-                        C.Slider {
-                            id: cloudBitratePSNOWSlider
+                        C.ComboBox {
                             Layout.fillWidth: true
-                            from: 2
-                            to: 100
-                            stepSize: 1
-                            value: Chiaki.settings.cloudBitratePSNOW / 1000
-                            onMoved: Chiaki.settings.cloudBitratePSNOW = value * 1000
+                            Layout.maximumWidth: 320
+                            model: ["720p", "1080p", "1440p", "2160p"]
+                            currentIndex: {
+                                let res = Chiaki.settings.cloudResolutionPSNOW;
+                                if (res === 720) return 0;
+                                if (res === 1440) return 2;
+                                if (res === 2160) return 3;
+                                return 1;
+                            }
+                            onActivated: index => {
+                                if (index === 0) Chiaki.settings.cloudResolutionPSNOW = 720;
+                                else if (index === 2) Chiaki.settings.cloudResolutionPSNOW = 1440;
+                                else if (index === 3) Chiaki.settings.cloudResolutionPSNOW = 2160;
+                                else Chiaki.settings.cloudResolutionPSNOW = 1080;
+                            }
+                        }
+
+                        C.ComboBox {
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 320
+                            model: ["720p", "1080p", "1440p", "2160p"]
+                            currentIndex: {
+                                let res = Chiaki.settings.cloudResolutionPSCloud;
+                                if (res === 720) return 0;
+                                if (res === 1440) return 2;
+                                if (res === 2160) return 3;
+                                return 1;
+                            }
+                            onActivated: index => {
+                                if (index === 0) Chiaki.settings.cloudResolutionPSCloud = 720;
+                                else if (index === 2) Chiaki.settings.cloudResolutionPSCloud = 1440;
+                                else if (index === 3) Chiaki.settings.cloudResolutionPSCloud = 2160;
+                                else Chiaki.settings.cloudResolutionPSCloud = 1080;
+                            }
+                        }
+
+                        Label {
+                            text: qsTr("Битрейт PS4 игр")
+                            font.bold: true
                         }
                         Label {
-                            text: Math.round(cloudBitratePSNOWSlider.value) + " Mbps"
-                            Layout.preferredWidth: 70
+                            text: qsTr("Битрейт PS5 игр")
+                            font.bold: true
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            C.Slider {
+                                id: cloudBitratePSNOWSlider
+                                Layout.fillWidth: true
+                                from: 2
+                                to: 100
+                                stepSize: 1
+                                value: Chiaki.settings.cloudBitratePSNOW / 1000
+                                onMoved: Chiaki.settings.cloudBitratePSNOW = value * 1000
+                            }
+                            Label {
+                                text: Math.round(cloudBitratePSNOWSlider.value) + " Mbps"
+                                Layout.preferredWidth: 70
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            C.Slider {
+                                id: cloudBitratePSCloudSlider
+                                Layout.fillWidth: true
+                                from: 2
+                                to: 100
+                                stepSize: 1
+                                value: Chiaki.settings.cloudBitratePSCloud / 1000
+                                onMoved: Chiaki.settings.cloudBitratePSCloud = value * 1000
+                            }
+                            Label {
+                                text: Math.round(cloudBitratePSCloudSlider.value) + " Mbps"
+                                Layout.preferredWidth: 70
+                            }
                         }
                     }
 
-                    // Yandex Cloud Translation Settings
+                    // Yandex Cloud Translation Settings (hidden from Config tab)
                     Label {
                         Layout.topMargin: 30
                         text: qsTr("Настройки перевода Yandex Cloud (для Alt+T)")
                         font.bold: true
                         font.pixelSize: 16
+                        visible: false
                     }
 
                     C.Button {
@@ -2914,6 +2936,7 @@ DialogView {
                         Layout.topMargin: 20
                         Layout.preferredWidth: 200
                         text: qsTr("Авторизоваться")
+                        visible: false
                         onClicked: {
                             yandexAuthDialog.open()
                         }
@@ -2927,6 +2950,7 @@ DialogView {
                         wrapMode: Text.Wrap
                         font.pixelSize: 12
                         opacity: 0.7
+                        visible: false
                     }
                     
                     YandexAuthDialog {
