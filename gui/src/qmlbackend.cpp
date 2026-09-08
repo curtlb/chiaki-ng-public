@@ -1225,10 +1225,12 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
             chiaki_log_mutex.unlock();
             session->deleteLater();
             session = nullptr;
+            updateStreamShortcut();
             startSubscriptionExpiryTimer();
             return;
         }
         emit sessionChanged(session);
+        updateStreamShortcut();
         sleep_inhibit->inhibit();
     }
     else
