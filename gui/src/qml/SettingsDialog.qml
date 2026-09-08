@@ -490,7 +490,7 @@ DialogView {
 
                         Label {
                             Layout.alignment: Qt.AlignRight
-                            text: "Горячие клавиши полноэкранного режима"
+                            text: "Горячие клавиши меню стрима"
                         }
                         C.CheckBox {
                             id: streamMenu
@@ -600,7 +600,7 @@ DialogView {
 
                         Label {
                             Layout.alignment: Qt.AlignRight
-                            text: qsTr("(L1+R1+L3+R3)")
+                            text: qsTr("(L1+R1+L3+R3 — меню; L2+R2+L3+R3 — полный экран)")
                         }
                     }
                 }

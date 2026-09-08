@@ -252,6 +252,7 @@ class StreamSession : public QObject
 		bool dpad_regular;
 		bool dpad_regular_touch_switched;
 		bool stream_menu_shortcut_held = false;
+		bool fullscreen_chord_held = false;
 		uint dpad_touch_shortcut1;
 		uint dpad_touch_shortcut2;
 		uint dpad_touch_shortcut3;
@@ -435,7 +436,8 @@ class StreamSession : public QObject
 		void CantDisplayChanged(bool cant_display);
 		void LoadingMessageChanged();
 		void GameLaunchCompleted();
-		void PsChordFired(); // OPTIONS+SHARE chord fired -> open the in-stream menu
+		void PsChordFired(); // OPTIONS+SHARE / L1+R1+L3+R3 → in-stream menu
+		void FullscreenToggleRequested(); // L2+R2+L3+R3 → toggle fullscreen
 
 	private slots:
 		void UpdateGamepads();

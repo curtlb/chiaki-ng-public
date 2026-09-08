@@ -552,6 +552,9 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
         if(session)
         {
             connect(session, &StreamSession::PsChordFired, this, [this]() {
+                emit menuRequested();
+            });
+            connect(session, &StreamSession::FullscreenToggleRequested, this, [this]() {
                 if (windowState() != Qt::WindowFullScreen)
                     fullscreenTime();
                 else

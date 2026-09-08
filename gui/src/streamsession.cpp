@@ -1349,7 +1349,8 @@ void StreamSession::SendFeedbackState()
 			dpad_touch_stop_timer->start(NEW_DPAD_TOUCH_INTERVAL_MS);
 	}
 
-	// L1+R1+L3+R3 (configurable) → toggle fullscreen on release.
+	// L1+R1+L3+R3 (configurable stream-menu shortcut) → in-stream menu on release.
+	// L2+R2+L3+R3 → toggle fullscreen on release.
 	// Detected here because during an active stream QmlController UI shortcuts
 	// are unreliable while the session owns the pad feedback path.
 	if(settings && settings->GetStreamMenuEnabled())
@@ -1368,6 +1369,23 @@ void StreamSession::SendFeedbackState()
 		{
 			stream_menu_shortcut_held = false;
 			emit PsChordFired();
+		}
+	}
+
+	{
+		constexpr uint8_t kTriggerDown = 0x80; // ~50%
+		const bool l2 = state.l2_state >= kTriggerDown
+			|| (state.buttons & CHIAKI_CONTROLLER_ANALOG_BUTTON_L2);
+		const bool r2 = state.r2_state >= kTriggerDown
+			|| (state.buttons & CHIAKI_CONTROLLER_ANALOG_BUTTON_R2);
+		const bool l3 = state.buttons & CHIAKI_CONTROLLER_BUTTON_L3;
+		const bool r3 = state.buttons & CHIAKI_CONTROLLER_BUTTON_R3;
+		if(l2 && r2 && l3 && r3)
+			fullscreen_chord_held = true;
+		else if(fullscreen_chord_held)
+		{
+			fullscreen_chord_held = false;
+			emit FullscreenToggleRequested();
 		}
 	}
 

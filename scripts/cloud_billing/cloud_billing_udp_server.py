@@ -178,8 +178,8 @@ def lease_valid_sql():
     """Lease row still usable for streaming.
 
     With SaveFreezeActive the hold lasts until RetentionUntil.
-    Without freeze the lease stays 'active' through the first MSK day
-    (minutes accumulate across sessions); afterward it is released.
+    Without freeze the lease stays 'active' through the first 24h after
+    assignment (minutes accumulate across sessions); afterward it is released.
     """
     return (
         "l.Status IN ('active','retention') "
@@ -212,9 +212,9 @@ def finalize_lease_after_stream(conn, user_id, lease_id):
     """
     After a stream ends:
     - Freeze active → keep account in retention until RetentionUntil.
-    - First MSK day after assignment, freeze not yet earned → keep lease active
-      so the player can accumulate ≥61 minutes across multiple sessions that day.
-    - After the first MSK day without freeze → release account immediately.
+    - First 24h after assignment, freeze not yet earned → keep lease active
+      so the player can accumulate ≥61 minutes across multiple sessions.
+    - After the first 24h without freeze → release account immediately.
     """
     lease = fetch_lease_row(conn, lease_id, for_update=True)
     if not lease:
@@ -230,9 +230,9 @@ def finalize_lease_after_stream(conn, user_id, lease_id):
             )
         return build_save_retention_payload(conn, user_id, lease_id)
 
-    # First calendar day (MSK) after account assignment: hold the lease so
+    # First 24 hours after account assignment: hold the lease so
     # play minutes can accumulate across sessions toward the 61-min freeze.
-    if is_lease_first_msk_day(lease):
+    if is_lease_first_24h_window(lease):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Leases SET Status='active', UpdatedAt=NOW(3) "
@@ -248,7 +248,7 @@ def finalize_lease_after_stream(conn, user_id, lease_id):
     payload = build_save_retention_payload(conn, user_id, lease_id)
     base = (payload.get("save_retention_message") or "").strip()
     released_note = (
-        "Аккаунт освобождён: заморозка сохранений не активирована в первый день "
+        "Аккаунт освобождён: заморозка сохранений не активирована в первые 24 часа "
         "после выдачи аккаунта, поэтому аренда не удерживается."
     )
     payload["save_retention_message"] = (
@@ -291,33 +291,78 @@ def msk_day_end(day=None):
     return datetime.combine(day, datetime.max.time()).replace(microsecond=0)
 
 
-def is_lease_first_msk_day(lease):
-    """True on the MSK calendar day when the PS account was first assigned."""
-    first = parse_db_datetime((lease or {}).get("FirstAssignedAt"))
+def lease_first_assigned_at(lease):
+    return parse_db_datetime((lease or {}).get("FirstAssignedAt"))
+
+
+def lease_first_window_end(lease):
+    """End of the initial 24h hold/freeze window from FirstAssignedAt."""
+    first = lease_first_assigned_at(lease)
     if not first:
+        return None
+    return first + timedelta(hours=24)
+
+
+def is_lease_first_24h_window(lease):
+    """True during the first 24 hours after the PS account was assigned."""
+    end = lease_first_window_end(lease)
+    if not end:
         return False
-    return first.date() == msk_today()
+    return msk_now() < end
+
+
+def sum_daily_play_minutes(conn, user_id, date_from, date_to):
+    """Sum play minutes across MSK calendar days (inclusive)."""
+    if not user_id or not date_from or not date_to or date_to < date_from:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(SUM(StreamSeconds), 0) AS Sec "
+            "FROM CloudStreaming_DailyPlay "
+            "WHERE UserID=%s AND PlayDateMSK >= %s AND PlayDateMSK <= %s",
+            (user_id, date_from, date_to),
+        )
+        row = cur.fetchone() or {}
+    return int(row.get("Sec") or 0) // 60
+
+
+def first_window_play_minutes(conn, user_id, lease):
+    """Minutes played during the first 24h window (may span two MSK dates)."""
+    first = lease_first_assigned_at(lease)
+    end = lease_first_window_end(lease)
+    if not first or not end:
+        return 0
+    date_to = min(msk_today(), end.date())
+    return sum_daily_play_minutes(conn, user_id, first.date(), date_to)
+
+
+def is_lease_first_msk_day(lease):
+    """Deprecated alias — first freeze window is 24h from assignment, not MSK midnight."""
+    return is_lease_first_24h_window(lease)
 
 
 def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, daily_row):
-    """First MSK day: 48h freeze at 61 min. Later days: +1 day at 90 min if freeze already active."""
+    """First 24h after assign: 48h freeze at 61 min. Later MSK days: +1 day at 90 min if freeze active."""
     lease = fetch_lease_row(conn, lease_id, for_update=True)
     if not lease:
         return lease
-    played_min = int(stream_seconds_today) // 60
+    played_today_min = int(stream_seconds_today) // 60
     now = datetime.now()
     freeze_active = bool(int(lease.get("SaveFreezeActive") or 0))
     retention = parse_db_datetime(lease.get("RetentionUntil"))
     ext_granted = bool(int(daily_row.get("ExtensionGranted") or 0))
-    first_day = is_lease_first_msk_day(lease)
+    first_window = is_lease_first_24h_window(lease)
+    played_first_window_min = (
+        first_window_play_minutes(conn, user_id, lease) if first_window else played_today_min
+    )
     new_freeze = freeze_active
     new_retention = retention
 
-    if not freeze_active and first_day and played_min >= SAVE_FREEZE_THRESHOLD_MIN:
+    if not freeze_active and first_window and played_first_window_min >= SAVE_FREEZE_THRESHOLD_MIN:
         new_freeze = True
         new_retention = now + timedelta(hours=SAVE_INITIAL_RETENTION_HOURS)
 
-    if new_freeze and played_min >= SAVE_EXTEND_THRESHOLD_MIN and not ext_granted:
+    if new_freeze and played_today_min >= SAVE_EXTEND_THRESHOLD_MIN and not ext_granted:
         base = new_retention if new_retention and new_retention > now else now
         new_retention = base + timedelta(days=1)
         with conn.cursor() as cur:
@@ -367,47 +412,52 @@ def build_save_retention_payload(conn, user_id, lease_id):
                 (user_id, play_date),
             )
             daily = cur.fetchone()
-    played_min = int((daily or {}).get("StreamSeconds") or 0) // 60
+    played_today_min = int((daily or {}).get("StreamSeconds") or 0) // 60
     freeze_active = bool(int((lease or {}).get("SaveFreezeActive") or 0))
     retention_until = parse_db_datetime((lease or {}).get("RetentionUntil")) if lease else None
     ext_granted = bool(int((daily or {}).get("ExtensionGranted") or 0))
-    first_day = is_lease_first_msk_day(lease)
-    mins_to_freeze = max(0, SAVE_FREEZE_THRESHOLD_MIN - played_min) if first_day else 0
-    mins_to_extend = (
-        0 if ext_granted else max(0, SAVE_EXTEND_THRESHOLD_MIN - played_min)
+    first_window = is_lease_first_24h_window(lease)
+    played_first_window_min = (
+        first_window_play_minutes(conn, user_id, lease) if (lease and user_id) else played_today_min
     )
+    mins_to_freeze = (
+        max(0, SAVE_FREEZE_THRESHOLD_MIN - played_first_window_min) if first_window else 0
+    )
+    mins_to_extend = (
+        0 if ext_granted else max(0, SAVE_EXTEND_THRESHOLD_MIN - played_today_min)
+    )
+    hold_until = lease_first_window_end(lease) if first_window else None
 
     if not freeze_active:
-        if first_day and mins_to_freeze > 0:
-            hold_until = msk_day_end()
+        if first_window and mins_to_freeze > 0:
             message = (
                 "Заморозка сохранений пока не активирована.\n\n"
-                "В первый день после выдачи аккаунта нужно суммарно отыграть "
-                "%s мин (можно за несколько сессий) по московскому времени.\n"
-                "Сегодня отыграно: %s мин из %s мин — осталось ещё %s мин.\n"
+                "В первые 24 часа после выдачи аккаунта нужно суммарно отыграть "
+                "%s мин (можно за несколько сессий).\n"
+                "Отыграно за эти 24 часа: %s мин из %s мин — осталось ещё %s мин.\n"
                 "После этого сохранения будут храниться %s часов.\n"
                 "Аккаунт закреплён за вами до %s МСК."
                 % (
                     SAVE_FREEZE_THRESHOLD_MIN,
-                    played_min,
+                    played_first_window_min,
                     SAVE_FREEZE_THRESHOLD_MIN,
                     mins_to_freeze,
                     SAVE_INITIAL_RETENTION_HOURS,
-                    fmt_dt(hold_until),
+                    fmt_dt(hold_until) if hold_until else "—",
                 )
             )
-        elif first_day:
+        elif first_window:
             message = (
-                "Порог для заморозки (%s мин суммарно за первый день по МСК) "
+                "Порог для заморозки (%s мин суммарно за первые 24 часа после выдачи) "
                 "достигнут — заморозка будет активирована."
                 % SAVE_FREEZE_THRESHOLD_MIN
             )
         else:
             message = (
                 "Заморозка сохранений не активна.\n\n"
-                "Первоначальная заморозка (48 ч) доступна только в первый день "
+                "Первоначальная заморозка (48 ч) доступна только в первые 24 часа "
                 "после выдачи аккаунта: нужно суммарно отыграть не менее %s мин "
-                "за этот день по МСК (можно за несколько сессий)."
+                "за это окно (можно за несколько сессий)."
                 % SAVE_FREEZE_THRESHOLD_MIN
             )
     else:
@@ -416,14 +466,14 @@ def build_save_retention_payload(conn, user_id, lease_id):
         if ext_granted:
             parts.append(
                 "Продление хранения на +1 день за сегодня уже получено "
-                "(не более одного раза в сутки по МСК)."
+                "(не более одного раза в сутки по МСК, 00:00–23:59)."
             )
         elif mins_to_extend > 0:
             parts.append(
                 "Чтобы продлить хранение сохранений ещё на 1 день, "
-                "отыграйте ещё %s мин. сегодня (по московскому времени).\n"
+                "отыграйте ещё %s мин. сегодня (по московскому времени, 00:00–23:59).\n"
                 "Сегодня отыграно: %s мин из %s мин."
-                % (mins_to_extend, played_min, SAVE_EXTEND_THRESHOLD_MIN)
+                % (mins_to_extend, played_today_min, SAVE_EXTEND_THRESHOLD_MIN)
             )
         else:
             parts.append(
@@ -434,10 +484,11 @@ def build_save_retention_payload(conn, user_id, lease_id):
     return {
         "save_freeze_active": freeze_active,
         "save_retention_until": fmt_dt(retention_until) if retention_until else "",
-        "daily_play_minutes": played_min,
+        "daily_play_minutes": played_first_window_min if first_window else played_today_min,
         "minutes_to_freeze": mins_to_freeze,
         "minutes_to_extend": mins_to_extend,
         "extension_granted_today": ext_granted,
+        "save_hold_until": fmt_dt(hold_until) if hold_until else "",
         "save_retention_message": message,
     }
 
@@ -2693,12 +2744,19 @@ def handle_end_stream(conn, req):
     elif not save_info.get("save_freeze_active"):
         left = int(save_info.get("minutes_to_freeze") or 0)
         if left > 0:
-            hold_until = msk_day_end()
-            ui_extra = (
-                " Аккаунт закреплён до %s МСК: до заморозки сейвов осталось %s мин "
-                "суммарно за сегодня."
-                % (fmt_dt(hold_until), left)
-            )
+            hold_until = (save_info.get("save_hold_until") or "").strip()
+            if hold_until:
+                ui_extra = (
+                    " Аккаунт закреплён до %s МСК: до заморозки сейвов осталось %s мин "
+                    "суммарно за первые 24 часа."
+                    % (hold_until, left)
+                )
+            else:
+                ui_extra = (
+                    " Аккаунт закреплён: до заморозки сейвов осталось %s мин "
+                    "суммарно за первые 24 часа."
+                    % left
+                )
     return reply(
         req_id,
         True,
@@ -2792,7 +2850,7 @@ def expire_leases_job():
                     "WHERE Status IN ('active','retention') "
                     "AND SaveFreezeActive = 1 AND RetentionUntil < NOW(3)"
                 )
-                # Candidates without freeze — decide in Python so first MSK day
+                # Candidates without freeze — decide in Python so the first 24h
                 # after assignment is always held (minutes accumulate across sessions).
                 cur.execute(
                     "SELECT ID, FirstAssignedAt, Status, LastActivityAt "
@@ -2803,8 +2861,8 @@ def expire_leases_job():
                 no_freeze_leases = cur.fetchall() or []
 
             for lease in no_freeze_leases:
-                # Hold the PS account for the entire first MSK calendar day.
-                if is_lease_first_msk_day(lease):
+                # Hold the PS account for the first 24 hours after assignment.
+                if is_lease_first_24h_window(lease):
                     continue
                 lease_id = lease["ID"]
                 with conn.cursor() as cur:
