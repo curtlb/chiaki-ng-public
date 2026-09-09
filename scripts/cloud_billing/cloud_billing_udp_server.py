@@ -1437,29 +1437,85 @@ def account_played_game_before(conn, user_id, account_id, game):
         game,
     )
     game_id = game.get("ID")
+    id_list = list(identifiers) if identifiers else []
+    cat_list = list(catalog_ids) if catalog_ids else []
+
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT s.ID, s.ServiceType, s.GameIdentifier, s.GameID, g.CatalogID "
-            "FROM CloudStreaming_Sessions s "
-            "LEFT JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-            "WHERE s.UserID=%s AND s.AccountID=%s "
-            "ORDER BY s.UpdatedAt DESC LIMIT 20",
-            (user_id, account_id),
-        )
-        rows = cur.fetchall() or []
-        if _table_exists(conn, "CloudStreaming_SessionsArchive"):
+        # Fast path: exact GameID on live session (one row / user).
+        if game_id:
             cur.execute(
-                "SELECT s.ID, s.ServiceType, s.GameIdentifier, s.GameID, g.CatalogID "
-                "FROM CloudStreaming_SessionsArchive s "
-                "LEFT JOIN CloudStreaming_Games g ON g.ID = s.GameID "
-                "WHERE s.UserID=%s AND s.AccountID=%s "
-                "ORDER BY s.ArchivedAt DESC LIMIT 40",
-                (user_id, account_id),
+                "SELECT 1 FROM CloudStreaming_Sessions "
+                "WHERE UserID=%s AND AccountID=%s AND GameID=%s LIMIT 1",
+                (user_id, account_id, game_id),
             )
-            rows.extend(cur.fetchall() or [])
-    for row in rows:
-        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
-            return True
+            if cur.fetchone():
+                return True
+        if id_list:
+            cur.execute(
+                "SELECT 1 FROM CloudStreaming_Sessions "
+                "WHERE UserID=%s AND AccountID=%s AND GameIdentifier IN %s LIMIT 1",
+                (user_id, account_id, tuple(id_list)),
+            )
+            if cur.fetchone():
+                return True
+
+        if _table_exists(conn, "CloudStreaming_SessionsArchive"):
+            if game_id:
+                cur.execute(
+                    "SELECT 1 FROM CloudStreaming_SessionsArchive "
+                    "WHERE UserID=%s AND AccountID=%s AND GameID=%s LIMIT 1",
+                    (user_id, account_id, game_id),
+                )
+                if cur.fetchone():
+                    return True
+            if id_list:
+                cur.execute(
+                    "SELECT 1 FROM CloudStreaming_SessionsArchive "
+                    "WHERE UserID=%s AND AccountID=%s AND GameIdentifier IN %s LIMIT 1",
+                    (user_id, account_id, tuple(id_list)),
+                )
+                if cur.fetchone():
+                    return True
+            if cat_list:
+                cur.execute(
+                    "SELECT 1 FROM CloudStreaming_SessionsArchive s "
+                    "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+                    "WHERE s.UserID=%s AND s.AccountID=%s AND g.CatalogID IN %s LIMIT 1",
+                    (user_id, account_id, tuple(cat_list)),
+                )
+                if cur.fetchone():
+                    return True
+
+        if cat_list:
+            cur.execute(
+                "SELECT 1 FROM CloudStreaming_Sessions s "
+                "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+                "WHERE s.UserID=%s AND s.AccountID=%s AND g.CatalogID IN %s LIMIT 1",
+                (user_id, account_id, tuple(cat_list)),
+            )
+            if cur.fetchone():
+                return True
+
+        # Last resort: same billing game Name on this account (covers remapped SKUs).
+        gname = (game.get("Name") or "").strip()
+        if gname:
+            cur.execute(
+                "SELECT 1 FROM CloudStreaming_Sessions s "
+                "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+                "WHERE s.UserID=%s AND s.AccountID=%s AND g.Name=%s LIMIT 1",
+                (user_id, account_id, gname),
+            )
+            if cur.fetchone():
+                return True
+            if _table_exists(conn, "CloudStreaming_SessionsArchive"):
+                cur.execute(
+                    "SELECT 1 FROM CloudStreaming_SessionsArchive s "
+                    "JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+                    "WHERE s.UserID=%s AND s.AccountID=%s AND g.Name=%s LIMIT 1",
+                    (user_id, account_id, gname),
+                )
+                if cur.fetchone():
+                    return True
     return False
 
 

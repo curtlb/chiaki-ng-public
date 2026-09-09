@@ -1718,9 +1718,11 @@ Pane {
         property var accounts: []
         property var onPicked: null
         title: qsTr("Выбор аккаунта")
+        parent: Overlay.overlay
+        x: Math.round((Overlay.overlay.width - width) / 2)
+        y: Math.round((Overlay.overlay.height - height) / 2)
         modal: true
-        anchors.centerIn: parent
-        width: Math.min(480, parent.width - 40)
+        width: Math.min(480, Overlay.overlay.width - 40)
         Material.roundedScale: Material.MediumScale
         background: Rectangle {
             color: "#121820"
@@ -1728,28 +1730,50 @@ Pane {
             border.width: 1
             border.color: Qt.rgba(0.18, 0.77, 0.71, 0.35)
         }
+        Component.onCompleted: {
+            if (header) {
+                header.horizontalAlignment = Text.AlignHCenter;
+                header.background = null;
+            }
+        }
         onClosed: onPicked = null
 
         ColumnLayout {
-            spacing: 14
+            spacing: 16
             width: parent ? parent.width : 400
 
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
+                color: "#e8eef2"
                 text: accountChoiceDialog.promptText
             }
 
             Repeater {
                 model: accountChoiceDialog.accounts
-                delegate: Button {
+                delegate: Rectangle {
                     Layout.fillWidth: true
-                    contentItem: ColumnLayout {
-                        spacing: 2
+                    implicitHeight: accountCol.implicitHeight + 24
+                    radius: 8
+                    color: modelData.played_before ? "#1a3d38" : "#1a9b8e"
+                    border.width: modelData.played_before ? 1 : 0
+                    border.color: Qt.rgba(0.18, 0.77, 0.71, 0.55)
+
+                    ColumnLayout {
+                        id: accountCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 14
+                        anchors.rightMargin: 14
+                        spacing: 4
+
                         Label {
                             Layout.fillWidth: true
                             horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.Wrap
                             color: "white"
+                            font.pixelSize: 14
                             text: {
                                 let label = modelData.label || qsTr("Аккаунт #%1").arg(modelData.account_id);
                                 return modelData.has_ps_plus ? (label + " · PS Plus") : label;
@@ -1760,21 +1784,21 @@ Pane {
                             horizontalAlignment: Text.AlignHCenter
                             visible: !!modelData.played_before
                             font.pixelSize: 12
-                            opacity: 0.72
-                            color: Qt.rgba(0.75, 0.9, 0.88, 1)
+                            color: Qt.rgba(0.78, 0.95, 0.92, 0.95)
                             text: qsTr("играли ранее")
                         }
                     }
-                    Material.background: modelData.played_before
-                        ? Qt.rgba(0.12, 0.35, 0.32, 1)
-                        : Material.accent
-                    Material.roundedScale: Material.SmallScale
-                    onClicked: {
-                        let cb = accountChoiceDialog.onPicked;
-                        let aid = modelData.account_id || 0;
-                        accountChoiceDialog.close();
-                        if (cb)
-                            cb(aid);
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            let cb = accountChoiceDialog.onPicked;
+                            let aid = modelData.account_id || 0;
+                            accountChoiceDialog.close();
+                            if (cb)
+                                cb(aid);
+                        }
                     }
                 }
             }
