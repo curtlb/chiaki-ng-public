@@ -125,6 +125,7 @@ DEFAULT_HOURLY = float(os.environ.get("CS_DEFAULT_HOURLY_PRICE", "110"))
 OPSTATE_POLL_SEC = 5
 OPSTATE_MAX_WAIT_SEC = 180
 DATE_FMT = "%Y-%m-%d %H:%M:%S"
+DISPLAY_DT_FMT = "%d.%m.%Y %H:%M:%S"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,6 +143,13 @@ def php_urlencode(s):
 
 def fmt_dt(dt):
     return dt.strftime(DATE_FMT)
+
+
+def fmt_dt_display(dt):
+    """User-facing datetime: DD.MM.YYYY HH:MM:SS."""
+    if not dt:
+        return ""
+    return dt.strftime(DISPLAY_DT_FMT)
 
 
 def parse_db_datetime(value):
@@ -171,7 +179,7 @@ def msk_today():
 def fmt_dt_msk(dt):
     if not dt:
         return ""
-    return fmt_dt(dt) + " (МСК)"
+    return fmt_dt_display(dt) + " (МСК)"
 
 
 def lease_valid_sql():
@@ -470,7 +478,7 @@ def build_save_retention_payload(conn, user_id, lease_id):
                     SAVE_FREEZE_THRESHOLD_MIN,
                     mins_to_freeze,
                     SAVE_INITIAL_RETENTION_HOURS,
-                    fmt_dt(hold_until) if hold_until else "—",
+                    fmt_dt_display(hold_until) if hold_until else "—",
                 )
             )
         elif first_window:
@@ -522,7 +530,7 @@ def build_save_retention_payload(conn, user_id, lease_id):
         "minutes_to_freeze": mins_to_freeze,
         "minutes_to_extend": mins_to_extend,
         "extension_granted_today": ext_granted,
-        "save_hold_until": fmt_dt(hold_until) if hold_until else "",
+        "save_hold_until": fmt_dt_display(hold_until) if hold_until else "",
         "save_retention_message": message,
         "lease_id": int(lease_id) if lease_id else None,
         "account_id": int(lease.get("AccountID")) if lease and lease.get("AccountID") is not None else None,
