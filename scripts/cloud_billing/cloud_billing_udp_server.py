@@ -1358,55 +1358,59 @@ NO_ASSIGNED_ACCOUNT_UI = (
 )
 
 
-def ensure_session_lease(conn, sess, game):
+def rebind_session_for_game(conn, sess, game, service_type=None, game_identifier=None):
     """
-    Bind session to the user's existing site-assigned lease.
-    Never auto-allocates from the available pool — assignment is website-only.
+    Before any NPSSO is returned: pick the user's lease for this title
+    (owned in CloudStreaming_AccountOwnedGames, else lowest AccountID) and
+    write LeaseID / AccountID / GameID (+ ServiceType / GameIdentifier) on Sessions.
+    Never auto-allocates from the free pool — only site-assigned leases.
     """
-    if not sess:
-        return sess, None
+    if not sess or not game:
+        return sess, None, None
+    lease = find_active_lease(conn, sess["UserID"], game)
+    if not lease:
+        return sess, None, None
+
+    st = (service_type or game.get("ServiceType") or "").strip().lower()
+    gid = (game_identifier or game.get("GameIdentifier") or "").strip()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT l.*, a.Status AS AccountStatus, a.NPSSO "
-            "FROM CloudStreaming_Leases l "
-            "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
-            "WHERE l.ID=%s AND l.Status IN ('active','retention') "
-            "AND ("
-            "  (l.SaveFreezeActive = 1 AND l.RetentionUntil > NOW(3))"
-            "  OR (l.SaveFreezeActive = 0 AND l.Status = 'active')"
-            ") "
-            "LIMIT 1",
-            (sess["LeaseID"],),
+            "SELECT * FROM CloudStreaming_Accounts WHERE ID = %s FOR UPDATE",
+            (lease["AccountID"],),
         )
-        lease = cur.fetchone()
-    if not lease:
-        # Previous lease expired — reuse another valid lease already assigned to this user.
-        lease = find_active_lease(conn, sess["UserID"], game) if game else None
-        if not lease:
-            lease = find_any_user_lease(conn, sess["UserID"])
-        if not lease:
-            return sess, None
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE CloudStreaming_Sessions SET LeaseID=%s, AccountID=%s WHERE ID=%s",
-                (lease["ID"], lease["AccountID"], sess["ID"]),
-            )
-            cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
-            sess = cur.fetchone()
-        log.info(
-            "session %s reattached to existing user lease=%s account=%s",
-            sess["ID"],
-            lease["ID"],
-            lease["AccountID"],
-        )
+        account = cur.fetchone()
+    if not account:
+        return sess, None, None
 
     with conn.cursor() as cur:
         cur.execute(
+            "UPDATE CloudStreaming_Sessions SET "
+            "LeaseID=%s, AccountID=%s, GameID=%s, ServiceType=%s, GameIdentifier=%s "
+            "WHERE ID=%s",
+            (lease["ID"], account["ID"], game["ID"], st, gid, sess["ID"]),
+        )
+        cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (sess["ID"],))
+        sess = cur.fetchone()
+        cur.execute(
             "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
             "LastUsedAt=NOW(3) WHERE ID=%s",
-            (lease["ID"], lease["AccountID"]),
+            (lease["ID"], account["ID"]),
         )
     touch_lease(conn, lease["ID"])
+    log.info(
+        "session %s rebound for game=%s -> lease=%s account=%s game_id=%s",
+        sess["ID"],
+        gid,
+        lease["ID"],
+        account["ID"],
+        game["ID"],
+    )
+    return sess, lease, account
+
+
+def ensure_session_lease(conn, sess, game):
+    """Compatibility wrapper: rebind Sessions to the lease for `game`."""
+    sess, lease, _account = rebind_session_for_game(conn, sess, game)
     return sess, lease
 
 
@@ -2290,8 +2294,11 @@ def handle_start(conn, req):
         conn, user["ID"], service_type, game_identifier, game["ID"], game
     )
     if resumable:
-        resumable, lease = ensure_session_lease(conn, resumable, game)
-        if not lease:
+        # 1) Bind Lease/Account/Game for the selected title BEFORE NPSSO.
+        resumable, lease, account = rebind_session_for_game(
+            conn, resumable, game, service_type, game_identifier
+        )
+        if not lease or not account:
             conn.rollback()
             return reply(
                 req_id,
@@ -2299,43 +2306,40 @@ def handle_start(conn, req):
                 error=NO_ASSIGNED_ACCOUNT_ERROR,
                 ui_message=NO_ASSIGNED_ACCOUNT_UI,
             )
-        account_id = resumable.get("AccountID")
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT Region FROM CloudStreaming_Accounts WHERE ID=%s LIMIT 1",
-                (account_id,),
-            )
-            acc_row = cur.fetchone() or {}
-        region = (acc_row.get("Region") or "PL").strip().upper()
+        region = (account.get("Region") or "PL").strip().upper()
         play_id, _ = resolve_regional_stream_id(
             conn, service_type, game_identifier, region
         )
         if play_id and play_id != game_identifier:
             game_identifier = play_id
             game = ensure_game(conn, service_type, play_id, game_name)
+            # Regional SKU may map to a different catalog row — rebind again.
+            resumable, lease, account = rebind_session_for_game(
+                conn, resumable, game, service_type, game_identifier
+            )
+            if not lease or not account:
+                conn.rollback()
+                return reply(
+                    req_id,
+                    False,
+                    error=NO_ASSIGNED_ACCOUNT_ERROR,
+                    ui_message=NO_ASSIGNED_ACCOUNT_UI,
+                )
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE CloudStreaming_Sessions SET GameID=%s, GameIdentifier=%s, "
-                "ServiceType=%s, LeaseID=%s, AccountID=%s, StreamActive=1, Status='active', "
+                "UPDATE CloudStreaming_Sessions SET "
+                "StreamActive=1, Status='active', "
                 "BalanceTickAt=NOW(3), LastHeartbeatAt=NOW(3), "
                 "EndedAt=NULL, EndReason=NULL WHERE ID=%s",
-                (
-                    game["ID"],
-                    game_identifier,
-                    service_type,
-                    resumable["LeaseID"],
-                    resumable["AccountID"],
-                    resumable["ID"],
-                ),
+                (resumable["ID"],),
             )
-        touch_lease(conn, resumable["LeaseID"])
-        conn.commit()
-        with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1",
                 (resumable["ID"],),
             )
             resumable = cur.fetchone()
+        conn.commit()
+        # NPSSO is read only after Sessions already points at the correct AccountID.
         payload = session_payload(conn, resumable)
         mins = int(payload.get("minutes_left") or session_minutes_left(resumable))
         ui_msg = (
@@ -2354,17 +2358,9 @@ def handle_start(conn, req):
         payload["minutes_left"] = mins
         return reply(req_id, True, **payload)
 
+    # New paid hour: resolve account for this title, write Sessions, then return NPSSO.
     lease = find_active_lease(conn, user["ID"], game)
-    account = None
-    if lease:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM CloudStreaming_Accounts WHERE ID = %s FOR UPDATE",
-                (lease["AccountID"],),
-            )
-            account = cur.fetchone()
-        touch_lease(conn, lease["ID"])
-    else:
+    if not lease:
         conn.rollback()
         return reply(
             req_id,
@@ -2372,12 +2368,51 @@ def handle_start(conn, req):
             error=NO_ASSIGNED_ACCOUNT_ERROR,
             ui_message=NO_ASSIGNED_ACCOUNT_UI,
         )
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM CloudStreaming_Accounts WHERE ID = %s FOR UPDATE",
+            (lease["AccountID"],),
+        )
+        account = cur.fetchone()
+    if not account:
+        conn.rollback()
+        return reply(
+            req_id,
+            False,
+            error=NO_ASSIGNED_ACCOUNT_ERROR,
+            ui_message=NO_ASSIGNED_ACCOUNT_UI,
+        )
+    touch_lease(conn, lease["ID"])
 
     region = (account.get("Region") or "PL").strip().upper()
     play_id, _ = resolve_regional_stream_id(conn, service_type, game_identifier, region)
     if play_id and play_id != game_identifier:
         game_identifier = play_id
         game = ensure_game(conn, service_type, game_identifier, game_name)
+        lease = find_active_lease(conn, user["ID"], game)
+        if not lease:
+            conn.rollback()
+            return reply(
+                req_id,
+                False,
+                error=NO_ASSIGNED_ACCOUNT_ERROR,
+                ui_message=NO_ASSIGNED_ACCOUNT_UI,
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM CloudStreaming_Accounts WHERE ID = %s FOR UPDATE",
+                (lease["AccountID"],),
+            )
+            account = cur.fetchone()
+        if not account:
+            conn.rollback()
+            return reply(
+                req_id,
+                False,
+                error=NO_ASSIGNED_ACCOUNT_ERROR,
+                ui_message=NO_ASSIGNED_ACCOUNT_UI,
+            )
+        touch_lease(conn, lease["ID"])
 
     token = str(uuid.uuid4())
     now = datetime.now()
@@ -2418,7 +2453,11 @@ def handle_start(conn, req):
                     existing["ID"],
                 ),
             )
-        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
+                "LastUsedAt=NOW(3) WHERE ID=%s",
+                (lease["ID"], account["ID"]),
+            )
             cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (existing["ID"],))
             sess = cur.fetchone()
     else:
@@ -2443,10 +2482,16 @@ def handle_start(conn, req):
                 ),
             )
             session_id = cur.lastrowid
+            cur.execute(
+                "UPDATE CloudStreaming_Accounts SET Status='leased', CurrentLeaseID=%s, "
+                "LastUsedAt=NOW(3) WHERE ID=%s",
+                (lease["ID"], account["ID"]),
+            )
             cur.execute("SELECT * FROM CloudStreaming_Sessions WHERE ID=%s", (session_id,))
             sess = cur.fetchone()
 
     conn.commit()
+    # NPSSO only after Sessions row already has the rebound AccountID.
     payload = session_payload(conn, sess)
     payload["payment_pending"] = True
     payload["hourly_price"] = price
