@@ -20,6 +20,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QUrlQuery>
 #include <QMetaObject>
@@ -207,7 +208,7 @@ void CloudStreamingBackend::notifyStreamStopped()
     setBillingStatus(QString(), 0);
 }
 
-bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error)
+bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error, quint64 account_id)
 {
     if(!settings || !settings->GetCloudBillingEnabled()) {
         CloudLogMessage(QStringLiteral("Session"), QStringLiteral("billing skipped: cloud_billing_enabled=false"));
@@ -228,11 +229,12 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
     const quint16 port = settings->GetCloudBillingPort();
 
     CloudLogMessage(QStringLiteral("Session"),
-        QStringLiteral("billing start request email=%1 host=%2:%3 game=%4/%5")
-            .arg(email, host).arg(port).arg(serviceType, gameIdentifier));
+        QStringLiteral("billing start request email=%1 host=%2:%3 game=%4/%5 account_id=%6")
+            .arg(email, host).arg(port).arg(serviceType, gameIdentifier).arg(account_id));
 
     setAllocationProgress(tr("Списание с привязанной карты…"));
-    const auto start = CloudBillingClient::start(host, port, email, serviceType, gameIdentifier, gameName);
+    const auto start = CloudBillingClient::start(host, port, email, serviceType, gameIdentifier, gameName,
+                                                 static_cast<qint64>(account_id));
     if(!start.ok) {
         *out_error = start.ui_message.isEmpty() ? start.error : start.ui_message;
         return true;
@@ -303,6 +305,11 @@ void CloudStreamingBackend::onBillingHeartbeatTick()
 
 void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback)
 {
+    fetchBillingQuote(serviceType, gameIdentifier, gameName, 0, callback);
+}
+
+void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, quint64 accountId, const QJSValue &callback)
+{
     if(!settings || !settings->GetCloudBillingEnabled()) {
         if(callback.isCallable())
             callback.call({false, tr("Почасовая оплата отключена в настройках")});
@@ -323,7 +330,8 @@ void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameI
 
     setAllocationProgress(tr("Получение информации об оплате…"));
     const auto quote = CloudBillingClient::quote(
-        host, settings->GetCloudBillingPort(), email, serviceType, gameIdentifier, gameName);
+        host, settings->GetCloudBillingPort(), email, serviceType, gameIdentifier, gameName,
+        static_cast<qint64>(accountId));
     if(quote.ok)
         noteBillingIdentity(settings, parent(), quote.data);
     const QString message = quote.ok
@@ -331,8 +339,11 @@ void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameI
         : (quote.ui_message.isEmpty() ? quote.error : quote.ui_message);
     const double price = quote.data.value(QStringLiteral("hourly_price")).toDouble(0);
     const bool resume = quote.data.value(QStringLiteral("resume_session")).toBool(false);
+    const QJsonArray choices = quote.data.value(QStringLiteral("account_choices")).toArray();
+    const QString choicesJson = QString::fromUtf8(
+        QJsonDocument(choices).toJson(QJsonDocument::Compact));
     if(callback.isCallable())
-        callback.call({quote.ok, message, price, resume});
+        callback.call({quote.ok, message, price, resume, choicesJson});
 }
 
 // ============================================================================
@@ -341,15 +352,20 @@ void CloudStreamingBackend::fetchBillingQuote(QString serviceType, QString gameI
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback)
 {
-    startCompleteCloudSession(serviceType, gameIdentifier, QString(), QString(), callback);
+    startCompleteCloudSession(serviceType, gameIdentifier, QString(), QString(), 0, callback);
 }
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback)
 {
-    startCompleteCloudSession(serviceType, gameIdentifier, gameName, QString(), callback);
+    startCompleteCloudSession(serviceType, gameIdentifier, gameName, QString(), 0, callback);
 }
 
 void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, QString platform, const QJSValue &callback)
+{
+    startCompleteCloudSession(serviceType, gameIdentifier, gameName, platform, 0, callback);
+}
+
+void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, QString platform, quint64 accountId, const QJSValue &callback)
 {
     serviceType = serviceType.toLower();
     platform = platform.trimmed().toLower();
@@ -364,8 +380,9 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
     }
 
     CloudLogMessage(QStringLiteral("Session"),
-        QStringLiteral("startCompleteCloudSession service=%1 game=%2 platform=%3")
-            .arg(serviceType, gameIdentifier, platform.isEmpty() ? QStringLiteral("-") : platform));
+        QStringLiteral("startCompleteCloudSession service=%1 game=%2 platform=%3 account_id=%4")
+            .arg(serviceType, gameIdentifier, platform.isEmpty() ? QStringLiteral("-") : platform)
+            .arg(accountId));
 
     // Lookup game image from cache before starting session
     QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent());
@@ -401,7 +418,7 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
 
     QString npssoToken;
     QString billing_error;
-    if(runBillingStart(serviceType, gameIdentifier, gameName, &npssoToken, &billing_error)) {
+    if(runBillingStart(serviceType, gameIdentifier, gameName, &npssoToken, &billing_error, accountId)) {
         if(npssoToken.isEmpty()) {
             qWarning() << "Cloud billing failed:" << billing_error;
             if(callback.isCallable())

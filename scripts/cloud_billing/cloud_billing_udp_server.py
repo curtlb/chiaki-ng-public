@@ -1192,6 +1192,46 @@ def verify_schema(conn):
         )
     ensure_sessions_balance_schema(conn)
     ensure_daily_play_per_lease_schema(conn)
+    ensure_charges_account_schema(conn)
+
+
+def ensure_charges_account_schema(conn):
+    """Idempotent: Charges.AccountID for per-account revenue stats."""
+    if not _table_exists(conn, "CloudStreaming_Charges"):
+        return
+    if not _column_exists(conn, "CloudStreaming_Charges", "AccountID"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_Charges "
+                "ADD COLUMN AccountID BIGINT UNSIGNED NULL "
+                "COMMENT 'PS account active at charge/renew time' AFTER UserID"
+            )
+        log.info("Added CloudStreaming_Charges.AccountID")
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='CloudStreaming_Charges' "
+            "AND INDEX_NAME='idx_cs_charge_account'"
+        )
+        if int((cur.fetchone() or {}).get("c") or 0) == 0:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_Charges "
+                "ADD KEY idx_cs_charge_account (AccountID, CreatedAt)"
+            )
+        cur.execute(
+            "UPDATE CloudStreaming_Charges c "
+            "JOIN CloudStreaming_Sessions s ON s.ID = c.SessionID "
+            "SET c.AccountID = s.AccountID "
+            "WHERE c.AccountID IS NULL AND s.AccountID IS NOT NULL"
+        )
+        if _table_exists(conn, "CloudStreaming_SessionsArchive"):
+            cur.execute(
+                "UPDATE CloudStreaming_Charges c "
+                "JOIN CloudStreaming_SessionsArchive s ON s.ID = c.SessionID "
+                "SET c.AccountID = s.AccountID "
+                "WHERE c.AccountID IS NULL AND s.AccountID IS NOT NULL"
+            )
+    conn.commit()
 
 
 def ensure_user(conn, email):
@@ -1367,40 +1407,106 @@ def find_any_user_lease(conn, user_id):
     return leases[0] if leases else None
 
 
-def find_active_lease(conn, user_id, game):
+def list_owned_leases_for_game(conn, user_id, game):
+    """Valid user leases whose account owns this title (AccountOwnedGames)."""
+    game = refresh_game_access_type(conn, game) if game and game.get("ID") else game
+    leases = list_user_valid_leases(conn, user_id)
+    if not leases or not game:
+        return []
+    owned = []
+    for lease in leases:
+        if account_owns_game(
+            conn,
+            lease["AccountID"],
+            game["ServiceType"],
+            game["GameIdentifier"],
+            game.get("ID"),
+        ):
+            owned.append(lease)
+    return owned
+
+
+def account_choices_payload(leases):
+    out = []
+    for lease in leases or []:
+        out.append(
+            {
+                "account_id": int(lease["AccountID"]),
+                "lease_id": int(lease["ID"]),
+                "label": (lease.get("AccountLabel") or ("Аккаунт #%s" % lease["AccountID"])),
+                "has_ps_plus": bool(int(lease.get("HasPsPlus") or 0)),
+            }
+        )
+    return out
+
+
+def parse_optional_account_id(req):
+    raw = req.get("account_id") if isinstance(req, dict) else None
+    if raw is None or raw == "" or raw is False:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def find_active_lease(conn, user_id, game, account_id=None):
     """
     Pick lease/NPSSO for a title:
-    1) Account that owns the game (CloudStreaming_AccountOwnedGames)
-    2) Else Plus/catalog title → first leased account (lowest AccountID)
+    1) If account_id given → that leased account (must own the game when ownership applies)
+    2) Exactly one owning lease → that lease
+    3) Several owning leases and no account_id → None (client must choose)
+    4) Else Plus/catalog → first leased account (lowest AccountID)
     """
     game = refresh_game_access_type(conn, game) if game and game.get("ID") else game
     leases = list_user_valid_leases(conn, user_id)
     if not leases:
         return None
 
-    if game:
+    owned = list_owned_leases_for_game(conn, user_id, game) if game else []
+
+    if account_id is not None:
+        aid = int(account_id)
         for lease in leases:
-            acc = {
-                "ID": lease["AccountID"],
-                "NPSSO": lease["NPSSO"],
-                "HasPsPlus": lease["HasPsPlus"],
-                "Label": lease.get("AccountLabel"),
-            }
-            if account_owns_game(
-                conn,
-                lease["AccountID"],
-                game["ServiceType"],
-                game["GameIdentifier"],
-                game.get("ID"),
-            ):
-                log.info(
-                    "lease resolve user=%s game=%s -> owned account_id=%s lease_id=%s",
+            if int(lease["AccountID"]) != aid:
+                continue
+            if owned and not any(int(o["AccountID"]) == aid for o in owned):
+                log.warning(
+                    "lease resolve user=%s game=%s account_id=%s rejected (not an owner)",
                     user_id,
-                    game.get("GameIdentifier"),
-                    lease["AccountID"],
-                    lease["ID"],
+                    (game or {}).get("GameIdentifier"),
+                    aid,
                 )
-                return lease
+                return None
+            log.info(
+                "lease resolve user=%s game=%s -> chosen account_id=%s lease_id=%s",
+                user_id,
+                (game or {}).get("GameIdentifier"),
+                lease["AccountID"],
+                lease["ID"],
+            )
+            return lease
+        return None
+
+    if len(owned) > 1:
+        log.info(
+            "lease resolve user=%s game=%s -> needs account choice (%s owners)",
+            user_id,
+            (game or {}).get("GameIdentifier"),
+            len(owned),
+        )
+        return None
+
+    if len(owned) == 1:
+        lease = owned[0]
+        log.info(
+            "lease resolve user=%s game=%s -> owned account_id=%s lease_id=%s",
+            user_id,
+            (game or {}).get("GameIdentifier"),
+            lease["AccountID"],
+            lease["ID"],
+        )
+        return lease
 
     first = leases[0]
     log.info(
@@ -1539,16 +1645,16 @@ NO_ASSIGNED_ACCOUNT_UI = (
 )
 
 
-def rebind_session_for_game(conn, sess, game, service_type=None, game_identifier=None):
+def rebind_session_for_game(conn, sess, game, service_type=None, game_identifier=None, account_id=None):
     """
     Before any NPSSO is returned: pick the user's lease for this title
-    (owned in CloudStreaming_AccountOwnedGames, else lowest AccountID) and
-    write LeaseID / AccountID / GameID (+ ServiceType / GameIdentifier) on Sessions.
+    (owned in CloudStreaming_AccountOwnedGames, else lowest AccountID; or explicit account_id)
+    and write LeaseID / AccountID / GameID (+ ServiceType / GameIdentifier) on Sessions.
     Never auto-allocates from the free pool — only site-assigned leases.
     """
     if not sess or not game:
         return sess, None, None
-    lease = find_active_lease(conn, sess["UserID"], game)
+    lease = find_active_lease(conn, sess["UserID"], game, account_id=account_id)
     if not lease:
         return sess, None, None
 
@@ -1589,9 +1695,11 @@ def rebind_session_for_game(conn, sess, game, service_type=None, game_identifier
     return sess, lease, account
 
 
-def ensure_session_lease(conn, sess, game):
+def ensure_session_lease(conn, sess, game, account_id=None):
     """Compatibility wrapper: rebind Sessions to the lease for `game`."""
-    sess, lease, _account = rebind_session_for_game(conn, sess, game)
+    sess, lease, _account = rebind_session_for_game(
+        conn, sess, game, account_id=account_id
+    )
     return sess, lease
 
 
@@ -1746,7 +1854,7 @@ def wait_paid(invoice_id, email=""):
     return False
 
 
-def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, idem_key):
+def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, idem_key, account_id=None):
     pm = get_payment_method(conn, email)
     if not pm or not pm.get("StartPaymentID"):
         return False, PAYMENT_SETUP_MSG
@@ -1772,9 +1880,9 @@ def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, i
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO CloudStreaming_Charges "
-            "(SessionID, UserID, BlockNo, Amount, Status, ProviderInvoiceID, IdempotencyKey) "
-            "VALUES (%s, %s, %s, %s, 'pending', %s, %s)",
-            (session_id, user_id, block_no, amount, result["invoice_id"], idem_key),
+            "(SessionID, UserID, AccountID, BlockNo, Amount, Status, ProviderInvoiceID, IdempotencyKey) "
+            "VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s)",
+            (session_id, user_id, account_id, block_no, amount, result["invoice_id"], idem_key),
         )
 
     if not result["created"]:
@@ -2393,6 +2501,11 @@ def handle_quote(conn, req):
     conn.commit()
 
     price = float(game["HourlyPrice"])
+    owned = list_owned_leases_for_game(conn, user["ID"], game)
+    choices = account_choices_payload(owned)
+    needs_choice = len(owned) > 1
+    account_id = parse_optional_account_id(req)
+
     resumable = find_resumable_session(
         conn, user["ID"], service_type, game_identifier, game["ID"], game
     )
@@ -2403,6 +2516,12 @@ def handle_quote(conn, req):
             "«%s» можно запустить без дополнительного списания."
             % (mins, game["Name"])
         )
+        if needs_choice and account_id is None:
+            ui_msg = (
+                "Игра «%s» куплена на нескольких арендованных аккаунтах. "
+                "Выберите аккаунт для запуска. На балансе %s мин — списания не будет."
+                % (game["Name"], mins)
+            )
         return reply(
             req_id,
             True,
@@ -2415,9 +2534,31 @@ def handle_quote(conn, req):
             plus_minutes_left=mins,
             owned_minutes_left=mins,
             game_name=game["Name"],
+            needs_account_choice=needs_choice and account_id is None,
+            account_choices=choices if needs_choice else [],
         )
 
-    lease = find_active_lease(conn, user["ID"], game)
+    lease = find_active_lease(conn, user["ID"], game, account_id=account_id)
+    if needs_choice and account_id is None:
+        msg = (
+            "Игра «%s» куплена на нескольких арендованных аккаунтах. "
+            "Выберите, с какого аккаунта запустить (сохранения привязаны к аккаунту)."
+            % game["Name"]
+        )
+        return reply(
+            req_id,
+            True,
+            ui_message=msg,
+            hourly_price=price,
+            currency=game.get("Currency") or "RUB",
+            reuse_account=True,
+            resume_session=False,
+            no_charge=False,
+            game_name=game["Name"],
+            needs_account_choice=True,
+            account_choices=choices,
+        )
+
     reuse = lease is not None
     if reuse:
         msg = (
@@ -2443,6 +2584,8 @@ def handle_quote(conn, req):
         resume_session=False,
         no_charge=False,
         game_name=game["Name"],
+        needs_account_choice=False,
+        account_choices=[],
     )
 
 
@@ -2453,6 +2596,7 @@ def handle_start(conn, req):
     game_name = (req.get("game_name") or game_identifier).strip()
     req_id = req.get("id")
     confirm = bool(req.get("confirm"))
+    account_id = parse_optional_account_id(req)
 
     if not confirm:
         return reply(
@@ -2470,6 +2614,20 @@ def handle_start(conn, req):
     user = ensure_user(conn, email)
     game = ensure_game(conn, service_type, game_identifier, game_name)
     price = float(game["HourlyPrice"])
+    owned = list_owned_leases_for_game(conn, user["ID"], game)
+    if len(owned) > 1 and account_id is None:
+        conn.rollback()
+        return reply(
+            req_id,
+            False,
+            error="needs_account_choice",
+            ui_message=(
+                "Игра куплена на нескольких арендованных аккаунтах. "
+                "Выберите аккаунт перед запуском."
+            ),
+            needs_account_choice=True,
+            account_choices=account_choices_payload(owned),
+        )
 
     resumable = find_resumable_session(
         conn, user["ID"], service_type, game_identifier, game["ID"], game
@@ -2477,10 +2635,24 @@ def handle_start(conn, req):
     if resumable:
         # 1) Bind Lease/Account/Game for the selected title BEFORE NPSSO.
         resumable, lease, account = rebind_session_for_game(
-            conn, resumable, game, service_type, game_identifier
+            conn,
+            resumable,
+            game,
+            service_type,
+            game_identifier,
+            account_id=account_id,
         )
         if not lease or not account:
             conn.rollback()
+            if len(owned) > 1:
+                return reply(
+                    req_id,
+                    False,
+                    error="needs_account_choice",
+                    ui_message="Выберите арендованный аккаунт с этой игрой.",
+                    needs_account_choice=True,
+                    account_choices=account_choices_payload(owned),
+                )
             return reply(
                 req_id,
                 False,
@@ -2496,7 +2668,12 @@ def handle_start(conn, req):
             game = ensure_game(conn, service_type, play_id, game_name)
             # Regional SKU may map to a different catalog row — rebind again.
             resumable, lease, account = rebind_session_for_game(
-                conn, resumable, game, service_type, game_identifier
+                conn,
+                resumable,
+                game,
+                service_type,
+                game_identifier,
+                account_id=account_id,
             )
             if not lease or not account:
                 conn.rollback()
@@ -2540,9 +2717,18 @@ def handle_start(conn, req):
         return reply(req_id, True, **payload)
 
     # New paid hour: resolve account for this title, write Sessions, then return NPSSO.
-    lease = find_active_lease(conn, user["ID"], game)
+    lease = find_active_lease(conn, user["ID"], game, account_id=account_id)
     if not lease:
         conn.rollback()
+        if len(owned) > 1:
+            return reply(
+                req_id,
+                False,
+                error="needs_account_choice",
+                ui_message="Выберите арендованный аккаунт с этой игрой.",
+                needs_account_choice=True,
+                account_choices=account_choices_payload(owned),
+            )
         return reply(
             req_id,
             False,
@@ -2570,7 +2756,7 @@ def handle_start(conn, req):
     if play_id and play_id != game_identifier:
         game_identifier = play_id
         game = ensure_game(conn, service_type, game_identifier, game_name)
-        lease = find_active_lease(conn, user["ID"], game)
+        lease = find_active_lease(conn, user["ID"], game, account_id=account_id)
         if not lease:
             conn.rollback()
             return reply(
@@ -2745,7 +2931,15 @@ def handle_confirm_stream(conn, req):
     block_no = int(sess["BlockNo"])
     idem = "cs-%s-b%s" % (token, block_no)
     ok_pay, pay_msg = charge_hour(
-        conn, email, sess["ID"], sess["UserID"], block_no, price, sess["GameName"], idem
+        conn,
+        email,
+        sess["ID"],
+        sess["UserID"],
+        block_no,
+        price,
+        sess["GameName"],
+        idem,
+        account_id=sess.get("AccountID"),
     )
     if not ok_pay:
         with conn.cursor() as cur:
@@ -2919,7 +3113,15 @@ def handle_renew(conn, req):
     idem = "cs-%s-b%s" % (token, block_no)
 
     ok_pay, pay_msg = charge_hour(
-        conn, email, sess["ID"], sess["UserID"], block_no, price, game_name, idem
+        conn,
+        email,
+        sess["ID"],
+        sess["UserID"],
+        block_no,
+        price,
+        game_name,
+        idem,
+        account_id=sess.get("AccountID"),
     )
     if not ok_pay:
         conn.commit()

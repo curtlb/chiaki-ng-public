@@ -94,18 +94,22 @@ CloudBillingClient::Result CloudBillingClient::ping(const QString &host, quint16
 }
 
 CloudBillingClient::Result CloudBillingClient::quote(const QString &host, quint16 port, const QString &email,
-	const QString &service_type, const QString &game_identifier, const QString &game_name)
+	const QString &service_type, const QString &game_identifier, const QString &game_name,
+	qint64 account_id)
 {
 	QJsonObject o = baseReq(host, port, QStringLiteral("quote"));
 	o[QStringLiteral("email")] = email;
 	o[QStringLiteral("service_type")] = service_type;
 	o[QStringLiteral("game_identifier")] = game_identifier;
 	o[QStringLiteral("game_name")] = game_name;
+	if(account_id > 0)
+		o[QStringLiteral("account_id")] = account_id;
 	return request(o);
 }
 
 CloudBillingClient::Result CloudBillingClient::start(const QString &host, quint16 port, const QString &email,
-	const QString &service_type, const QString &game_identifier, const QString &game_name)
+	const QString &service_type, const QString &game_identifier, const QString &game_name,
+	qint64 account_id)
 {
 	QJsonObject o = baseReq(host, port, QStringLiteral("start"));
 	o[QStringLiteral("email")] = email;
@@ -113,6 +117,8 @@ CloudBillingClient::Result CloudBillingClient::start(const QString &host, quint1
 	o[QStringLiteral("game_identifier")] = game_identifier;
 	o[QStringLiteral("game_name")] = game_name;
 	o[QStringLiteral("confirm")] = true;
+	if(account_id > 0)
+		o[QStringLiteral("account_id")] = account_id;
 	return request(o, 120000);
 }
 

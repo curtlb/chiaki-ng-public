@@ -60,9 +60,12 @@ public:
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, const QJSValue &callback);
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
     Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, QString platform, const QJSValue &callback);
+    Q_INVOKABLE void startCompleteCloudSession(QString serviceType, QString gameIdentifier, QString gameName, QString platform, quint64 accountId, const QJSValue &callback);
 
-    /** Fetch hourly billing quote (no charge). Callback: ok, message, hourlyPrice. */
+    /** Fetch hourly billing quote (no charge). Callback: ok, message, hourlyPrice, resumeSession, accountChoicesJson.
+     *  Optional accountId skips multi-account choice for that PS account. */
     Q_INVOKABLE void fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
+    Q_INVOKABLE void fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, quint64 accountId, const QJSValue &callback);
 
     /** Re-run Gaikai allocation for the last-started cloud game (e.g. after bitrate change). */
     Q_INVOKABLE void reconnectCurrentSession();
@@ -100,7 +103,7 @@ private:
     void setBillingMinutesOnly(int minutes_left);
     void startBillingHeartbeat();
     void stopBillingHeartbeat();
-    bool runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error);
+    bool runBillingStart(QString serviceType, QString gameIdentifier, QString gameName, QString *out_npsso, QString *out_error, quint64 account_id = 0);
     bool confirmBillingCharge(QString *out_error);
     void abandonBillingReservation();
 

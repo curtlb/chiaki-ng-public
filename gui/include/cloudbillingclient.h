@@ -24,9 +24,11 @@ public:
 
 	static Result ping(const QString &host, quint16 port);
 	static Result quote(const QString &host, quint16 port, const QString &email,
-		const QString &service_type, const QString &game_identifier, const QString &game_name);
+		const QString &service_type, const QString &game_identifier, const QString &game_name,
+		qint64 account_id = 0);
 	static Result start(const QString &host, quint16 port, const QString &email,
-		const QString &service_type, const QString &game_identifier, const QString &game_name);
+		const QString &service_type, const QString &game_identifier, const QString &game_name,
+		qint64 account_id = 0);
 	static Result confirmStream(const QString &host, quint16 port, const QString &email,
 		const QString &session_token);
 	static Result heartbeat(const QString &host, quint16 port, const QString &session_token, bool streaming);

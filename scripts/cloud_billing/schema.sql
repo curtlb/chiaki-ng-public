@@ -276,6 +276,7 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Charges (
     ID                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     SessionID           BIGINT UNSIGNED NOT NULL,
     UserID              BIGINT UNSIGNED NOT NULL,
+    AccountID           BIGINT UNSIGNED NULL COMMENT 'PS account active at charge/renew time',
     BlockNo             INT NOT NULL,
     Amount              DECIMAL(10,2) NOT NULL,
     Currency            CHAR(3) NOT NULL DEFAULT 'RUB',
@@ -289,6 +290,7 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Charges (
     UNIQUE KEY uq_cs_charge_idem (IdempotencyKey),
     UNIQUE KEY uq_cs_charge_session_block (SessionID, BlockNo),
     KEY idx_cs_charge_user (UserID, CreatedAt),
+    KEY idx_cs_charge_account (AccountID, CreatedAt),
     CONSTRAINT fk_cs_charge_user FOREIGN KEY (UserID) REFERENCES tableu(ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

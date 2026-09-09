@@ -248,7 +248,7 @@ Pane {
                 gameName = modelData.game_meta.name;
         }
 
-        function launchCloudStream() {
+        function launchCloudStream(accountId) {
             let mainComp = root;
             while (mainComp && !mainComp.showStreamView) {
                 mainComp = mainComp.parent;
@@ -261,6 +261,7 @@ Pane {
                 streamingId,
                 gameName,
                 platform || "",
+                accountId || 0,
                 function(success, message, serverIp) {
                     if (!success) {
                         let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));
@@ -270,6 +271,43 @@ Pane {
                     }
                 }
             );
+        }
+
+        function confirmAndLaunch(accountId) {
+            Chiaki.cloudStreaming.fetchBillingQuote(
+                serviceType,
+                streamingId,
+                gameName,
+                accountId || 0,
+                function(ok, message, hourlyPrice, resumeSession) {
+                    if (!ok) {
+                        Chiaki.error(qsTr("Оплата"), message || qsTr("Не удалось получить информацию об оплате"), 8000);
+                        return;
+                    }
+                    let title = resumeSession ? qsTr("Продолжить игру") : qsTr("Оплата за час игры");
+                    let priceLine = (!resumeSession && hourlyPrice > 0)
+                        ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
+                        : "";
+                    let actionLine = resumeSession
+                        ? qsTr("\n\nНажмите «Да» — стрим продолжится без списания.")
+                        : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
+                    let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
+                    if (showConfirmDialogFunc) {
+                        showConfirmDialogFunc(title, confirmText, () => launchCloudStream(accountId));
+                    } else {
+                        launchCloudStream(accountId);
+                    }
+                }
+            );
+        }
+
+        function parseAccountChoices(choicesJson) {
+            try {
+                let arr = (typeof choicesJson === "string") ? JSON.parse(choicesJson || "[]") : (choicesJson || []);
+                return Array.isArray(arr) ? arr : [];
+            } catch (e) {
+                return [];
+            }
         }
 
         let useBilling = isCloudBillingActive();
@@ -282,18 +320,30 @@ Pane {
             return;
         }
         if (!useBilling) {
-            launchCloudStream();
+            launchCloudStream(0);
             return;
         }
         Chiaki.cloudStreaming.fetchBillingQuote(
             serviceType,
             streamingId,
             gameName,
-            function(ok, message, hourlyPrice, resumeSession) {
+            function(ok, message, hourlyPrice, resumeSession, choicesJson) {
                 if (!ok) {
                     Chiaki.error(qsTr("Оплата"), message || qsTr("Не удалось получить информацию об оплате"), 8000);
                     return;
                 }
+                let choices = parseAccountChoices(choicesJson);
+                if (choices.length > 1) {
+                    accountChoiceDialog.promptText = message
+                        || qsTr("Игра куплена на нескольких аккаунтах. Выберите аккаунт:");
+                    accountChoiceDialog.accounts = choices;
+                    accountChoiceDialog.onPicked = function(accountId) {
+                        confirmAndLaunch(accountId);
+                    };
+                    accountChoiceDialog.open();
+                    return;
+                }
+                let accountId = (choices.length === 1) ? (choices[0].account_id || 0) : 0;
                 let title = resumeSession ? qsTr("Продолжить игру") : qsTr("Оплата за час игры");
                 let priceLine = (!resumeSession && hourlyPrice > 0)
                     ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
@@ -303,9 +353,9 @@ Pane {
                     : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
                 let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
                 if (showConfirmDialogFunc) {
-                    showConfirmDialogFunc(title, confirmText, launchCloudStream);
+                    showConfirmDialogFunc(title, confirmText, () => launchCloudStream(accountId));
                 } else {
-                    launchCloudStream();
+                    launchCloudStream(accountId);
                 }
             }
         );
@@ -1661,5 +1711,61 @@ Pane {
             interval: 5000
         }
     }
-    
+
+    Dialog {
+        id: accountChoiceDialog
+        property string promptText: ""
+        property var accounts: []
+        property var onPicked: null
+        title: qsTr("Выбор аккаунта")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(480, parent.width - 40)
+        Material.roundedScale: Material.MediumScale
+        background: Rectangle {
+            color: "#121820"
+            radius: 12
+            border.width: 1
+            border.color: Qt.rgba(0.18, 0.77, 0.71, 0.35)
+        }
+        onClosed: onPicked = null
+
+        ColumnLayout {
+            spacing: 14
+            width: parent ? parent.width : 400
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: accountChoiceDialog.promptText
+            }
+
+            Repeater {
+                model: accountChoiceDialog.accounts
+                delegate: Button {
+                    Layout.fillWidth: true
+                    text: {
+                        let label = modelData.label || qsTr("Аккаунт #%1").arg(modelData.account_id);
+                        return modelData.has_ps_plus ? (label + " · PS Plus") : label;
+                    }
+                    Material.background: Material.accent
+                    Material.roundedScale: Material.SmallScale
+                    onClicked: {
+                        let cb = accountChoiceDialog.onPicked;
+                        let aid = modelData.account_id || 0;
+                        accountChoiceDialog.close();
+                        if (cb)
+                            cb(aid);
+                    }
+                }
+            }
+
+            Button {
+                Layout.alignment: Qt.AlignHCenter
+                text: qsTr("Отмена")
+                flat: true
+                onClicked: accountChoiceDialog.reject()
+            }
+        }
+    }
 }
