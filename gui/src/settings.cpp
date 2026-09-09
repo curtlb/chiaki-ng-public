@@ -2441,36 +2441,58 @@ void Settings::SetCloudDatacentersJsonPSNOW(const QString &json)
 
 QString Settings::GetNpssoToken() const
 {
-	return settings.value("settings/psn_npsso_token").toString();
+	// NPSSO is never persisted on the client — only issued by billing for a launch.
+	return QString();
 }
 
 void Settings::SetNpssoToken(QString npsso_token)
 {
-	if(settings.value("settings/psn_npsso_token").toString() == npsso_token)
-		return;
-	settings.setValue("settings/psn_npsso_token", npsso_token);
-	emit NpssoTokenChanged();
+	Q_UNUSED(npsso_token);
+	if(settings.contains(QStringLiteral("settings/psn_npsso_token")))
+	{
+		settings.remove(QStringLiteral("settings/psn_npsso_token"));
+		emit NpssoTokenChanged();
+	}
 }
 
 QString Settings::GetNpssoTokenSecondary() const
 {
-	return settings.value("settings/psn_npsso_token_secondary").toString();
+	return QString();
 }
 
 void Settings::SetNpssoTokenSecondary(QString npsso_token)
 {
-	if(settings.value("settings/psn_npsso_token_secondary").toString() == npsso_token)
-		return;
-	settings.setValue("settings/psn_npsso_token_secondary", npsso_token);
-	emit NpssoTokenSecondaryChanged();
+	Q_UNUSED(npsso_token);
+	if(settings.contains(QStringLiteral("settings/psn_npsso_token_secondary")))
+	{
+		settings.remove(QStringLiteral("settings/psn_npsso_token_secondary"));
+		emit NpssoTokenSecondaryChanged();
+	}
 }
 
 QString Settings::GetNpssoTokenForCloudProvision() const
 {
-	const QString secondary = GetNpssoTokenSecondary().trimmed();
-	if(!secondary.isEmpty())
-		return secondary;
-	return GetNpssoToken().trimmed();
+	return QString();
+}
+
+void Settings::ClearPersistedNpssoTokens()
+{
+	bool changed = false;
+	if(settings.contains(QStringLiteral("settings/psn_npsso_token")))
+	{
+		settings.remove(QStringLiteral("settings/psn_npsso_token"));
+		changed = true;
+	}
+	if(settings.contains(QStringLiteral("settings/psn_npsso_token_secondary")))
+	{
+		settings.remove(QStringLiteral("settings/psn_npsso_token_secondary"));
+		changed = true;
+	}
+	if(changed)
+	{
+		emit NpssoTokenChanged();
+		emit NpssoTokenSecondaryChanged();
+	}
 }
 
 QString Settings::GetFourCloudEmail() const

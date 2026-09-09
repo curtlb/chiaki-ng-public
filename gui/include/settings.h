@@ -394,6 +394,8 @@ class Settings : public QObject
 	QString GetNpssoTokenSecondary() const;
 	void SetNpssoTokenSecondary(QString npsso_token);
 	QString GetNpssoTokenForCloudProvision() const;
+	/** Drop any legacy NPSSO keys from QSettings (tokens must not live on disk). */
+	void ClearPersistedNpssoTokens();
 
 	// 4cloud.pro account (hourly cloud gaming billing)
 	QString GetFourCloudEmail() const;

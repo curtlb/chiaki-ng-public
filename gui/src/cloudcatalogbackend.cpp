@@ -683,7 +683,7 @@ void CloudCatalogBackend::ensurePsNowSearchCatalog(const QJSValue &callback)
     const QString host = settings->GetCloudBillingHost();
     const quint16 port = settings->GetCloudBillingPort();
     const QString email = settings->GetFourCloudEmail();
-    const QString cachedNpsso = settings ? settings->GetNpssoTokenSecondary().trimmed() : QString();
+    const QString cachedNpsso = sessionCatalogNpsso_.trimmed();
     const QByteArray locale =
         (settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-US")).toUtf8();
     const QByteArray cacheDir = searchCacheDir.toUtf8();
@@ -704,7 +704,7 @@ void CloudCatalogBackend::ensurePsNowSearchCatalog(const QJSValue &callback)
         bool success = false;
         QString message;
         QString jsonPayload;
-        QString npssoForSettings;
+        QString npssoForSession;
         QString npsso = cachedNpsso;
 
         if (npsso.isEmpty()) {
@@ -720,11 +720,11 @@ void CloudCatalogBackend::ensurePsNowSearchCatalog(const QJSValue &callback)
                 if (npsso.isEmpty())
                     message = QStringLiteral("Пустой NPSSO у назначенного аккаунта");
                 else
-                    npssoForSettings = npsso;
+                    npssoForSession = npsso;
             }
         } else {
             CloudLogMessage(QStringLiteral("Catalog"),
-                QStringLiteral("PS Now search catalog: reusing session NPSSO (skip catalog_npsso)"));
+                QStringLiteral("PS Now search catalog: reusing in-memory NPSSO (skip catalog_npsso)"));
         }
 
         if (!npsso.isEmpty()) {
@@ -760,7 +760,7 @@ void CloudCatalogBackend::ensurePsNowSearchCatalog(const QJSValue &callback)
         QCoreApplication *app = QCoreApplication::instance();
         if (!app)
             return;
-        QMetaObject::invokeMethod(app, [self, gen, success, message, jsonPayload, npssoForSettings]() mutable {
+        QMetaObject::invokeMethod(app, [self, gen, success, message, jsonPayload, npssoForSession]() mutable {
             if (!self)
                 return;
             std::vector<QJSValue> parked;
@@ -776,8 +776,8 @@ void CloudCatalogBackend::ensurePsNowSearchCatalog(const QJSValue &callback)
                 return;
             }
 
-            if (!npssoForSettings.isEmpty() && self->settings)
-                self->settings->SetNpssoTokenSecondary(npssoForSettings);
+            if (!npssoForSession.isEmpty())
+                self->sessionCatalogNpsso_ = npssoForSession;
 
             if (success) {
                 const QJsonObject root = QJsonDocument::fromJson(jsonPayload.toUtf8()).object();
@@ -1477,6 +1477,7 @@ void CloudCatalogBackend::invalidateCache()
     catalogTotalGames_ = 0;
     psnowSearchRows_.clear();
     psnowSearchTotalGames_ = 0;
+    sessionCatalogNpsso_.clear();
     // libchiaki owns every cache file and its versioned key (current + legacy), so
     // delegate to it. This is the single source of truth for cache naming and keeps
     // the client from drifting out of sync when the cache schema/version bumps.

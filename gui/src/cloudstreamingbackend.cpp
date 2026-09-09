@@ -242,8 +242,7 @@ bool CloudStreamingBackend::runBillingStart(QString serviceType, QString gameIde
     billing_session_token = start.data.value(QStringLiteral("session_token")).toString();
     *out_npsso = start.data.value(QStringLiteral("npsso")).toString();
     billing_npsso = *out_npsso;
-    if (!billing_npsso.isEmpty())
-        settings->SetNpssoTokenSecondary(billing_npsso);
+    // NPSSO is ephemeral for this launch only — never write to QSettings.
     billing_game_identifier = start.data.value(QStringLiteral("game_identifier")).toString().trimmed();
     billing_store_country = start.data.value(QStringLiteral("store_country")).toString().trimmed().toUpper();
     billing_store_lang = start.data.value(QStringLiteral("store_lang")).toString().trimmed().toLower();
@@ -400,7 +399,7 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
         return;
     }
 
-    QString npssoToken = settings->GetNpssoTokenForCloudProvision();
+    QString npssoToken;
     QString billing_error;
     if(runBillingStart(serviceType, gameIdentifier, gameName, &npssoToken, &billing_error)) {
         if(npssoToken.isEmpty()) {
@@ -417,13 +416,14 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
             gameIdentifier = billing_game_identifier;
             last_game_identifier = gameIdentifier;
         }
-        qInfo() << "Cloud billing: using rented PS account NPSSO";
-    } else if (npssoToken.isEmpty()) {
-        qWarning() << "NPSSO token is empty - cloud play may not work";
-        if (billing_server && callback.isCallable()) {
+        qInfo() << "Cloud billing: using rented PS account NPSSO for this launch only";
+    } else {
+        qWarning() << "Cloud billing required for NPSSO — local token storage disabled";
+        if (callback.isCallable()) {
             callback.call({false, tr("Не удалось получить NPSSO арендованного аккаунта. Проверьте вход в 4cloud и биллинг на сервере.")});
             return;
         }
+        return;
     }
 
     // The C provisioning flow runs the NPSSO authorizeCheck itself as its first
@@ -492,11 +492,12 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     const bool isForeign = settings->IsCloudCatalogIsForeign();
     const bool attrPassed = settings->GetAccountAttributesCheckPassed();
 
-    // Owned-PSNOW fast-path: skip when a secondary provision NPSSO is active — entitlements
-    // in the catalog cache belong to the primary account.
+    // Owned-PSNOW fast-path only when provisioning with a non-billing local path.
+    // Billing launches always use the NPSSO returned for this title from the VM.
     QByteArray ownedEnt, ownedPlat;
-    const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
-    if (!pscloud && !is_reconnect && !usingSecondaryNpsso) {
+    const bool fromBillingLaunch = !billing_npsso.trimmed().isEmpty()
+        && npssoToken.trimmed() == billing_npsso.trimmed();
+    if (!pscloud && !is_reconnect && !fromBillingLaunch) {
         QmlBackend *qb = qobject_cast<QmlBackend*>(parent());
         QString e, p;
         if (qb && qb->cloudCatalog() && qb->cloudCatalog()->getOwnedPsnowEntitlement(gameIdentifier, e, p)) {
@@ -526,12 +527,12 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
 
     std::thread([self, reqId, svc, gameId, npsso, storeCountry, storeLang, gameLang,
                  forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat,
-                 usingSecondaryNpsso]() mutable {
+                 fromBillingLaunch]() mutable {
         CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, "Session");
         ChiakiLog *log = file_log.GetChiakiLog();
         CHIAKI_LOGI(log, "provisioning started (service=%s, game=%s, npsso=%s)",
             svc.constData(), gameId.constData(),
-            npsso.isEmpty() ? "missing" : (usingSecondaryNpsso ? "secondary" : "primary"));
+            npsso.isEmpty() ? "missing" : (fromBillingLaunch ? "billing_ephemeral" : "present"));
 
         ChiakiCloudProvisionConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -896,16 +897,14 @@ void CloudStreamingBackend::reconnectCurrentSession()
         return;
     }
 
-    const QString npsso = billing_npsso.isEmpty()
-        ? settings->GetNpssoTokenForCloudProvision()
-        : billing_npsso;
-    const bool usingSecondaryNpsso = !settings->GetNpssoTokenSecondary().trimmed().isEmpty();
-    const QString npssoLabel = npsso.isEmpty()
-        ? QStringLiteral("missing")
-        : (usingSecondaryNpsso ? QStringLiteral("secondary") : QStringLiteral("primary"));
+    const QString npsso = billing_npsso;
+    if (npsso.isEmpty()) {
+        qWarning() << "reconnectCurrentSession: no in-memory billing NPSSO — cannot reconnect without re-start";
+        return;
+    }
     CloudLogMessage(QStringLiteral("Session"),
-        QStringLiteral("reconnecting cloud session (service=%1, game=%2, provision_npsso=%3) to apply new settings")
-            .arg(last_service_type, last_game_identifier, npssoLabel));
+        QStringLiteral("reconnecting cloud session (service=%1, game=%2, npsso=billing_ephemeral) to apply new settings")
+            .arg(last_service_type, last_game_identifier));
     setAllocationProgress(tr("Applying settings - reconnecting..."));
     continueCloudSessionAfterAuth(last_service_type, last_game_identifier, QJSValue(), npsso, QString(), true);
 }

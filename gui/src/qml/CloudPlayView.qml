@@ -351,12 +351,11 @@ Pane {
         console.log("[CloudPlayView] loadUnifiedCatalog()");
         let billingServer = isCloudBillingServerConfigured();
         let billingActive = isCloudBillingActive();
-        let npssoToken = Chiaki.settings ? Chiaki.settings.psnNpssoToken : "";
         if (billingServer && !billingActive) {
             authErrorMessage = qsTr("Войдите в 4cloud.pro — каталог с сервера доступен, но запуск игр требует аккаунт 4cloud.");
-        } else if (!billingServer && (!npssoToken || npssoToken.trim().length === 0)) {
-            authErrorMessage = qsTr("NPSSO token is required for cloud games. Please login and enter a valid NPSSO token. You also need a valid PS Plus subscription.");
-        } else if (billingActive || billingServer || (npssoToken && npssoToken.trim().length > 0)) {
+        } else if (!billingServer) {
+            authErrorMessage = qsTr("Не настроен сервер биллинга — облачные игры недоступны.");
+        } else {
             authErrorMessage = "";
         }
 
@@ -394,7 +393,7 @@ Pane {
                     }
                     if (data.warning && !billingActive)
                         authErrorMessage = data.warning;
-                    else if (billingActive || (npssoToken && npssoToken.trim().length > 0))
+                    else if (billingActive || billingServer)
                         authErrorMessage = "";
                     if (message && message !== "Success" && message !== "Cached")
                         showErrorToast(qsTr("Partial Catalog"), message);

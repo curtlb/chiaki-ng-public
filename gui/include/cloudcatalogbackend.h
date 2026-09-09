@@ -60,7 +60,8 @@ public:
                                                  bool billingRental, int limit) const;
     /**
      * Billing rental search: ensure the PS Now unified catalog is loaded using NPSSO from
-     * the player's assigned CloudStreaming_Accounts row (via billing catalog_npsso).
+     * NPSSO for PS Now search comes from the player's site-assigned
+     * CloudStreaming_Accounts row (via billing catalog_npsso; no soft-assign).
      * Callback: (success: bool, message: string, totalGames: int).
      */
     Q_INVOKABLE void ensurePsNowSearchCatalog(const QJSValue &callback);
@@ -180,6 +181,8 @@ private:
     int catalogTotalGames_ = 0;
     QVector<CatalogDisplayRow> psnowSearchRows_;
     int psnowSearchTotalGames_ = 0;
+    /** Ephemeral NPSSO from catalog_npsso — RAM only, never written to QSettings. */
+    QString sessionCatalogNpsso_;
 
     // Helper methods for shortcut creation
     QPixmap downloadImageFromUrl(const QString &url, int timeoutMs = 10000);

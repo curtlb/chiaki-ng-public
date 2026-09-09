@@ -1165,44 +1165,71 @@ def account_can_play_game(conn, account, game):
     return False
 
 
-def find_any_user_lease(conn, user_id):
+def list_user_valid_leases(conn, user_id):
+    """All valid leases for the user, lowest AccountID first."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT l.*, a.NPSSO, a.Label AS AccountLabel, a.HasPsPlus "
+            "SELECT l.*, a.NPSSO, a.Label AS AccountLabel, a.HasPsPlus, a.ID AS AccID "
             "FROM CloudStreaming_Leases l "
             "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
             "WHERE l.UserID = %s AND "
             + lease_valid_sql()
-            + " ORDER BY l.LastActivityAt DESC LIMIT 1",
+            + " ORDER BY a.ID ASC",
             (user_id,),
         )
-        return cur.fetchone()
+        return cur.fetchall() or []
+
+
+def find_any_user_lease(conn, user_id):
+    """First assigned account (lowest AccountID) among valid leases."""
+    leases = list_user_valid_leases(conn, user_id)
+    return leases[0] if leases else None
 
 
 def find_active_lease(conn, user_id, game):
-    game = refresh_game_access_type(conn, game) if game.get("ID") else game
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT l.*, a.NPSSO, a.Label AS AccountLabel, a.HasPsPlus "
-            "FROM CloudStreaming_Leases l "
-            "JOIN CloudStreaming_Accounts a ON a.ID = l.AccountID "
-            "WHERE l.UserID = %s AND "
-            + lease_valid_sql()
-            + " ORDER BY l.LastActivityAt DESC",
-            (user_id,),
-        )
-        leases = cur.fetchall()
-    for lease in leases:
-        acc = {
-            "ID": lease["AccountID"],
-            "NPSSO": lease["NPSSO"],
-            "HasPsPlus": lease["HasPsPlus"],
-            "Label": lease.get("AccountLabel"),
-        }
-        if account_can_play_game(conn, acc, game):
-            return lease
-    # Hourly rental: one PS account per player — reuse it for any catalog title.
-    return find_any_user_lease(conn, user_id)
+    """
+    Pick lease/NPSSO for a title:
+    1) Account that owns the game (CloudStreaming_AccountOwnedGames)
+    2) Else Plus/catalog title → first leased account (lowest AccountID)
+    """
+    game = refresh_game_access_type(conn, game) if game and game.get("ID") else game
+    leases = list_user_valid_leases(conn, user_id)
+    if not leases:
+        return None
+
+    if game:
+        for lease in leases:
+            acc = {
+                "ID": lease["AccountID"],
+                "NPSSO": lease["NPSSO"],
+                "HasPsPlus": lease["HasPsPlus"],
+                "Label": lease.get("AccountLabel"),
+            }
+            if account_owns_game(
+                conn,
+                lease["AccountID"],
+                game["ServiceType"],
+                game["GameIdentifier"],
+                game.get("ID"),
+            ):
+                log.info(
+                    "lease resolve user=%s game=%s -> owned account_id=%s lease_id=%s",
+                    user_id,
+                    game.get("GameIdentifier"),
+                    lease["AccountID"],
+                    lease["ID"],
+                )
+                return lease
+
+    first = leases[0]
+    log.info(
+        "lease resolve user=%s game=%s -> first account_id=%s lease_id=%s (plus/catalog)",
+        user_id,
+        (game or {}).get("GameIdentifier"),
+        first["AccountID"],
+        first["ID"],
+    )
+    return first
 
 
 def collect_game_identity(conn, service_type, game_identifier, game=None):
@@ -1390,8 +1417,8 @@ def find_other_active_session(conn, user_id, service_type, game_identifier, game
 
 def ensure_user_catalog_npsso(conn, user_id):
     """
-    NPSSO from the player's already-assigned CloudStreaming_Accounts row.
-    No soft-assign: account must be issued via the website personal cabinet.
+    NPSSO of the player's first assigned account (lowest AccountID).
+    Used only for transient catalog fetches — client must not persist it.
     """
     lease = find_any_user_lease(conn, user_id)
     if not lease:

@@ -229,6 +229,9 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
 {
     qt_msg_handler = qInstallMessageHandler(msg_handler);
 
+    if (settings)
+        settings->ClearPersistedNpssoTokens();
+
     const char *uri = "org.streetpea.chiaking";
     qmlRegisterSingletonInstance(uri, 1, 0, "Chiaki", this);
     qmlRegisterUncreatableType<QmlMainWindow>(uri, 1, 0, "ChiakiWindow", {});
