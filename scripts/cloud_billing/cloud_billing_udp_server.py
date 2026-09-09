@@ -1426,17 +1426,58 @@ def list_owned_leases_for_game(conn, user_id, game):
     return owned
 
 
-def account_choices_payload(leases):
+def account_played_game_before(conn, user_id, account_id, game):
+    """True if this user already streamed this title on the given PS account."""
+    if not user_id or not account_id or not game:
+        return False
+    st, identifiers, catalog_ids = collect_game_identity(
+        conn,
+        game.get("ServiceType") or "",
+        game.get("GameIdentifier") or "",
+        game,
+    )
+    game_id = game.get("ID")
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.ID, s.ServiceType, s.GameIdentifier, s.GameID, g.CatalogID "
+            "FROM CloudStreaming_Sessions s "
+            "LEFT JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+            "WHERE s.UserID=%s AND s.AccountID=%s "
+            "ORDER BY s.UpdatedAt DESC LIMIT 20",
+            (user_id, account_id),
+        )
+        rows = cur.fetchall() or []
+        if _table_exists(conn, "CloudStreaming_SessionsArchive"):
+            cur.execute(
+                "SELECT s.ID, s.ServiceType, s.GameIdentifier, s.GameID, g.CatalogID "
+                "FROM CloudStreaming_SessionsArchive s "
+                "LEFT JOIN CloudStreaming_Games g ON g.ID = s.GameID "
+                "WHERE s.UserID=%s AND s.AccountID=%s "
+                "ORDER BY s.ArchivedAt DESC LIMIT 40",
+                (user_id, account_id),
+            )
+            rows.extend(cur.fetchall() or [])
+    for row in rows:
+        if _session_same_game(row, st, identifiers, catalog_ids, game_id):
+            return True
+    return False
+
+
+def account_choices_payload(conn, user_id, leases, game=None):
     out = []
     for lease in leases or []:
+        played = account_played_game_before(conn, user_id, lease["AccountID"], game)
         out.append(
             {
                 "account_id": int(lease["AccountID"]),
                 "lease_id": int(lease["ID"]),
                 "label": (lease.get("AccountLabel") or ("Аккаунт #%s" % lease["AccountID"])),
                 "has_ps_plus": bool(int(lease.get("HasPsPlus") or 0)),
+                "played_before": played,
             }
         )
+    # Accounts already used for this title first — easier to continue saves.
+    out.sort(key=lambda x: (0 if x.get("played_before") else 1, x.get("label") or ""))
     return out
 
 
@@ -2502,7 +2543,7 @@ def handle_quote(conn, req):
 
     price = float(game["HourlyPrice"])
     owned = list_owned_leases_for_game(conn, user["ID"], game)
-    choices = account_choices_payload(owned)
+    choices = account_choices_payload(conn, user["ID"], owned, game)
     needs_choice = len(owned) > 1
     account_id = parse_optional_account_id(req)
 
@@ -2626,7 +2667,7 @@ def handle_start(conn, req):
                 "Выберите аккаунт перед запуском."
             ),
             needs_account_choice=True,
-            account_choices=account_choices_payload(owned),
+            account_choices=account_choices_payload(conn, user["ID"], owned, game),
         )
 
     resumable = find_resumable_session(
@@ -2651,7 +2692,7 @@ def handle_start(conn, req):
                     error="needs_account_choice",
                     ui_message="Выберите арендованный аккаунт с этой игрой.",
                     needs_account_choice=True,
-                    account_choices=account_choices_payload(owned),
+                    account_choices=account_choices_payload(conn, user["ID"], owned, game),
                 )
             return reply(
                 req_id,
@@ -2727,7 +2768,7 @@ def handle_start(conn, req):
                 error="needs_account_choice",
                 ui_message="Выберите арендованный аккаунт с этой игрой.",
                 needs_account_choice=True,
-                account_choices=account_choices_payload(owned),
+                account_choices=account_choices_payload(conn, user["ID"], owned, game),
             )
         return reply(
             req_id,

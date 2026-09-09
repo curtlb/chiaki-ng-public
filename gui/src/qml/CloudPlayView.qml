@@ -1744,11 +1744,30 @@ Pane {
                 model: accountChoiceDialog.accounts
                 delegate: Button {
                     Layout.fillWidth: true
-                    text: {
-                        let label = modelData.label || qsTr("Аккаунт #%1").arg(modelData.account_id);
-                        return modelData.has_ps_plus ? (label + " · PS Plus") : label;
+                    contentItem: ColumnLayout {
+                        spacing: 2
+                        Label {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            color: "white"
+                            text: {
+                                let label = modelData.label || qsTr("Аккаунт #%1").arg(modelData.account_id);
+                                return modelData.has_ps_plus ? (label + " · PS Plus") : label;
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            visible: !!modelData.played_before
+                            font.pixelSize: 12
+                            opacity: 0.72
+                            color: Qt.rgba(0.75, 0.9, 0.88, 1)
+                            text: qsTr("играли ранее")
+                        }
                     }
-                    Material.background: Material.accent
+                    Material.background: modelData.played_before
+                        ? Qt.rgba(0.12, 0.35, 0.32, 1)
+                        : Material.accent
                     Material.roundedScale: Material.SmallScale
                     onClicked: {
                         let cb = accountChoiceDialog.onPicked;
