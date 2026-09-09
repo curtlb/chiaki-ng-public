@@ -25,12 +25,14 @@ jobs:
           pip3 install --user 'protobuf>=5,<6' --break-system-packages
 
       - name: Install brew dependencies
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           set -euo pipefail
           brew update
           brew uninstall pkgconfig || true
           brew tap streetpea/streetpea
-          brew trust streetpea/streetpea
+          brew trust streetpea/streetpea || true
           brew trust --formula streetpea/streetpea/chiaki-ng-qt || true
           brew trust --formula 'streetpea/streetpea/chiaki-ng-qt@6' || true
           brew install --force 'streetpea/streetpea/chiaki-ng-qt@6' \
@@ -92,12 +94,14 @@ jobs:
           pip3 install --user 'protobuf>=5,<6' --break-system-packages
 
       - name: Install brew dependencies
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           set -euo pipefail
           brew update
           brew uninstall pkgconfig || true
           brew tap streetpea/streetpea
-          brew trust streetpea/streetpea
+          brew trust streetpea/streetpea || true
           brew trust --formula streetpea/streetpea/chiaki-ng-qt || true
           brew trust --formula 'streetpea/streetpea/chiaki-ng-qt@6' || true
           brew install --force 'streetpea/streetpea/chiaki-ng-qt@6' \
