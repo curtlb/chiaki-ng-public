@@ -31,10 +31,13 @@ jobs:
           set -euo pipefail
           brew update
           brew uninstall pkgconfig || true
-          brew tap streetpea/streetpea
+          TAP_DIR="$(brew --repository)/Library/Taps/streetpea/homebrew-streetpea"
+          rm -rf "$TAP_DIR"
+          mkdir -p "$(dirname "$TAP_DIR")"
+          git clone --depth 1 https://github.com/streetpea/homebrew-streetpea.git "$TAP_DIR"
+          # Newer Homebrew rejects the whole tap if a cask has invalid Linux stanzas.
+          rm -f "$TAP_DIR"/Casks/*.rb
           brew trust streetpea/streetpea || true
-          brew trust --formula streetpea/streetpea/chiaki-ng-qt || true
-          brew trust --formula 'streetpea/streetpea/chiaki-ng-qt@6' || true
           brew install --force 'streetpea/streetpea/chiaki-ng-qt@6' \
             ffmpeg pkgconf opus openssl cmake ninja nasm sdl2 protobuf@29 \
             speexdsp libplacebo wget python-setuptools json-c miniupnpc
@@ -100,10 +103,13 @@ jobs:
           set -euo pipefail
           brew update
           brew uninstall pkgconfig || true
-          brew tap streetpea/streetpea
+          TAP_DIR="$(brew --repository)/Library/Taps/streetpea/homebrew-streetpea"
+          rm -rf "$TAP_DIR"
+          mkdir -p "$(dirname "$TAP_DIR")"
+          git clone --depth 1 https://github.com/streetpea/homebrew-streetpea.git "$TAP_DIR"
+          # Newer Homebrew rejects the whole tap if a cask has invalid Linux stanzas.
+          rm -f "$TAP_DIR"/Casks/*.rb
           brew trust streetpea/streetpea || true
-          brew trust --formula streetpea/streetpea/chiaki-ng-qt || true
-          brew trust --formula 'streetpea/streetpea/chiaki-ng-qt@6' || true
           brew install --force 'streetpea/streetpea/chiaki-ng-qt@6' \
             ffmpeg pkgconf opus openssl cmake ninja nasm sdl2 protobuf@29 \
             speexdsp libplacebo wget python-setuptools json-c miniupnpc

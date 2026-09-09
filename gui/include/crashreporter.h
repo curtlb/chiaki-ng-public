@@ -51,7 +51,7 @@ private:
 #ifdef Q_OS_WIN
 	static LONG WINAPI ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo);
 #else
-	static void SignalHandler(int signal);
+	static void SignalHandler(int signo);
 #endif
 
 	// Обработчик std::terminate

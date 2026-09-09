@@ -322,14 +322,14 @@ LONG WINAPI CrashReporter::ExceptionHandler(EXCEPTION_POINTERS *exceptionInfo)
 
 #else
 
-void CrashReporter::SignalHandler(int signal)
+void CrashReporter::SignalHandler(int signo)
 {
 	QString errorType = "crash";
 	QString message;
 	QString stackTrace;
 
 	// Определяем тип сигнала
-	switch (signal) {
+	switch (signo) {
 		case SIGSEGV:
 			message = "Segmentation Fault (SIGSEGV)";
 			break;
@@ -346,7 +346,7 @@ void CrashReporter::SignalHandler(int signal)
 			message = "Bus Error (SIGBUS)";
 			break;
 		default:
-			message = QString("Signal %1").arg(signal);
+			message = QString("Signal %1").arg(signo);
 			break;
 	}
 
@@ -388,8 +388,8 @@ void CrashReporter::SignalHandler(int signal)
 	SendReport(errorType, message, stackTrace);
 
 	// Восстанавливаем обработчик по умолчанию и ре-вызываем сигнал
-	signal(signal, SIG_DFL);
-	raise(signal);
+	::signal(signo, SIG_DFL);
+	raise(signo);
 }
 
 #endif
