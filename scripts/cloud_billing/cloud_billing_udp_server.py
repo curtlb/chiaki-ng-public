@@ -259,17 +259,25 @@ def finalize_lease_after_stream(conn, user_id, lease_id):
     return payload
 
 
-def ensure_daily_play_row(conn, user_id, play_date):
+def ensure_daily_play_row(conn, user_id, lease_id, play_date):
+    """One DailyPlay row per lease per MSK calendar day."""
+    lease = fetch_lease_row(conn, lease_id)
+    if not lease:
+        return None
+    account_id = int(lease.get("AccountID") or 0)
+    if not account_id:
+        return None
     with conn.cursor() as cur:
         cur.execute(
             "INSERT IGNORE INTO CloudStreaming_DailyPlay "
-            "(UserID, PlayDateMSK, StreamSeconds, ExtensionGranted) VALUES (%s, %s, 0, 0)",
-            (user_id, play_date),
+            "(UserID, LeaseID, AccountID, PlayDateMSK, StreamSeconds, ExtensionGranted) "
+            "VALUES (%s, %s, %s, %s, 0, 0)",
+            (user_id, lease_id, account_id, play_date),
         )
         cur.execute(
             "SELECT * FROM CloudStreaming_DailyPlay "
-            "WHERE UserID=%s AND PlayDateMSK=%s FOR UPDATE",
-            (user_id, play_date),
+            "WHERE LeaseID=%s AND PlayDateMSK=%s FOR UPDATE",
+            (lease_id, play_date),
         )
         return cur.fetchone()
 
@@ -282,6 +290,18 @@ def fetch_lease_row(conn, lease_id, for_update=False):
             (lease_id,),
         )
         return cur.fetchone()
+
+
+def lease_account_label(conn, lease):
+    if not lease:
+        return ""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT Label FROM CloudStreaming_Accounts WHERE ID=%s LIMIT 1",
+            (lease.get("AccountID"),),
+        )
+        row = cur.fetchone() or {}
+    return (row.get("Label") or "").strip()
 
 
 def msk_day_end(day=None):
@@ -311,29 +331,29 @@ def is_lease_first_24h_window(lease):
     return msk_now() < end
 
 
-def sum_daily_play_minutes(conn, user_id, date_from, date_to):
-    """Sum play minutes across MSK calendar days (inclusive)."""
-    if not user_id or not date_from or not date_to or date_to < date_from:
+def sum_daily_play_minutes(conn, lease_id, date_from, date_to):
+    """Sum play minutes for one lease across MSK calendar days (inclusive)."""
+    if not lease_id or not date_from or not date_to or date_to < date_from:
         return 0
     with conn.cursor() as cur:
         cur.execute(
             "SELECT COALESCE(SUM(StreamSeconds), 0) AS Sec "
             "FROM CloudStreaming_DailyPlay "
-            "WHERE UserID=%s AND PlayDateMSK >= %s AND PlayDateMSK <= %s",
-            (user_id, date_from, date_to),
+            "WHERE LeaseID=%s AND PlayDateMSK >= %s AND PlayDateMSK <= %s",
+            (lease_id, date_from, date_to),
         )
         row = cur.fetchone() or {}
     return int(row.get("Sec") or 0) // 60
 
 
-def first_window_play_minutes(conn, user_id, lease):
-    """Minutes played during the first 24h window (may span two MSK dates)."""
+def first_window_play_minutes(conn, lease):
+    """Minutes played on this lease during its first 24h window (may span two MSK dates)."""
     first = lease_first_assigned_at(lease)
     end = lease_first_window_end(lease)
-    if not first or not end:
+    if not first or not end or not lease:
         return 0
     date_to = min(msk_today(), end.date())
-    return sum_daily_play_minutes(conn, user_id, first.date(), date_to)
+    return sum_daily_play_minutes(conn, lease["ID"], first.date(), date_to)
 
 
 def is_lease_first_msk_day(lease):
@@ -342,9 +362,9 @@ def is_lease_first_msk_day(lease):
 
 
 def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, daily_row):
-    """First 24h after assign: 48h freeze at 61 min. Later MSK days: +1 day at 90 min if freeze active."""
+    """Per-lease: first 24h → 48h freeze at 61 min; later MSK days → +1 day at 90 min if freeze active."""
     lease = fetch_lease_row(conn, lease_id, for_update=True)
-    if not lease:
+    if not lease or not daily_row:
         return lease
     played_today_min = int(stream_seconds_today) // 60
     now = datetime.now()
@@ -353,7 +373,7 @@ def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, da
     ext_granted = bool(int(daily_row.get("ExtensionGranted") or 0))
     first_window = is_lease_first_24h_window(lease)
     played_first_window_min = (
-        first_window_play_minutes(conn, user_id, lease) if first_window else played_today_min
+        first_window_play_minutes(conn, lease) if first_window else played_today_min
     )
     new_freeze = freeze_active
     new_retention = retention
@@ -368,8 +388,8 @@ def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, da
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_DailyPlay SET ExtensionGranted=1 "
-                "WHERE UserID=%s AND PlayDateMSK=%s",
-                (user_id, daily_row["PlayDateMSK"]),
+                "WHERE LeaseID=%s AND PlayDateMSK=%s",
+                (lease_id, daily_row["PlayDateMSK"]),
             )
             daily_row["ExtensionGranted"] = 1
 
@@ -384,32 +404,34 @@ def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, da
 
 
 def record_stream_play_minutes(conn, user_id, lease_id, minutes):
-    """Accumulate active-stream minutes for the current MSK calendar day."""
+    """Accumulate active-stream minutes for this lease on the current MSK calendar day."""
     if not user_id or not lease_id or minutes <= 0:
         return fetch_lease_row(conn, lease_id)
     play_date = msk_today()
-    daily = ensure_daily_play_row(conn, user_id, play_date)
+    daily = ensure_daily_play_row(conn, user_id, lease_id, play_date)
+    if not daily:
+        return fetch_lease_row(conn, lease_id)
     new_seconds = int(daily.get("StreamSeconds") or 0) + int(minutes) * 60
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE CloudStreaming_DailyPlay SET StreamSeconds=%s "
-            "WHERE UserID=%s AND PlayDateMSK=%s",
-            (new_seconds, user_id, play_date),
+            "WHERE LeaseID=%s AND PlayDateMSK=%s",
+            (new_seconds, lease_id, play_date),
         )
     daily["StreamSeconds"] = new_seconds
     return apply_save_retention_rules(conn, user_id, lease_id, new_seconds, daily)
 
 
 def build_save_retention_payload(conn, user_id, lease_id):
-    """Structured fields + dialog text for post-stream save freeze UI."""
+    """Structured fields + dialog text for post-stream save freeze UI (per lease/account)."""
     lease = fetch_lease_row(conn, lease_id) if lease_id else None
     play_date = msk_today()
     daily = None
-    if user_id:
+    if lease_id:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT * FROM CloudStreaming_DailyPlay WHERE UserID=%s AND PlayDateMSK=%s",
-                (user_id, play_date),
+                "SELECT * FROM CloudStreaming_DailyPlay WHERE LeaseID=%s AND PlayDateMSK=%s",
+                (lease_id, play_date),
             )
             daily = cur.fetchone()
     played_today_min = int((daily or {}).get("StreamSeconds") or 0) // 60
@@ -418,7 +440,7 @@ def build_save_retention_payload(conn, user_id, lease_id):
     ext_granted = bool(int((daily or {}).get("ExtensionGranted") or 0))
     first_window = is_lease_first_24h_window(lease)
     played_first_window_min = (
-        first_window_play_minutes(conn, user_id, lease) if (lease and user_id) else played_today_min
+        first_window_play_minutes(conn, lease) if lease else played_today_min
     )
     mins_to_freeze = (
         max(0, SAVE_FREEZE_THRESHOLD_MIN - played_first_window_min) if first_window else 0
@@ -427,14 +449,19 @@ def build_save_retention_payload(conn, user_id, lease_id):
         0 if ext_granted else max(0, SAVE_EXTEND_THRESHOLD_MIN - played_today_min)
     )
     hold_until = lease_first_window_end(lease) if first_window else None
+    account_label = lease_account_label(conn, lease) if lease else ""
+    account_prefix = (
+        ("Аккаунт «%s».\n\n" % account_label) if account_label else ""
+    )
 
     if not freeze_active:
         if first_window and mins_to_freeze > 0:
             message = (
-                "Заморозка сохранений пока не активирована.\n\n"
-                "В первые 24 часа после выдачи аккаунта нужно суммарно отыграть "
-                "%s мин (можно за несколько сессий).\n"
-                "Отыграно за эти 24 часа: %s мин из %s мин — осталось ещё %s мин.\n"
+                account_prefix
+                + "Заморозка сохранений пока не активирована.\n\n"
+                "В первые 24 часа после выдачи этого аккаунта нужно суммарно отыграть "
+                "%s мин именно на нём (можно за несколько сессий).\n"
+                "Отыграно за эти 24 часа на этом аккаунте: %s мин из %s мин — осталось ещё %s мин.\n"
                 "После этого сохранения будут храниться %s часов.\n"
                 "Аккаунт закреплён за вами до %s МСК."
                 % (
@@ -448,31 +475,38 @@ def build_save_retention_payload(conn, user_id, lease_id):
             )
         elif first_window:
             message = (
-                "Порог для заморозки (%s мин суммарно за первые 24 часа после выдачи) "
-                "достигнут — заморозка будет активирована."
+                account_prefix
+                + "Порог для заморозки (%s мин суммарно за первые 24 часа после выдачи "
+                "этого аккаунта) достигнут — заморозка будет активирована."
                 % SAVE_FREEZE_THRESHOLD_MIN
             )
         else:
             message = (
-                "Заморозка сохранений не активна.\n\n"
+                account_prefix
+                + "Заморозка сохранений не активна.\n\n"
                 "Первоначальная заморозка (48 ч) доступна только в первые 24 часа "
-                "после выдачи аккаунта: нужно суммарно отыграть не менее %s мин "
-                "за это окно (можно за несколько сессий)."
+                "после выдачи этого аккаунта: нужно суммарно отыграть не менее %s мин "
+                "на нём за это окно (можно за несколько сессий)."
                 % SAVE_FREEZE_THRESHOLD_MIN
             )
     else:
         until_str = fmt_dt_msk(retention_until)
-        parts = ["Сохранения заморожены до:\n%s." % until_str]
+        parts = [
+            (account_prefix + "Сохранения заморожены до:\n%s." % until_str).strip()
+            if account_prefix
+            else ("Сохранения заморожены до:\n%s." % until_str)
+        ]
         if ext_granted:
             parts.append(
                 "Продление хранения на +1 день за сегодня уже получено "
-                "(не более одного раза в сутки по МСК, 00:00–23:59)."
+                "для этого аккаунта (не более одного раза в сутки по МСК, 00:00–23:59)."
             )
         elif mins_to_extend > 0:
             parts.append(
-                "Чтобы продлить хранение сохранений ещё на 1 день, "
-                "отыграйте ещё %s мин. сегодня (по московскому времени, 00:00–23:59).\n"
-                "Сегодня отыграно: %s мин из %s мин."
+                "Чтобы продлить хранение сохранений этого аккаунта ещё на 1 день, "
+                "отыграйте ещё %s мин. сегодня именно на нём "
+                "(по московскому времени, 00:00–23:59).\n"
+                "Сегодня на этом аккаунте отыграно: %s мин из %s мин."
                 % (mins_to_extend, played_today_min, SAVE_EXTEND_THRESHOLD_MIN)
             )
         else:
@@ -490,6 +524,9 @@ def build_save_retention_payload(conn, user_id, lease_id):
         "extension_granted_today": ext_granted,
         "save_hold_until": fmt_dt(hold_until) if hold_until else "",
         "save_retention_message": message,
+        "lease_id": int(lease_id) if lease_id else None,
+        "account_id": int(lease.get("AccountID")) if lease and lease.get("AccountID") is not None else None,
+        "account_label": account_label,
     }
 
 
@@ -992,6 +1029,141 @@ def _column_exists(conn, table, column):
         return cur.fetchone() is not None
 
 
+def _drop_fk_if_exists(conn, table, constraint_name):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s "
+            "AND CONSTRAINT_TYPE='FOREIGN KEY' AND CONSTRAINT_NAME=%s LIMIT 1",
+            (table, constraint_name),
+        )
+        if cur.fetchone():
+            cur.execute(
+                "ALTER TABLE `%s` DROP FOREIGN KEY `%s`"
+                % (table.replace("`", ""), constraint_name.replace("`", ""))
+            )
+
+
+def ensure_daily_play_per_lease_schema(conn):
+    """Idempotent: DailyPlay is keyed by (LeaseID, PlayDateMSK), not per-user."""
+    if not _table_exists(conn, "CloudStreaming_DailyPlay"):
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE CloudStreaming_DailyPlay (
+                    UserID BIGINT UNSIGNED NOT NULL,
+                    LeaseID BIGINT UNSIGNED NOT NULL,
+                    AccountID BIGINT UNSIGNED NOT NULL,
+                    PlayDateMSK DATE NOT NULL,
+                    StreamSeconds INT UNSIGNED NOT NULL DEFAULT 0,
+                    ExtensionGranted TINYINT(1) NOT NULL DEFAULT 0,
+                    CreatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                    UpdatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                        ON UPDATE CURRENT_TIMESTAMP(3),
+                    PRIMARY KEY (LeaseID, PlayDateMSK),
+                    KEY idx_cs_daily_user_date (UserID, PlayDateMSK),
+                    CONSTRAINT fk_cs_daily_user FOREIGN KEY (UserID)
+                        REFERENCES tableu(ID) ON DELETE CASCADE,
+                    CONSTRAINT fk_cs_daily_lease FOREIGN KEY (LeaseID)
+                        REFERENCES CloudStreaming_Leases(ID) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        conn.commit()
+        return
+
+    if not _column_exists(conn, "CloudStreaming_DailyPlay", "LeaseID"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_DailyPlay "
+                "ADD COLUMN LeaseID BIGINT UNSIGNED NULL AFTER UserID, "
+                "ADD COLUMN AccountID BIGINT UNSIGNED NULL AFTER LeaseID"
+            )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE CloudStreaming_DailyPlay d "
+            "JOIN ("
+            "  SELECT UserID, MIN(ID) AS LeaseID FROM CloudStreaming_Leases GROUP BY UserID"
+            ") x ON x.UserID = d.UserID "
+            "JOIN CloudStreaming_Leases l ON l.ID = x.LeaseID "
+            "SET d.LeaseID = l.ID, d.AccountID = l.AccountID "
+            "WHERE d.LeaseID IS NULL"
+        )
+        cur.execute("DELETE FROM CloudStreaming_DailyPlay WHERE LeaseID IS NULL")
+        cur.execute(
+            "UPDATE CloudStreaming_DailyPlay d "
+            "JOIN CloudStreaming_Leases l ON l.ID = d.LeaseID "
+            "SET d.AccountID = l.AccountID "
+            "WHERE d.AccountID IS NULL OR d.AccountID <> l.AccountID"
+        )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM information_schema.KEY_COLUMN_USAGE "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='CloudStreaming_DailyPlay' "
+            "AND CONSTRAINT_NAME='PRIMARY' AND COLUMN_NAME='LeaseID'"
+        )
+        pk_has_lease = int((cur.fetchone() or {}).get("c") or 0) > 0
+
+    if not pk_has_lease:
+        _drop_fk_if_exists(conn, "CloudStreaming_DailyPlay", "fk_cs_daily_user")
+        _drop_fk_if_exists(conn, "CloudStreaming_DailyPlay", "fk_cs_daily_lease")
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE CloudStreaming_DailyPlay DROP PRIMARY KEY")
+            cur.execute(
+                "ALTER TABLE CloudStreaming_DailyPlay "
+                "MODIFY LeaseID BIGINT UNSIGNED NOT NULL, "
+                "MODIFY AccountID BIGINT UNSIGNED NOT NULL, "
+                "ADD PRIMARY KEY (LeaseID, PlayDateMSK)"
+            )
+    else:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_DailyPlay "
+                "MODIFY LeaseID BIGINT UNSIGNED NOT NULL, "
+                "MODIFY AccountID BIGINT UNSIGNED NOT NULL"
+            )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='CloudStreaming_DailyPlay' "
+            "AND INDEX_NAME='idx_cs_daily_user_date'"
+        )
+        if int((cur.fetchone() or {}).get("c") or 0) == 0:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_DailyPlay "
+                "ADD KEY idx_cs_daily_user_date (UserID, PlayDateMSK)"
+            )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM information_schema.TABLE_CONSTRAINTS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='CloudStreaming_DailyPlay' "
+            "AND CONSTRAINT_NAME='fk_cs_daily_user'"
+        )
+        if int((cur.fetchone() or {}).get("c") or 0) == 0:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_DailyPlay "
+                "ADD CONSTRAINT fk_cs_daily_user FOREIGN KEY (UserID) "
+                "REFERENCES tableu(ID) ON DELETE CASCADE"
+            )
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM information_schema.TABLE_CONSTRAINTS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='CloudStreaming_DailyPlay' "
+            "AND CONSTRAINT_NAME='fk_cs_daily_lease'"
+        )
+        if int((cur.fetchone() or {}).get("c") or 0) == 0:
+            cur.execute(
+                "ALTER TABLE CloudStreaming_DailyPlay "
+                "ADD CONSTRAINT fk_cs_daily_lease FOREIGN KEY (LeaseID) "
+                "REFERENCES CloudStreaming_Leases(ID) ON DELETE CASCADE"
+            )
+    conn.commit()
+    log.info("DailyPlay schema OK (per-lease)")
+
+
 def verify_schema(conn):
     """Fail fast at startup when the catalog migration was not applied."""
     required = [
@@ -1011,6 +1183,7 @@ def verify_schema(conn):
             % ", ".join(missing)
         )
     ensure_sessions_balance_schema(conn)
+    ensure_daily_play_per_lease_schema(conn)
 
 
 def ensure_user(conn, email):

@@ -160,16 +160,21 @@ CREATE TABLE IF NOT EXISTS CloudStreaming_Leases (
     CONSTRAINT fk_cs_lease_account FOREIGN KEY (AccountID) REFERENCES CloudStreaming_Accounts(ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Daily active-stream time per user (calendar day Europe/Moscow, server-side)
+-- Daily active-stream time per lease (calendar day Europe/Moscow)
+-- Freeze / retention thresholds are evaluated per LeaseID, not per user.
 CREATE TABLE IF NOT EXISTS CloudStreaming_DailyPlay (
     UserID              BIGINT UNSIGNED NOT NULL COMMENT 'FK tableu.ID',
+    LeaseID             BIGINT UNSIGNED NOT NULL COMMENT 'FK CloudStreaming_Leases.ID',
+    AccountID           BIGINT UNSIGNED NOT NULL COMMENT 'denormalized from lease for admin queries',
     PlayDateMSK         DATE NOT NULL,
     StreamSeconds       INT UNSIGNED NOT NULL DEFAULT 0,
-    ExtensionGranted    TINYINT(1) NOT NULL DEFAULT 0,
+    ExtensionGranted    TINYINT(1) NOT NULL DEFAULT 0 COMMENT '+1 day retention already granted this MSK day for this lease',
     CreatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UpdatedAt           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    PRIMARY KEY (UserID, PlayDateMSK),
-    CONSTRAINT fk_cs_daily_user FOREIGN KEY (UserID) REFERENCES tableu(ID) ON DELETE CASCADE
+    PRIMARY KEY (LeaseID, PlayDateMSK),
+    KEY idx_cs_daily_user_date (UserID, PlayDateMSK),
+    CONSTRAINT fk_cs_daily_user FOREIGN KEY (UserID) REFERENCES tableu(ID) ON DELETE CASCADE,
+    CONSTRAINT fk_cs_daily_lease FOREIGN KEY (LeaseID) REFERENCES CloudStreaming_Leases(ID) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
