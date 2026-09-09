@@ -1717,88 +1717,82 @@ Pane {
         property string promptText: ""
         property var accounts: []
         property var onPicked: null
-        title: qsTr("Выбор аккаунта")
+        // Same proven pattern as tagFilterPopup / ConfirmDialog
         parent: Overlay.overlay
-        x: Math.round((Overlay.overlay.width - width) / 2)
-        y: Math.round((Overlay.overlay.height - height) / 2)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        width: 440
         modal: true
-        width: Math.min(480, Overlay.overlay.width - 40)
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        title: qsTr("Выбор аккаунта")
         Material.roundedScale: Material.MediumScale
-        background: Rectangle {
-            color: "#121820"
-            radius: 12
-            border.width: 1
-            border.color: Qt.rgba(0.18, 0.77, 0.71, 0.35)
-        }
+
         Component.onCompleted: {
-            if (header) {
-                header.horizontalAlignment = Text.AlignHCenter;
-                header.background = null;
-            }
+            header.horizontalAlignment = Text.AlignHCenter;
+            header.background = null;
         }
-        onClosed: onPicked = null
+
+        background: Rectangle {
+            color: Qt.rgba(7/255, 9/255, 13/255, 0.98)
+            radius: 12
+            border.color: "#2ec4b6"
+            border.width: 2
+        }
+
+        onClosed: {
+            onPicked = null;
+            if (gamesGrid)
+                gamesGrid.forceActiveFocus(Qt.TabFocusReason);
+        }
 
         ColumnLayout {
-            spacing: 16
-            width: parent ? parent.width : 400
+            spacing: 12
 
             Label {
+                Layout.preferredWidth: 400
                 Layout.fillWidth: true
-                wrapMode: Text.Wrap
+                wrapMode: Text.WordWrap
                 color: "#e8eef2"
                 text: accountChoiceDialog.promptText
             }
 
             Repeater {
                 model: accountChoiceDialog.accounts
-                delegate: Rectangle {
+                delegate: Button {
+                    Layout.preferredWidth: 400
                     Layout.fillWidth: true
-                    implicitHeight: accountCol.implicitHeight + 24
-                    radius: 8
-                    color: modelData.played_before ? "#1a3d38" : "#1a9b8e"
-                    border.width: modelData.played_before ? 1 : 0
-                    border.color: Qt.rgba(0.18, 0.77, 0.71, 0.55)
-
-                    ColumnLayout {
-                        id: accountCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.leftMargin: 14
-                        anchors.rightMargin: 14
+                    flat: true
+                    Material.background: modelData.played_before ? "#1a3d38" : Material.accent
+                    Material.roundedScale: Material.SmallScale
+                    contentItem: Column {
                         spacing: 4
-
+                        width: parent.width
                         Label {
-                            Layout.fillWidth: true
+                            width: parent.width
                             horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.Wrap
+                            wrapMode: Text.WordWrap
                             color: "white"
-                            font.pixelSize: 14
                             text: {
                                 let label = modelData.label || qsTr("Аккаунт #%1").arg(modelData.account_id);
                                 return modelData.has_ps_plus ? (label + " · PS Plus") : label;
                             }
                         }
                         Label {
-                            Layout.fillWidth: true
+                            width: parent.width
                             horizontalAlignment: Text.AlignHCenter
                             visible: !!modelData.played_before
                             font.pixelSize: 12
-                            color: Qt.rgba(0.78, 0.95, 0.92, 0.95)
+                            color: "#9fd9d2"
                             text: qsTr("играли ранее")
                         }
                     }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            let cb = accountChoiceDialog.onPicked;
-                            let aid = modelData.account_id || 0;
-                            accountChoiceDialog.close();
-                            if (cb)
-                                cb(aid);
-                        }
+                    onClicked: {
+                        let cb = accountChoiceDialog.onPicked;
+                        let aid = modelData.account_id || 0;
+                        accountChoiceDialog.close();
+                        if (cb)
+                            cb(aid);
                     }
                 }
             }
