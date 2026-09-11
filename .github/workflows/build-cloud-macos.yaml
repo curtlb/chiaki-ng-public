@@ -127,12 +127,27 @@ jobs:
           # Brew bottles on macos-15 link std::to_chars(double/float), which only
           # exists in Apple libc++ from macOS 13.3+. Mac mini 2014 often runs 12.x
           # → dyld: Symbol not found: __ZNSt3__18to_charsEPcS0_d in libplacebo.
-          PREFIX="${GITHUB_WORKSPACE}/deps-prefix"
-          rm -rf libplacebo-src "$PREFIX"
-          mkdir -p "$PREFIX"
-          git clone --depth 1 --recursive https://github.com/haasn/libplacebo.git libplacebo-src
+          #
+          # Rebuild the *same* brew version and overwrite the Cellar dylibs so
+          # headers/ABI stay matched (master tip caused _pl_log_create_360 mismatch).
+          LP_VER="$(pkg-config --modversion libplacebo)"
+          BREW_LP="$(brew --prefix libplacebo)"
+          echo "Rebuilding libplacebo ${LP_VER} into ${BREW_LP}"
+          rm -rf libplacebo-src
+          git clone --recursive https://github.com/haasn/libplacebo.git libplacebo-src
           cd libplacebo-src
-          meson setup build --prefix="$PREFIX" --buildtype=release \
+          git fetch --tags --force
+          if git rev-parse "v${LP_VER}" >/dev/null 2>&1; then
+            git checkout "v${LP_VER}"
+          elif git rev-parse "${LP_VER}" >/dev/null 2>&1; then
+            git checkout "${LP_VER}"
+          else
+            echo "::error::Could not find libplacebo tag for ${LP_VER}"
+            git tag -l 'v7.*' | tail -n 20
+            exit 1
+          fi
+          git submodule update --init --recursive
+          meson setup build --prefix="$BREW_LP" --buildtype=release \
             -Ddefault_library=shared \
             -Dxxhash=disabled \
             -Ddemos=false \
@@ -145,40 +160,39 @@ jobs:
           meson compile -C build
           meson install -C build
           # Ensure float/double to_chars are not required at runtime.
-          if nm -gU "$PREFIX"/lib/libplacebo*.dylib 2>/dev/null | grep -E 'to_charsEPcS0_[fd]'; then
+          if nm -gU "$BREW_LP"/lib/libplacebo*.dylib 2>/dev/null | grep -E 'to_charsEPcS0_[fd]'; then
             echo "::error::Rebuilt libplacebo still references float/double std::to_chars"
-            nm -gU "$PREFIX"/lib/libplacebo*.dylib | grep to_chars || true
+            nm -gU "$BREW_LP"/lib/libplacebo*.dylib | grep to_chars || true
             exit 1
           fi
-          echo "PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=${PREFIX};$(brew --prefix)/opt/openssl@3;$(brew --prefix)/opt/chiaki-ng-qt@6;$(brew --prefix)/opt/protobuf@29" >> "$GITHUB_ENV"
-          echo "Rebuilt libplacebo:"
-          ls -la "$PREFIX"/lib/libplacebo*
+          echo "Rebuilt libplacebo ${LP_VER}:"
+          ls -la "$BREW_LP"/lib/libplacebo*
+          nm -gU "$BREW_LP"/lib/libplacebo.dylib | grep 'pl_log_create' || true
 
       - name: Configure chiaki-ng
         run: |
           cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}" \
             -DCHIAKI_ENABLE_CLI=OFF -DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF \
-            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
+            -DCMAKE_PREFIX_PATH="$(brew --prefix)/opt/openssl@3;$(brew --prefix)/opt/chiaki-ng-qt@6;$(brew --prefix)/opt/protobuf@29"
 
       - name: Build chiaki-ng
         run: |
           export CPATH=$(brew --prefix)/opt/ffmpeg/include
-          export LIBRARY_PATH="${GITHUB_WORKSPACE}/deps-prefix/lib:${LIBRARY_PATH:-}"
           cmake --build build --config Release --clean-first --target chiaki
+
       - name: Deploy chiaki-ng
         run: |
           set -euo pipefail
-          PREFIX="${GITHUB_WORKSPACE}/deps-prefix"
+          BREW_LP="$(brew --prefix libplacebo)"
           cp -a build/gui/chiaki.app chiaki-ng.app
           cp scripts/qtwebengine_import.qml gui/src/qml/
           QTBIN="$(brew --prefix)/opt/chiaki-ng-qt@6/bin"
           QTLIB="$(brew --prefix)/opt/chiaki-ng-qt@6/lib"
-          "$QTBIN/macdeployqt" chiaki-ng.app -qmldir="$PWD/gui/src/qml" -libpath="$PREFIX/lib:$QTLIB"
-          # Force-bundle the macOS-12-compatible libplacebo (overwrite brew bottle if any).
+          "$QTBIN/macdeployqt" chiaki-ng.app -qmldir="$PWD/gui/src/qml" -libpath="$QTLIB"
+          # Force-bundle the macOS-12-compatible libplacebo (overwrite bottle copy if any).
           mkdir -p chiaki-ng.app/Contents/Frameworks
-          cp -f "$PREFIX"/lib/libplacebo*.dylib chiaki-ng.app/Contents/Frameworks/
+          cp -f "$BREW_LP"/lib/libplacebo*.dylib chiaki-ng.app/Contents/Frameworks/
           for dylib in chiaki-ng.app/Contents/Frameworks/libplacebo*.dylib; do
             [[ -f "$dylib" ]] || continue
             install_name_tool -id "@executable_path/../Frameworks/$(basename "$dylib")" "$dylib" || true
@@ -208,9 +222,9 @@ jobs:
             || /usr/libexec/PlistBuddy -c "Set :LSEnvironment:MVK_CONFIG_LIE_MACOSV 14.8.1" chiaki-ng.app/Contents/Info.plist
           /usr/libexec/PlistBuddy -c "Add :LSEnvironment:QT_MTL_NO_TRANSACTION string 1" chiaki-ng.app/Contents/Info.plist 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Set :LSEnvironment:QT_MTL_NO_TRANSACTION 1" chiaki-ng.app/Contents/Info.plist
-          "$QTBIN/macdeployqt" chiaki-ng.app -qmldir="$PWD/gui/src/qml" -libpath="$PREFIX/lib:$QTLIB"
-          # macdeployqt may restore brew libplacebo — overwrite again.
-          cp -f "$PREFIX"/lib/libplacebo*.dylib chiaki-ng.app/Contents/Frameworks/
+          "$QTBIN/macdeployqt" chiaki-ng.app -qmldir="$PWD/gui/src/qml" -libpath="$QTLIB"
+          # macdeployqt may restore an older copy — overwrite again from rebuilt Cellar.
+          cp -f "$BREW_LP"/lib/libplacebo*.dylib chiaki-ng.app/Contents/Frameworks/
           for dylib in chiaki-ng.app/Contents/Frameworks/libplacebo*.dylib; do
             [[ -f "$dylib" ]] || continue
             install_name_tool -id "@executable_path/../Frameworks/$(basename "$dylib")" "$dylib" || true
