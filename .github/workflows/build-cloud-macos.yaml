@@ -137,10 +137,26 @@ jobs:
           QTLIB="$(brew --prefix)/opt/chiaki-ng-qt@6/lib"
           "$QTBIN/macdeployqt" chiaki-ng.app -qmldir="$PWD/gui/src/qml" -libpath="$QTLIB"
           mkdir -p chiaki-ng.app/Contents/Resources/vulkan/icd.d
+          # Intel Iris / older Macs crash with MoltenVK 1.4.x (esp. Sequoia via OCLP).
+          # Pin 1.2.9 which is known to work on Mac mini 2014-class GPUs.
           curl -fsSL -o MoltenVK-macos.tar \
-            https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-macos.tar
+            https://github.com/KhronosGroup/MoltenVK/releases/download/v1.2.9/MoltenVK-macos.tar
           tar xf MoltenVK-macos.tar
-          cp MoltenVK/MoltenVK/dylib/macOS/* chiaki-ng.app/Contents/Resources/vulkan/icd.d
+          # Layout differs slightly across MoltenVK releases.
+          if [[ -d MoltenVK/MoltenVK/dylib/macOS ]]; then
+            cp MoltenVK/MoltenVK/dylib/macOS/* chiaki-ng.app/Contents/Resources/vulkan/icd.d/
+          elif [[ -d MoltenVK/dylib/macOS ]]; then
+            cp MoltenVK/dylib/macOS/* chiaki-ng.app/Contents/Resources/vulkan/icd.d/
+          else
+            find MoltenVK -name 'libMoltenVK*' -print -exec cp {} chiaki-ng.app/Contents/Resources/vulkan/icd.d/ \;
+            find MoltenVK -name 'MoltenVK_icd.json' -print -exec cp {} chiaki-ng.app/Contents/Resources/vulkan/icd.d/ \;
+          fi
+          # Help MoltenVK on unsupported/newer macOS versions on old hardware.
+          /usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" chiaki-ng.app/Contents/Info.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :LSEnvironment:MVK_CONFIG_LIE_MACOSV string 14.8.1" chiaki-ng.app/Contents/Info.plist 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :LSEnvironment:MVK_CONFIG_LIE_MACOSV 14.8.1" chiaki-ng.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :LSEnvironment:QT_MTL_NO_TRANSACTION string 1" chiaki-ng.app/Contents/Info.plist 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :LSEnvironment:QT_MTL_NO_TRANSACTION 1" chiaki-ng.app/Contents/Info.plist
           "$QTBIN/macdeployqt" chiaki-ng.app -qmldir="$PWD/gui/src/qml" -libpath="$QTLIB"
           if [[ -d chiaki-ng.app/Contents/Frameworks/QtWebEngineCore.framework/Helpers/QtWebEngineProcess.app ]]; then
             ln -sf ../../../../../../../Frameworks \
