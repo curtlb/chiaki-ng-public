@@ -27,6 +27,7 @@
 
 
 #define SENKUSHA_PORT 9297
+#define SENKUSHA_PORT_OFFSET_FROM_BASE 1000
 
 #define EXPECT_TIMEOUT_MS 5000
 #define CONNECT_TIMEOUT_MS 30000
@@ -151,8 +152,14 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		}
 
 		memcpy(takion_info.sa, session->connect_info.host_addrinfo_selected->ai_addr, takion_info.sa_len);
-		// Cloud streaming: use cloud port, Remote Play: use SENKUSHA_PORT
-		uint16_t port = (chiaki_service_type_is_cloud(session->service_type) && session->cloud_port > 0) ? session->cloud_port : SENKUSHA_PORT;
+		// Cloud: cloud_port. Remote play: jwt custom_port_base - 1000, else default 9297.
+		uint16_t port;
+		if(chiaki_service_type_is_cloud(session->service_type) && session->cloud_port > 0)
+			port = session->cloud_port;
+		else if(session->connect_info.custom_port_base)
+			port = session->connect_info.custom_port_base - SENKUSHA_PORT_OFFSET_FROM_BASE;
+		else
+			port = SENKUSHA_PORT;
 		err = set_port(takion_info.sa, htons(port));
 		assert(err == CHIAKI_ERR_SUCCESS);
 	}

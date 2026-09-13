@@ -30,6 +30,7 @@
 
 
 #define STREAM_CONNECTION_PORT 9296
+#define STREAM_CONNECTION_PORT_OFFSET_FROM_BASE 2000
 
 #define EXPECT_TIMEOUT_MS 5000
 
@@ -188,11 +189,18 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 		if(!takion_info.sa)
 			return CHIAKI_ERR_MEMORY;
 		memcpy(takion_info.sa, session->connect_info.host_addrinfo_selected->ai_addr, takion_info.sa_len);
-		// Cloud streaming: use API-provided port, Remote play: use default port
+		// Cloud: API cloud_port. Remote play: jwt custom_port_base - 2000, else default 9296.
 		const bool is_cloud = chiaki_service_type_is_cloud(session->service_type);
-		uint16_t port = (is_cloud && session->cloud_port > 0) ? session->cloud_port : STREAM_CONNECTION_PORT;
-		CHIAKI_LOGI(session->log, "Setting Takion connection port=%u (service_type=%s, cloud_port=%u)", 
-			port, chiaki_service_type_string(session->service_type), session->cloud_port);
+		uint16_t port;
+		if(is_cloud && session->cloud_port > 0)
+			port = session->cloud_port;
+		else if(session->connect_info.custom_port_base)
+			port = session->connect_info.custom_port_base - STREAM_CONNECTION_PORT_OFFSET_FROM_BASE;
+		else
+			port = STREAM_CONNECTION_PORT;
+		CHIAKI_LOGI(session->log, "Setting Takion connection port=%u (service_type=%s, cloud_port=%u, custom_port_base=%u)",
+			port, chiaki_service_type_string(session->service_type), session->cloud_port,
+			session->connect_info.custom_port_base);
 		err = set_port(takion_info.sa, htons(port));
 		assert(err == CHIAKI_ERR_SUCCESS);
 	}
