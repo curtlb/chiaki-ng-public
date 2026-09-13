@@ -4,6 +4,7 @@
 #include <settings.h>
 #include <controllermanager.h>
 #include <gamelauncher.h>
+#include <wifibandchecker.h>
 
 #include <chiaki/base64.h>
 #include <chiaki/streamconnection.h>
@@ -318,6 +319,12 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	input_block = 0;
 	player_index = 0;
 	memset(led_color, 0, sizeof(led_color));
+
+	{
+		const WifiBandChecker::LinkInfo net = WifiBandChecker::inspect();
+		CHIAKI_LOGI(GetChiakiLog(), "Network connection: %s", qPrintable(net.summary()));
+	}
+
 	ChiakiErrorCode err;
 #if CHIAKI_LIB_ENABLE_PI_DECODER
 	if(connect_info.decoder == Decoder::Pi)

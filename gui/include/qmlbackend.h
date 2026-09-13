@@ -19,6 +19,7 @@
 #include <QNetworkCookieJar>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <functional>
 #ifdef CHIAKI_HAVE_WEBENGINE
 #include <QQuickWebEngineProfile>
 #include <QWebEngineUrlRequestInterceptor>
@@ -229,6 +230,8 @@ public:
     Q_INVOKABLE void unhideHost(const QString &mac_string);
     Q_INVOKABLE bool registerHost(const QString &host, const QString &psn_id, const QString &pin, const QString &cpin, bool broadcast, int target, const QJSValue &callback);
     Q_INVOKABLE void connectToHost(int index, QString nickname = QString());
+    Q_INVOKABLE void proceedAfterWifi24Warning(bool proceed);
+    Q_INVOKABLE void runWithWifi24Check(const QJSValue &continueCallback);
     Q_INVOKABLE void stopSession(bool sleep);
     Q_INVOKABLE void reconnectCloudSession();
     Q_INVOKABLE void sessionGoHome();
@@ -294,6 +297,7 @@ signals:
     void sessionError(const QString &title, const QString &text);
     void sessionPinDialogRequested();
     void sessionStopDialogRequested();
+    void wifi24GhzWarningRequested(const QString &message);
     void cloudSessionReconnectingChanged();
     void registDialogRequested(const QString &host, bool ps5, const QString &duid);
     void psnLoginAccountIdDone(const QString &accountId);
@@ -336,6 +340,8 @@ private:
     bool sendWakeup(const DisplayServer &server);
     bool sendWakeup(const QString &host, const QByteArray &regist_key, bool ps5);
     void continueConnectToHost(int index, QString nickname, bool need_wakeup);
+    void beginConnectToHost(int index, QString nickname);
+    bool maybeWarnWifi24Then(const std::function<void()> &cont);
     void updateControllers();
     void updateControllerMappings();
     void updateDiscoveryHosts();
@@ -420,6 +426,7 @@ private:
     QTimer *subscription_expiry_timer = nullptr;
     void fetchSubscriptionExpiry();
     void startSubscriptionExpiryTimer();
+    std::function<void()> pending_wifi_continue_;
     QMap<QString, PsnHost> psn_hosts = {};
     QMap<QString, PsnHost> psn_nickname_hosts = {};
 #ifdef CHIAKI_HAVE_WEBENGINE

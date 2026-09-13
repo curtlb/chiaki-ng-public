@@ -10,6 +10,7 @@
 #include "crashreporter.h"
 #include "cloudlog.h"
 #include "cloudbillingclient.h"
+#include "wifibandchecker.h"
 #include "chiaki/remote/holepunch.h"
 #ifdef Q_OS_MACOS
 #include "macWakeSleep.h"
@@ -99,6 +100,29 @@ static void ResizeWindowForStream(QmlMainWindow *window, Settings *settings, uns
 	{
 		window->resize((int)width, (int)height);
 	}
+}
+
+// Robust Port field from UDP auth / JWT decode (number, string, or null).
+static int parseAuthPortValue(const QJsonValue &v)
+{
+	if (v.isUndefined() || v.isNull())
+		return 0;
+	if (v.isDouble() || v.isBool())
+		return v.toInt(0);
+	if (v.isString()) {
+		bool ok = false;
+		const int n = v.toString().trimmed().toInt(&ok);
+		return (ok && n > 0 && n <= 65535) ? n : 0;
+	}
+	return v.toInt(0);
+}
+
+static int parseAuthPortFromObjects(const QJsonObject &session, const QJsonObject &decodeObj)
+{
+	int portVal = parseAuthPortValue(session.value(QStringLiteral("Port")));
+	if (portVal <= 0)
+		portVal = parseAuthPortValue(decodeObj.value(QStringLiteral("Port")));
+	return portVal;
 }
 
 // Парсит ответ status_console.php (тело ответа). Не смотрим на HTTP код. Пробуем UTF-8 и Windows-1251.
@@ -1537,11 +1561,59 @@ void QmlBackend::connectToHost(int index, QString nickname)
     if (nickname.isEmpty() && server.registered)
         nickname = server.registered_host.GetServerNickname();
 
+    maybeWarnWifi24Then([this, index, nickname]() {
+        beginConnectToHost(index, nickname);
+    });
+}
+
+bool QmlBackend::maybeWarnWifi24Then(const std::function<void()> &cont)
+{
+    const WifiBandChecker::LinkInfo net = WifiBandChecker::inspect();
+    qCInfo(chiakiGui) << "[network]" << net.summary();
+    if (!net.isWifi24()) {
+        cont();
+        return false;
+    }
+    pending_wifi_continue_ = cont;
+    emit wifi24GhzWarningRequested(
+        QStringLiteral("Сейчас используется Wi‑Fi 2.4 ГГц (%1).\n\n"
+                       "Для стриминга рекомендуется Wi‑Fi 5 ГГц или Ethernet — "
+                       "на 2.4 ГГц чаще бывают лаги и потери пакетов.")
+            .arg(net.summary()));
+    return true;
+}
+
+void QmlBackend::proceedAfterWifi24Warning(bool proceed)
+{
+    auto cont = pending_wifi_continue_;
+    pending_wifi_continue_ = {};
+    if (proceed && cont)
+        cont();
+}
+
+void QmlBackend::runWithWifi24Check(const QJSValue &continueCallback)
+{
+    maybeWarnWifi24Then([continueCallback]() {
+        if (continueCallback.isCallable())
+            const_cast<QJSValue &>(continueCallback).call();
+    });
+}
+
+void QmlBackend::beginConnectToHost(int index, QString nickname)
+{
+    auto server = displayServerAt(index);
+    if (!server.valid)
+        return;
+
+    if (nickname.isEmpty() && server.registered)
+        nickname = server.registered_host.GetServerNickname();
+
     QString nps4 = settings->GetNps4();
     if (nps4.isEmpty()) {
         bool need_wakeup = (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY)
                         || (settings->GetJwtPort() != 0 && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN));
-        qCInfo(chiakiGui) << "[4cloud connect] no NPS4, need_wakeup from discovery:" << need_wakeup;
+        qCInfo(chiakiGui) << "[4cloud connect] no NPS4, need_wakeup from discovery:" << need_wakeup
+                          << "jwt_port=" << settings->GetJwtPort();
         continueConnectToHost(index, nickname, need_wakeup);
         return;
     }
@@ -1580,7 +1652,10 @@ void QmlBackend::connectToHost(int index, QString nickname)
                          || (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY);
         }
         qCInfo(chiakiGui) << "[4cloud status] status:" << (status.isEmpty() ? "parse_failed" : status)
-            << "need_wakeup:" << need_wakeup << "-> continueConnectToHost";
+            << "need_wakeup:" << need_wakeup
+            << "jwt_port=" << settings->GetJwtPort()
+            << "nps4=" << settings->GetNps4()
+            << "-> continueConnectToHost";
         continueConnectToHost(index, resolved_nickname, need_wakeup);
     });
 }
@@ -1650,6 +1725,8 @@ void QmlBackend::continueConnectToHost(int index, QString nickname, bool need_wa
                 zoom,
                 stretch);
         info.custom_port_base = settings->GetJwtPort();
+        qCInfo(chiakiGui) << "[4cloud connect] createSession custom_port_base=" << info.custom_port_base
+                          << "nps4=" << settings->GetNps4();
         createSession(info);
     }
     else
@@ -2064,8 +2141,7 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
             emit authenticationError(QStringLiteral("Ответ не содержит JWT токена"));
         else {
             settings->SetJwtToken("");
-            settings->SetJwtPort(0);
-            settings->SetNps4("");
+            // Keep jwt_port / nps4 sticky across auth refresh failures.
             clearAuthEntitlements();
             clearFourcloudState();
             emit jwtTokenExpired();
@@ -2077,8 +2153,7 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
     const bool cloud_access = session.value(QStringLiteral("cloud_access")).toBool();
     if (!console_access && !cloud_access) {
         settings->SetJwtToken("");
-        settings->SetJwtPort(0);
-        settings->SetNps4("");
+        // Keep custom ports sticky — do not reset to 9295–9302 defaults.
         settings->SetSubscriptionExpiryDate("");
         clearAuthEntitlements();
         clearFourcloudState();
@@ -2114,10 +2189,20 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
             cloud_catalog_backend->invalidateCache();
     }
 
-    int portVal = session.value(QStringLiteral("Port")).toInt(0);
-    if (portVal <= 0)
-        portVal = decodeObj.value(QStringLiteral("Port")).toInt(0);
-    settings->SetJwtPort((portVal > 0 && portVal <= 65535) ? static_cast<uint16_t>(portVal) : 0);
+    int portVal = parseAuthPortFromObjects(session, decodeObj);
+    // Sticky: never wipe a known custom port just because auth omitted Port
+    // (offline status / transient Stablecreds miss / cloud-only refresh).
+    if (portVal > 0 && portVal <= 65535) {
+        settings->SetJwtPort(static_cast<uint16_t>(portVal));
+    } else if (!console_access && settings->GetJwtPort() == 0) {
+        // no-op: already empty
+    } else if (portVal <= 0 && settings->GetJwtPort() != 0) {
+        qCInfo(chiakiGui) << "[4cloud auth] Port missing in response, keeping jwt_port="
+                          << settings->GetJwtPort();
+    } else {
+        // Only clear when we truly have no prior port and no Port in payload.
+        settings->SetJwtPort(0);
+    }
     if (settings->GetJwtPort() != 0)
         discovery_manager.RefreshManualServices();
 
@@ -2128,7 +2213,19 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
         nps4 = decodeObj.value(QStringLiteral("NP")).toString().trimmed();
     if (nps4.isEmpty())
         nps4 = decodeObj.value(QStringLiteral("NPS4")).toString().trimmed();
-    settings->SetNps4(console_access ? nps4 : QString());
+    // Sticky NPS4: keep last known value if auth omitted NP (e.g. transient / offline).
+    if (!nps4.isEmpty())
+        settings->SetNps4(nps4);
+    else if (!console_access && settings->GetNps4().isEmpty())
+        settings->SetNps4(QString());
+    else if (nps4.isEmpty() && !settings->GetNps4().isEmpty())
+        qCInfo(chiakiGui) << "[4cloud auth] NPS4 missing in response, keeping nps4=" << settings->GetNps4();
+    else if (!console_access)
+        settings->SetNps4(QString());
+
+    qCInfo(chiakiGui) << "[4cloud auth] applied console_access=" << console_access
+                      << "jwt_port=" << settings->GetJwtPort()
+                      << "nps4=" << settings->GetNps4();
 
     QString jwt_psn = session.value(QStringLiteral("PSN")).toString().trimmed();
     if (jwt_psn.isEmpty())
@@ -2360,8 +2457,7 @@ void QmlBackend::fetchSubscriptionExpiry()
             if (settings->GetCloudGamesAccess())
                 return;
             settings->SetJwtToken("");
-            settings->SetJwtPort(0);
-            settings->SetNps4("");
+            // Keep jwt_port / nps4 sticky — do not fall back to default console ports.
             clearFourcloudState();
             emit subscriptionExpired("Нет активной подписки");
             emit jwtTokenExpired();
@@ -2385,15 +2481,14 @@ void QmlBackend::fetchSubscriptionExpiry()
             subscription_time_remaining.clear();
             emit subscriptionTimeRemainingChanged();
             if (settings->GetCloudGamesAccess()) {
-                // Console rental expired, but cloud access remains — keep JWT.
-                settings->SetJwtPort(0);
-                settings->SetNps4("");
+                // Console rental expired, but cloud access remains — keep JWT and custom ports.
                 settings->SetSubscriptionExpiryDate("");
                 clearFourcloudState();
                 return;
             }
             settings->SetJwtToken("");
-            settings->SetJwtPort(0); settings->SetNps4(""); clearFourcloudState();
+            // Keep jwt_port / nps4 until explicit logout so reconnect does not use 9295–9302.
+            clearFourcloudState();
             emit subscriptionExpired("Срок подписки истёк");
             emit jwtTokenExpired();
             return;
@@ -3629,8 +3724,7 @@ void QmlBackend::checkJwtToken()
             && !settings->GetCloudGamesAccess()) {
             qCWarning(chiakiGui) << "Local subscription expiry reached, logging out";
             settings->SetJwtToken("");
-            settings->SetJwtPort(0);
-            settings->SetNps4("");
+            // Keep jwt_port / nps4 sticky (avoid default 9295–9302 after offline/expiry).
             settings->SetSubscriptionExpiryDate("");
             clearAuthEntitlements();
             clearFourcloudState();

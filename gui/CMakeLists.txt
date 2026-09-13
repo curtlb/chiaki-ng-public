@@ -65,6 +65,8 @@ set(SOURCE_FILES
 	src/macrorecorder.cpp
 	include/sessionlog.h
 	src/sessionlog.cpp
+	include/wifibandchecker.h
+	src/wifibandchecker.cpp
 	include/cloudlog.h
 	src/cloudlog.cpp
 	include/settings.h
@@ -162,7 +164,7 @@ endif()
 target_link_libraries(chiaki Qt::Core Qt::Gui ${QT_GUI_PRIVATE_TARGET} Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets Qt::Network)
 # Windows-specific libraries for crash reporting
 if(WIN32)
-	target_link_libraries(chiaki dbghelp psapi)
+	target_link_libraries(chiaki dbghelp psapi wlanapi)
 endif()
 # For systems without GuiPrivate target, include private headers directly
 if(NOT TARGET Qt6::GuiPrivate)

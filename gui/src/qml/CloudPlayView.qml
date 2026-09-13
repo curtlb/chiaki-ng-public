@@ -249,28 +249,30 @@ Pane {
         }
 
         function launchCloudStream(accountId) {
-            let mainComp = root;
-            while (mainComp && !mainComp.showStreamView) {
-                mainComp = mainComp.parent;
-            }
-            if (mainComp && mainComp.showStreamView) {
-                mainComp.showStreamView();
-            }
-            Chiaki.cloudStreaming.startCompleteCloudSession(
-                serviceType,
-                streamingId,
-                gameName,
-                platform || "",
-                accountId || 0,
-                function(success, message, serverIp) {
-                    if (!success) {
-                        let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));
-                        Chiaki.error(qsTr("Ошибка облачного стрима"), message, isOAuthError ? 10000 : 3000);
-                    } else {
-                        applySearchFilter();
-                    }
+            Chiaki.runWithWifi24Check(function() {
+                let mainComp = root;
+                while (mainComp && !mainComp.showStreamView) {
+                    mainComp = mainComp.parent;
                 }
-            );
+                if (mainComp && mainComp.showStreamView) {
+                    mainComp.showStreamView();
+                }
+                Chiaki.cloudStreaming.startCompleteCloudSession(
+                    serviceType,
+                    streamingId,
+                    gameName,
+                    platform || "",
+                    accountId || 0,
+                    function(success, message, serverIp) {
+                        if (!success) {
+                            let isOAuthError = message && (message.includes("OAuth") || message.includes("authorization"));
+                            Chiaki.error(qsTr("Ошибка облачного стрима"), message, isOAuthError ? 10000 : 3000);
+                        } else {
+                            applySearchFilter();
+                        }
+                    }
+                );
+            });
         }
 
         function confirmAndLaunch(accountId) {
