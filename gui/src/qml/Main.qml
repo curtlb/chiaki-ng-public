@@ -369,6 +369,14 @@ Item {
     Connections {
         target: Chiaki
 
+        function onWifi24GhzWarningRequested(message) {
+            root.showConfirmDialog(
+                qsTr("Wi‑Fi 2.4 ГГц"),
+                message,
+                () => Chiaki.proceedAfterWifi24Warning(true),
+                () => Chiaki.proceedAfterWifi24Warning(false));
+        }
+
         function onAuthenticationSuccess() {
             // After successful authentication, show main view
             root.showMainView();
