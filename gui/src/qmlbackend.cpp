@@ -125,6 +125,37 @@ static int parseAuthPortFromObjects(const QJsonObject &session, const QJsonObjec
 	return portVal;
 }
 
+// NP/NPS4 from MySQL often arrives as JSON number (268), not string — QJsonValue::toString() is empty then.
+static QString parseAuthScalarString(const QJsonValue &v)
+{
+	if (v.isUndefined() || v.isNull())
+		return {};
+	if (v.isString())
+		return v.toString().trimmed();
+	if (v.isDouble()) {
+		const double d = v.toDouble();
+		const qint64 asInt = static_cast<qint64>(d);
+		if (qFuzzyCompare(d + 1.0, static_cast<double>(asInt) + 1.0))
+			return QString::number(asInt);
+		return QString::number(d, 'g', 15);
+	}
+	if (v.isBool())
+		return v.toBool() ? QStringLiteral("1") : QStringLiteral("0");
+	return v.toVariant().toString().trimmed();
+}
+
+static QString parseAuthNps4FromObjects(const QJsonObject &session, const QJsonObject &decodeObj)
+{
+	QString nps4 = parseAuthScalarString(session.value(QStringLiteral("NP")));
+	if (nps4.isEmpty())
+		nps4 = parseAuthScalarString(session.value(QStringLiteral("NPS4")));
+	if (nps4.isEmpty())
+		nps4 = parseAuthScalarString(decodeObj.value(QStringLiteral("NP")));
+	if (nps4.isEmpty())
+		nps4 = parseAuthScalarString(decodeObj.value(QStringLiteral("NPS4")));
+	return nps4;
+}
+
 // Парсит ответ status_console.php (тело ответа). Не смотрим на HTTP код. Пробуем UTF-8 и Windows-1251.
 // API иногда отдаёт EN: Offline/Online (jwt.php / status.php), иногда RU: Оффлайн/Онлайн/Спит.
 static QString parseFourcloudStatusBody(const QByteArray &body)
@@ -2266,17 +2297,12 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
     if (settings->GetJwtPort() != 0)
         discovery_manager.RefreshManualServices();
 
-    QString nps4 = session.value(QStringLiteral("NP")).toString().trimmed();
-    if (nps4.isEmpty())
-        nps4 = session.value(QStringLiteral("NPS4")).toString().trimmed();
-    if (nps4.isEmpty())
-        nps4 = decodeObj.value(QStringLiteral("NP")).toString().trimmed();
-    if (nps4.isEmpty())
-        nps4 = decodeObj.value(QStringLiteral("NPS4")).toString().trimmed();
+    QString nps4 = parseAuthNps4FromObjects(session, decodeObj);
     // Sticky NPS4: keep last known value if auth omitted NP (e.g. transient / offline).
     if (!nps4.isEmpty()) {
         settings->SetNps4(nps4);
         settings->SetLastLoadedNps4(nps4);
+        qCInfo(chiakiGui) << "[4cloud auth] NPS4 from response:" << nps4;
     } else if (console_access) {
         if (settings->GetNps4().isEmpty() && !settings->GetLastLoadedNps4().isEmpty()) {
             settings->SetNps4(settings->GetLastLoadedNps4());
@@ -2284,6 +2310,8 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
                               << settings->GetNps4();
         } else if (nps4.isEmpty() && !settings->GetNps4().isEmpty()) {
             qCInfo(chiakiGui) << "[4cloud auth] NPS4 missing in response, keeping nps4=" << settings->GetNps4();
+        } else {
+            qCWarning(chiakiGui) << "[4cloud auth] NPS4 missing and nothing sticky; status poll will not start";
         }
     } else if (!console_access && settings->GetNps4().isEmpty()) {
         settings->SetNps4(QString());
