@@ -126,6 +126,7 @@ static int parseAuthPortFromObjects(const QJsonObject &session, const QJsonObjec
 }
 
 // Парсит ответ status_console.php (тело ответа). Не смотрим на HTTP код. Пробуем UTF-8 и Windows-1251.
+// API иногда отдаёт EN: Offline/Online (jwt.php / status.php), иногда RU: Оффлайн/Онлайн/Спит.
 static QString parseFourcloudStatusBody(const QByteArray &body)
 {
 	QByteArray trimmedBody = body.trimmed();
@@ -140,7 +141,13 @@ static QString parseFourcloudStatusBody(const QByteArray &body)
 
 	QString text = QString::fromUtf8(trimmedBody);
 	auto hasKeyword = [&text]() {
-		return text.contains(QStringLiteral("Онлайн")) || text.contains(QStringLiteral("Спит")) || text.contains(QStringLiteral("Оффлайн"));
+		const QString lower = text.toLower();
+		return text.contains(QStringLiteral("Онлайн"))
+			|| text.contains(QStringLiteral("Спит"))
+			|| text.contains(QStringLiteral("Оффлайн"))
+			|| lower.contains(QLatin1String("online"))
+			|| lower.contains(QLatin1String("standby"))
+			|| lower.contains(QLatin1String("offline"));
 	};
 	if (!hasKeyword()) {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
@@ -156,17 +163,39 @@ static QString parseFourcloudStatusBody(const QByteArray &body)
 #endif
 		text = text.trimmed();
 	}
+	const QString lower = text.toLower();
 	QString result;
-	if (text.contains(QStringLiteral("Онлайн")))
+	if (text.contains(QStringLiteral("Онлайн")) || lower.contains(QLatin1String("online")))
 		result = QStringLiteral("ready");
-	else if (text.contains(QStringLiteral("Спит")))
+	else if (text.contains(QStringLiteral("Спит")) || lower.contains(QLatin1String("standby")))
 		result = QStringLiteral("standby");
-	else if (text.contains(QStringLiteral("Оффлайн")))
+	else if (text.contains(QStringLiteral("Оффлайн")) || lower.contains(QLatin1String("offline")))
 		result = QStringLiteral("unknown");
 	qCInfo(chiakiGui) << "[4cloud parse] body size:" << body.size()
 		<< "firstLine:" << QString::fromUtf8(trimmedBody.left(80)).replace(QChar('\r'), QChar(' ')).replace(QChar('\n'), QChar(' '))
 		<< "parsed:" << (result.isEmpty() ? "fail" : result);
 	return result;
+}
+
+// Итоговый статус для UI: локальный discovery и API 4cloud дополняют друг друга.
+// Connect может работать при «битом» API или при discovery=unknown — не рисуем Offline раньше времени.
+static QString resolveConsoleDisplayState(const QString &discovery_state,
+	const QString &fourcloud_cache, bool fourcloud_retrying, bool has_nps4)
+{
+	if (discovery_state == QLatin1String("ready") || discovery_state == QLatin1String("standby"))
+		return discovery_state;
+	if (fourcloud_cache == QLatin1String("ready") || fourcloud_cache == QLatin1String("standby"))
+		return fourcloud_cache;
+	if (has_nps4) {
+		if (fourcloud_cache.isEmpty() || fourcloud_retrying)
+			return QStringLiteral("checking");
+		// API явно сказал offline/unknown
+		return QStringLiteral("unknown");
+	}
+	// Без NPS4 опираемся только на discovery; пока ответа нет — «Проверка…», не красный оффлайн
+	if (discovery_state.isEmpty() || discovery_state == QLatin1String("unknown"))
+		return QStringLiteral("checking");
+	return discovery_state;
 }
 
 #define PSN_DEVICES_TRIES 2
@@ -835,7 +864,10 @@ void QmlBackend::setConnectState(PsnConnectState connect_state)
 QVariantList QmlBackend::hosts() const
 {
     // При открытии списка хостов запускаем опрос статуса 4cloud, если есть NPS4 и таймер ещё не запущен
-    if (!settings->GetManualHosts().isEmpty() && !settings->GetNps4().isEmpty()
+    const QString effective_nps4 = !settings->GetNps4().isEmpty()
+        ? settings->GetNps4()
+        : settings->GetLastLoadedNps4();
+    if (!settings->GetManualHosts().isEmpty() && !effective_nps4.isEmpty()
         && fourcloud_state_timer && !fourcloud_state_timer->isActive()) {
         QMetaObject::invokeMethod(const_cast<QmlBackend *>(this), "ensureFourcloudPolling", Qt::QueuedConnection);
     }
@@ -844,6 +876,7 @@ QVariantList QmlBackend::hosts() const
     QList<ManualHost> discovered_manual_hosts;
     size_t registered_discovered_ps4s = 0;
     auto manual_hosts = settings->GetManualHosts();
+    const bool has_nps4 = !effective_nps4.isEmpty();
     for (const auto &host : discovery_manager.GetHosts()) {
         QVariantMap m;
         HostMAC host_mac = host.GetHostMAC();
@@ -870,7 +903,8 @@ QVariantList QmlBackend::hosts() const
         for(int i = 0; i < manual_hosts.length(); i++)
         {
             const auto &manual_host = manual_hosts.at(i);
-            if(manual_host.GetRegistered() && manual_host.GetMAC() == host_mac && manual_host.GetHost() == host.host_addr)
+            // Match by MAC (address may differ: VPN IP vs reply sockaddr)
+            if(manual_host.GetRegistered() && manual_host.GetMAC() == host_mac)
             {
                 manual = true;
                 discovered_manual_hosts.append(manual_host);
@@ -890,7 +924,12 @@ QVariantList QmlBackend::hosts() const
         m["address"] = host.host_addr;
         m["ps5"] = host.ps5;
         m["mac"] = host_mac.ToString();
-        m["state"] = chiaki_discovery_host_state_string(host.state);
+        const QString discovery_state = QString::fromUtf8(chiaki_discovery_host_state_string(host.state));
+        // Для 4cloud/manual не оставляем сырой discovery=unknown как «Оффлайн»,
+        // если API уже знает ready/standby (или ещё проверяем).
+        m["state"] = manual
+            ? resolveConsoleDisplayState(discovery_state, fourcloud_state_cache, fourcloud_state_retrying, has_nps4)
+            : discovery_state;
         m["app"] = host.running_app_name;
         m["titleId"] = host.running_app_titleid;
         m["registered"] = registered;
@@ -908,16 +947,8 @@ QVariantList QmlBackend::hosts() const
         m["name"] = host.GetHost();
         m["duid"] = "";
         m["address"] = host.GetHost();
-        m["state"] = "unknown";
-        if (!settings->GetNps4().isEmpty()) {
-            // Пока нет ответа от API 4cloud, не показываем "Оффлайн" — показываем "Проверка…"
-            if (fourcloud_state_cache.isEmpty())
-                m["state"] = QStringLiteral("checking");
-            else if (fourcloud_state_retrying && (fourcloud_state_cache == QStringLiteral("unknown")))
-                m["state"] = QStringLiteral("checking");  // повторная проверка, не показываем оффлайн
-            else if (!fourcloud_state_cache.isEmpty())
-                m["state"] = fourcloud_state_cache;
-        }
+        m["state"] = resolveConsoleDisplayState(
+            QStringLiteral("unknown"), fourcloud_state_cache, fourcloud_state_retrying, has_nps4);
         m["registered"] = false;
         m["display"] = discovered_manual_hosts.contains(host) ? false : true;
         if (host.GetRegistered() && settings->GetRegisteredHostRegistered(host.GetMAC())) {
@@ -1609,6 +1640,8 @@ void QmlBackend::beginConnectToHost(int index, QString nickname)
         nickname = server.registered_host.GetServerNickname();
 
     QString nps4 = settings->GetNps4();
+    if (nps4.isEmpty())
+        nps4 = settings->GetLastLoadedNps4();
     if (nps4.isEmpty()) {
         bool need_wakeup = (server.discovered && server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_STANDBY)
                         || (settings->GetJwtPort() != 0 && (!server.discovered || server.discovery_host.state == CHIAKI_DISCOVERY_HOST_STATE_UNKNOWN));
@@ -1617,6 +1650,8 @@ void QmlBackend::beginConnectToHost(int index, QString nickname)
         continueConnectToHost(index, nickname, need_wakeup);
         return;
     }
+    if (settings->GetNps4().isEmpty())
+        settings->SetNps4(nps4);
 
     // Запрос статуса консоли через API 4cloud (Спит / Онлайн / Оффлайн)
     if (!network_manager)
@@ -1645,6 +1680,11 @@ void QmlBackend::beginConnectToHost(int index, QString nickname)
         if (resolved_nickname.isEmpty() && server.registered)
             resolved_nickname = server.registered_host.GetServerNickname();
         QString status = parseFourcloudStatusBody(body);
+        if (!status.isEmpty()) {
+            fourcloud_state_cache = status;
+            fourcloud_state_retrying = false;
+            emit hostsChanged();
+        }
         bool need_wakeup = (status == QStringLiteral("standby") || status == QStringLiteral("unknown"));
         if (status.isEmpty()) {
             need_wakeup = (settings->GetJwtPort() != 0
@@ -2006,10 +2046,17 @@ bool QmlBackend::sendWakeup(const QString &host, const QByteArray &regist_key, b
 void QmlBackend::fetchFourcloudState()
 {
     QString nps4 = settings->GetNps4();
+    if (nps4.isEmpty())
+        nps4 = settings->GetLastLoadedNps4();
     if (nps4.isEmpty()) {
-        clearFourcloudState();
+        // Не сбрасываем jwt_psn/подписку — просто нет ключа для status_console
+        fourcloud_state_cache.clear();
+        fourcloud_state_retrying = false;
+        emit hostsChanged();
         return;
     }
+    if (settings->GetNps4().isEmpty())
+        settings->SetNps4(nps4);
     if (!network_manager)
         network_manager = new QNetworkAccessManager(this);
     QUrl statusUrl("https://api.4cloud.pro/status_console.php");
@@ -2020,9 +2067,14 @@ void QmlBackend::fetchFourcloudState()
     QNetworkRequest statusRequest(statusUrl);
     QNetworkReply *reply = network_manager->get(statusRequest);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        if (settings->GetNps4().isEmpty()) {
+        QString nps4_now = settings->GetNps4();
+        if (nps4_now.isEmpty())
+            nps4_now = settings->GetLastLoadedNps4();
+        if (nps4_now.isEmpty()) {
             reply->deleteLater();
-            clearFourcloudState();
+            fourcloud_state_cache.clear();
+            fourcloud_state_retrying = false;
+            emit hostsChanged();
             return;
         }
         int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -2031,15 +2083,18 @@ void QmlBackend::fetchFourcloudState()
         reply->deleteLater();
         qCInfo(chiakiGui) << "[4cloud state poll] response httpCode:" << httpCode << "error:" << err << "bodySize:" << body.size();
         QString status = parseFourcloudStatusBody(body);
-        if (status == QStringLiteral("unknown")) {
+        if (status.isEmpty() || status == QStringLiteral("unknown")) {
             if (!fourcloud_state_retrying) {
                 fourcloud_state_retrying = true;
-                qCInfo(chiakiGui) << "[4cloud state poll] got offline, scheduling retry in 2.5s";
+                qCInfo(chiakiGui) << "[4cloud state poll] got offline/empty, scheduling retry in 2.5s";
                 QTimer::singleShot(2500, this, [this]() { fetchFourcloudState(); });
                 emit hostsChanged();  // показать «Проверка…»
-                reply->deleteLater();
                 return;
             }
+            // После retry всё ещё offline/empty — фиксируем unknown для UI
+            if (status.isEmpty())
+                status = QStringLiteral("unknown");
+            fourcloud_state_retrying = false;
         } else {
             fourcloud_state_retrying = false;
         }
@@ -2052,8 +2107,13 @@ void QmlBackend::fetchFourcloudState()
 void QmlBackend::ensureFourcloudPolling()
 {
     resolveCloudBillingIdentity();
-    if (settings->GetNps4().isEmpty())
+    QString nps4 = settings->GetNps4();
+    if (nps4.isEmpty())
+        nps4 = settings->GetLastLoadedNps4();
+    if (nps4.isEmpty())
         return;
+    if (settings->GetNps4().isEmpty())
+        settings->SetNps4(nps4);
     if (!fourcloud_state_timer || fourcloud_state_timer->isActive())
         return;
     fetchFourcloudState();
@@ -2214,14 +2274,23 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
     if (nps4.isEmpty())
         nps4 = decodeObj.value(QStringLiteral("NPS4")).toString().trimmed();
     // Sticky NPS4: keep last known value if auth omitted NP (e.g. transient / offline).
-    if (!nps4.isEmpty())
+    if (!nps4.isEmpty()) {
         settings->SetNps4(nps4);
-    else if (!console_access && settings->GetNps4().isEmpty())
+        settings->SetLastLoadedNps4(nps4);
+    } else if (console_access) {
+        if (settings->GetNps4().isEmpty() && !settings->GetLastLoadedNps4().isEmpty()) {
+            settings->SetNps4(settings->GetLastLoadedNps4());
+            qCInfo(chiakiGui) << "[4cloud auth] NPS4 missing in response, restored last_loaded_nps4="
+                              << settings->GetNps4();
+        } else if (nps4.isEmpty() && !settings->GetNps4().isEmpty()) {
+            qCInfo(chiakiGui) << "[4cloud auth] NPS4 missing in response, keeping nps4=" << settings->GetNps4();
+        }
+    } else if (!console_access && settings->GetNps4().isEmpty()) {
         settings->SetNps4(QString());
-    else if (nps4.isEmpty() && !settings->GetNps4().isEmpty())
-        qCInfo(chiakiGui) << "[4cloud auth] NPS4 missing in response, keeping nps4=" << settings->GetNps4();
-    else if (!console_access)
-        settings->SetNps4(QString());
+    } else if (!console_access) {
+        // Keep sticky nps4 for reconnect even without console_access this tick.
+        qCInfo(chiakiGui) << "[4cloud auth] no console_access, keeping nps4=" << settings->GetNps4();
+    }
 
     qCInfo(chiakiGui) << "[4cloud auth] applied console_access=" << console_access
                       << "jwt_port=" << settings->GetJwtPort()
@@ -2240,12 +2309,13 @@ void QmlBackend::applyAuthSession(const QJsonObject &session, bool from_login)
     else
         settings->SetSubscriptionExpiryDate(QString());
 
-    if (console_access && !settings->GetNps4().isEmpty()) {
+    if (console_access && (!settings->GetNps4().isEmpty() || !settings->GetLastLoadedNps4().isEmpty())) {
         fetchFourcloudState();
         if (fourcloud_state_timer)
             fourcloud_state_timer->start(15000);
-    } else {
-        clearFourcloudState();
+    } else if (!console_access) {
+        // Не чистим статус/PSN при временном отсутствии console_access — sticky ports/nps4.
+        fourcloud_state_retrying = false;
     }
 
     fetchYandexIamByJwt(jwt);
