@@ -1022,6 +1022,18 @@ def friendly_db_error(exc):
         )
     if "1146" in msg and "CloudStreaming_PaymentMethods" in msg:
         return PAYMENT_SETUP_MSG
+    # Duplicate charge row (same SessionID+BlockNo) — never show raw MySQL to the user.
+    if "1062" in msg and (
+        "uq_cs_charge_session_block" in msg
+        or "uq_cs_charge_idem" in msg
+        or "CloudStreaming_Charges" in msg
+    ):
+        return (
+            "Не удалось провести оплату: повторная попытка списания за этот час. "
+            "Проверьте карту и запустите игру снова."
+        )
+    if "1062" in msg:
+        return "Операция уже выполняется или была выполнена. Попробуйте ещё раз."
     return msg
 
 
@@ -1956,31 +1968,70 @@ def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, i
     if not pm or not pm.get("StartPaymentID"):
         return False, PAYMENT_SETUP_MSG
 
+    existing_charge_id = None
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT ID FROM CloudStreaming_Charges WHERE IdempotencyKey = %s LIMIT 1",
+            "SELECT ID, Status, ErrorMessage FROM CloudStreaming_Charges "
+            "WHERE IdempotencyKey = %s LIMIT 1",
             (idem_key,),
         )
         existing = cur.fetchone()
-        if existing:
+        if not existing:
+            # Same session/block may already exist under a previous SessionToken
+            # (renew fail → force_stop → start issues a new token, BlockNo reused).
             cur.execute(
-                "SELECT Status, ErrorMessage FROM CloudStreaming_Charges WHERE ID = %s",
-                (existing["ID"],),
+                "SELECT ID, Status, ErrorMessage, IdempotencyKey FROM CloudStreaming_Charges "
+                "WHERE SessionID=%s AND BlockNo=%s LIMIT 1",
+                (session_id, block_no),
             )
-            ch = cur.fetchone()
-            if ch and ch["Status"] == "succeeded":
+            existing = cur.fetchone()
+        if existing:
+            if existing.get("Status") == "succeeded":
                 return True, "Уже оплачено"
-            if ch and ch["Status"] == "failed":
-                return False, ch.get("ErrorMessage") or "Предыдущая оплата не прошла"
+            # pending / failed → reuse the row for a fresh Robokassa attempt
+            existing_charge_id = existing["ID"]
 
     result = robokassa_charge(email, pm["StartPaymentID"], amount, game_name)
     with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO CloudStreaming_Charges "
-            "(SessionID, UserID, AccountID, BlockNo, Amount, Status, ProviderInvoiceID, IdempotencyKey) "
-            "VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s)",
-            (session_id, user_id, account_id, block_no, amount, result["invoice_id"], idem_key),
-        )
+        if existing_charge_id:
+            cur.execute(
+                "UPDATE CloudStreaming_Charges SET "
+                "UserID=%s, AccountID=%s, Amount=%s, Status='pending', "
+                "ProviderInvoiceID=%s, IdempotencyKey=%s, ErrorMessage=NULL "
+                "WHERE ID=%s",
+                (
+                    user_id,
+                    account_id,
+                    amount,
+                    result["invoice_id"],
+                    idem_key,
+                    existing_charge_id,
+                ),
+            )
+        else:
+            try:
+                cur.execute(
+                    "INSERT INTO CloudStreaming_Charges "
+                    "(SessionID, UserID, AccountID, BlockNo, Amount, Status, ProviderInvoiceID, IdempotencyKey) "
+                    "VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s)",
+                    (
+                        session_id,
+                        user_id,
+                        account_id,
+                        block_no,
+                        amount,
+                        result["invoice_id"],
+                        idem_key,
+                    ),
+                )
+            except Exception as e:
+                # Race / leftover unique key — never leak MySQL text to the client.
+                if "1062" in str(e):
+                    return False, (
+                        "Не удалось провести оплату: повторная попытка списания за этот час. "
+                        "Проверьте карту и запустите игру снова."
+                    )
+                raise
 
     if not result["created"]:
         err = "Не удалось создать платёж (HTTP %s): %s" % (
@@ -2888,9 +2939,13 @@ def handle_start(conn, req):
 
     existing = get_user_session(conn, user["ID"], for_update=True)
     if existing:
-        if existing.get("Status") in ("ended", "failed") and session_minutes_left(
-            existing
-        ) <= 0:
+        # Archive spent sessions. Include grace_no_stream: end_stream after
+        # force_stop used to rewrite ended → grace and then reuse BlockNo.
+        if session_minutes_left(existing) <= 0 and existing.get("Status") in (
+            "ended",
+            "failed",
+            "grace_no_stream",
+        ):
             archive_session_row(conn, existing, reason="new_block")
             existing = None
 
@@ -3328,6 +3383,19 @@ def handle_end_stream(conn, req):
             True,
             ui_message="Сессия отменена без списания.",
             payment_aborted=True,
+        )
+
+    # Already closed by force_stop / time_expired — do not rewrite to grace_no_stream.
+    if sess.get("Status") in ("ended", "failed"):
+        mins = session_minutes_left(sess)
+        conn.commit()
+        return reply(
+            req_id,
+            True,
+            ui_message=sess.get("UiMessage")
+            or ("Сессия уже завершена. Остаток: %s мин." % mins),
+            minutes_left=mins,
+            already_ended=True,
         )
 
     if int(sess.get("StreamActive") or 0):
