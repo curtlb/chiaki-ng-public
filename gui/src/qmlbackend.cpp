@@ -354,6 +354,14 @@ QmlBackend::QmlBackend(Settings *settings, QmlMainWindow *window)
     cloud_catalog_backend = new CloudCatalogBackend(settings, this);
     CloudLogInit();
 
+    connect(cloud_streaming_backend, &CloudStreamingBackend::billingForceStopRequested, this,
+            [this](const QString &message) {
+        CloudLogMessage(QStringLiteral("Billing"),
+            QStringLiteral("force stop stream: %1").arg(message));
+        if(session && session->IsCloudStreaming())
+            stopSession(false);
+    });
+
     connect(settings_qml, &QmlSettings::cloudStoreLocaleChanged, this, [this]() {
         cloud_catalog_backend->invalidateCache();
     });

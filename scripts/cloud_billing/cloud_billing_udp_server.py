@@ -3110,12 +3110,14 @@ def handle_heartbeat(conn, req):
                 "EndReason='time_expired', StreamActive=0 WHERE ID=%s",
                 (sess["ID"],),
             )
+        finalize_lease_after_stream(conn, sess["UserID"], sess.get("LeaseID"))
         conn.commit()
         return reply(
             req_id,
             False,
             error="Оплаченное время истекло",
             ui_message="Баланс времени закончился. Запустите игру снова для новой оплаты.",
+            force_stop=True,
             minutes_left=0,
             plus_minutes_left=0,
             owned_minutes_left=0,
@@ -3196,6 +3198,22 @@ def handle_renew(conn, req):
 
     renew_min = int(RENEW_LEAD.total_seconds() // 60)
     minutes_left = session_minutes_left(sess)
+
+    # Time already burned out during renew tick — stop stream, no more charges.
+    if minutes_left <= 0 or sess.get("Status") == "ended":
+        save_info = finalize_lease_after_stream(conn, sess["UserID"], sess.get("LeaseID"))
+        conn.commit()
+        ui = "Оплаченное время закончилось. Стрим будет остановлен."
+        return reply(
+            req_id,
+            False,
+            error=ui,
+            ui_message=ui,
+            force_stop=True,
+            minutes_left=0,
+            save_retention_message=save_info.get("save_retention_message") or "",
+        )
+
     if minutes_left > renew_min:
         # Spurious renew (stale client / mirror) — do not charge.
         conn.commit()
@@ -3221,6 +3239,43 @@ def handle_renew(conn, req):
         account_id=sess.get("AccountID"),
     )
     if not ok_pay:
+        # At ≤1 min a failed charge used to loop forever: TIMESTAMPDIFF(MINUTE)
+        # stays 0 inside the same minute, MinutesLeft never reaches 0, and the
+        # failed IdempotencyKey makes every renew fail instantly.
+        if minutes_left <= 1:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
+                    "EndReason='payment_failed', StreamActive=0, BalanceTickAt=NULL, "
+                    "MinutesLeft=0, UiMessage=%s WHERE ID=%s",
+                    (
+                        "Не удалось списать оплату при остатке ≤1 мин. Сессия завершена.",
+                        sess["ID"],
+                    ),
+                )
+            save_info = finalize_lease_after_stream(
+                conn, sess["UserID"], sess.get("LeaseID")
+            )
+            conn.commit()
+            ui = (
+                pay_msg
+                or "Не удалось списать оплату. Время почти закончилось — стрим остановлен."
+            )
+            log.warning(
+                "renew payment failed at ≤1 min → force_stop session=%s user=%s: %s",
+                sess["ID"],
+                sess.get("UserID"),
+                pay_msg,
+            )
+            return reply(
+                req_id,
+                False,
+                error=ui,
+                ui_message=ui,
+                force_stop=True,
+                minutes_left=0,
+                save_retention_message=save_info.get("save_retention_message") or "",
+            )
         conn.commit()
         return reply(req_id, False, error=pay_msg, ui_message=pay_msg)
 
@@ -3450,6 +3505,52 @@ def expire_leases_job():
                     "SET a.Status='available', a.CurrentLeaseID=NULL "
                     "WHERE l.Status='expired' AND a.Status='leased'"
                 )
+                # Safety net: client crashed / force-stopped without end_stream.
+                # Tick once (burn only elapsed since last tick), then freeze — do NOT
+                # erase MinutesLeft; resume_session must still work.
+                cur.execute(
+                    "SELECT ID FROM CloudStreaming_Sessions "
+                    "WHERE Status IN ('active','renewal_pending') "
+                    "AND StreamActive=1 "
+                    "AND COALESCE(LastHeartbeatAt, BlockStartedAt) "
+                    "    < DATE_SUB(NOW(3), INTERVAL %s SECOND)",
+                    (hb_timeout,),
+                )
+                stale_stream_ids = [r["ID"] for r in (cur.fetchall() or [])]
+
+            for sid in stale_stream_ids:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT * FROM CloudStreaming_Sessions WHERE ID=%s LIMIT 1 FOR UPDATE",
+                        (sid,),
+                    )
+                    sess = cur.fetchone()
+                if not sess:
+                    continue
+                if not int(sess.get("StreamActive") or 0):
+                    continue
+                if sess.get("Status") not in ("active", "renewal_pending"):
+                    continue
+                sess = tick_session_balance(conn, sess)
+                mins = session_minutes_left(sess)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
+                        "BalanceTickAt=NULL, "
+                        "UiMessage=%s WHERE ID=%s",
+                        (
+                            "Стрим остановлен: потерян heartbeat клиента. "
+                            "Остаток: %s мин (можно возобновить)." % mins,
+                            sess["ID"],
+                        ),
+                    )
+                log.info(
+                    "heartbeat timeout freeze session=%s minutes_left=%s",
+                    sess["ID"],
+                    mins,
+                )
+
+            with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
                     "BalanceTickAt=NULL, "

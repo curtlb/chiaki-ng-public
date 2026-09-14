@@ -92,6 +92,8 @@ signals:
     void billingStatusChanged();
     /** Emitted after cloud stream ends with save-freeze info from billing server. */
     void saveRetentionDialogRequested(QString message);
+    /** Billing requires the local stream to stop (time expired / payment failed at ≤1 min). */
+    void billingForceStopRequested(QString message);
 
 private slots:
     void onAllocationProgress(QString message);

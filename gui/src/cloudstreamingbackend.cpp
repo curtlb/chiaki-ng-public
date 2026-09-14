@@ -160,10 +160,29 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
             if(self->billing_session_token != token)
                 return;
 
+            auto forceStopIfNeeded = [self](const CloudBillingClient::Result &r) {
+                const bool force = r.data.value(QStringLiteral("force_stop")).toBool(false)
+                    || r.error.contains(QStringLiteral("истёк"), Qt::CaseInsensitive)
+                    || r.error.contains(QStringLiteral("закончилось"), Qt::CaseInsensitive)
+                    || r.error.contains(QStringLiteral("Сессия завершена"), Qt::CaseInsensitive)
+                    || r.ui_message.contains(QStringLiteral("истёк"), Qt::CaseInsensitive)
+                    || r.ui_message.contains(QStringLiteral("закончилось"), Qt::CaseInsensitive);
+                if(!force)
+                    return false;
+                const QString msg = r.ui_message.isEmpty() ? r.error : r.ui_message;
+                self->stopBillingHeartbeat();
+                self->setBillingStatus(msg, 0);
+                const QString save_msg = r.data.value(QStringLiteral("save_retention_message")).toString().trimmed();
+                if(!save_msg.isEmpty())
+                    emit self->saveRetentionDialogRequested(save_msg);
+                emit self->billingForceStopRequested(msg);
+                return true;
+            };
+
             if(!res.ok) {
+                if(forceStopIfNeeded(res))
+                    return;
                 self->setBillingStatus(res.ui_message.isEmpty() ? res.error : res.ui_message);
-                if(res.error.contains(QStringLiteral("истёк")) || res.error.contains(QStringLiteral("закончилось")))
-                    self->stopBillingHeartbeat();
                 return;
             }
 
@@ -175,6 +194,8 @@ void CloudStreamingBackend::sendBillingHeartbeat(bool streaming)
             if(did_renew) {
                 if(renew_res.ok)
                     self->setBillingMinutesOnly(billingMinutesFromResponse(renew_res.data));
+                else if(forceStopIfNeeded(renew_res))
+                    return;
                 else
                     self->setBillingStatus(
                         renew_res.ui_message.isEmpty() ? renew_res.error : renew_res.ui_message,
