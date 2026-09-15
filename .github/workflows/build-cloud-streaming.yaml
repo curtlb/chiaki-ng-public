@@ -138,3 +138,17 @@ jobs:
           path: ${{ env.RELEASE_PACKAGE_PATH }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Compile .ISS to .EXE Installer
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: "scripts/chiaki-ng.iss"
+          options: /O+
+
+      - name: Upload chiaki-ng Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: chiaki-ng-win_x64-cloud-streaming-installer.exe
+          path: chiaki-ng-windows-installer.exe
+          if-no-files-found: error
+          retention-days: 14
