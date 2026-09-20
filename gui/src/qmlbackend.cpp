@@ -3808,7 +3808,16 @@ void QmlBackend::authenticate(const QString &email, const QString &password)
         applyAuthSession(result.data, true);
     });
     watcher->setFuture(QtConcurrent::run([host, port, login_email, password]() {
-        return CloudBillingClient::authSignIn(host, port, login_email, password);
+        CloudBillingClient::Result r = CloudBillingClient::authSignIn(host, port, login_email, password);
+        if(CloudBillingClient::isTimeoutError(r)) {
+            qCWarning(chiakiGui) << "UDP auth timeout, retry 2/2";
+            r = CloudBillingClient::authSignIn(host, port, login_email, password);
+        }
+        if(CloudBillingClient::isTimeoutError(r)) {
+            qCWarning(chiakiGui) << "UDP auth timed out twice, falling back to HTTPS";
+            r = CloudBillingClient::authHttpsSignIn(login_email, password);
+        }
+        return r;
     }));
 }
 
@@ -3878,7 +3887,16 @@ void QmlBackend::checkJwtToken()
         applyAuthSession(result.data, false);
     });
     watcher->setFuture(QtConcurrent::run([host, port, jwt]() {
-        return CloudBillingClient::authCheckSession(host, port, jwt);
+        CloudBillingClient::Result r = CloudBillingClient::authCheckSession(host, port, jwt);
+        if(CloudBillingClient::isTimeoutError(r)) {
+            qCWarning(chiakiGui) << "UDP check_session timeout, retry 2/2";
+            r = CloudBillingClient::authCheckSession(host, port, jwt);
+        }
+        if(CloudBillingClient::isTimeoutError(r)) {
+            qCWarning(chiakiGui) << "UDP check_session timed out twice, falling back to HTTPS";
+            r = CloudBillingClient::authHttpsCheckSession(jwt);
+        }
+        return r;
     }));
 }
 

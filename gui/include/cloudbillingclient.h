@@ -46,6 +46,10 @@ public:
 	/** Auth UDP (default port 13752). Credentials go as RSA+AES encrypted token only. */
 	static Result authSignIn(const QString &host, quint16 port, const QString &email, const QString &password);
 	static Result authCheckSession(const QString &host, quint16 port, const QString &jwt);
+	static bool isTimeoutError(const Result &r);
+	/** Previous Chiaki HTTPS login (api.php sign-in + decode-jwt). Used after UDP timeouts. */
+	static Result authHttpsSignIn(const QString &email, const QString &password);
+	static Result authHttpsCheckSession(const QString &jwt);
 
 private:
 	/** Opaque login token: CA1.<b64 rsa-oaep aes-key>.<b64 iv+ct+tag>. No salt in client. */

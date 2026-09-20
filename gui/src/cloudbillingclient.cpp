@@ -3,12 +3,20 @@
 #include "cloudbillingclient.h"
 
 #include <QDateTime>
+#include <QDebug>
+#include <QEventLoop>
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QNetworkAccessManager>
 #include <QNetworkDatagram>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QTcpSocket>
+#include <QTimer>
 #include <QUdpSocket>
+#include <QUrl>
+#include <QUrlQuery>
 #include <QUuid>
 
 #ifndef CHIAKI_LIB_ENABLE_MBEDTLS
@@ -504,4 +512,137 @@ CloudBillingClient::Result CloudBillingClient::authCheckSession(const QString &h
 	QJsonObject o = baseReq(host, port, QStringLiteral("check_session"));
 	o[QStringLiteral("jwt")] = jwt;
 	return request(o, 15000);
+}
+
+bool CloudBillingClient::isTimeoutError(const Result &r)
+{
+	return !r.ok && r.error.contains(QStringLiteral("Таймаут"), Qt::CaseInsensitive);
+}
+
+static CloudBillingClient::Result httpsGetJson(const QUrl &url, int timeout_ms)
+{
+	CloudBillingClient::Result result;
+	QNetworkAccessManager nam;
+	QNetworkRequest req(url);
+	req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("chiaki-ng"));
+	req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+	QNetworkReply *reply = nam.get(req);
+	QEventLoop loop;
+	QTimer timer;
+	timer.setSingleShot(true);
+	bool finished = false;
+	QObject::connect(reply, &QNetworkReply::finished, &loop, [&]() {
+		finished = true;
+		loop.quit();
+	});
+	QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+	timer.start(qMax(1000, timeout_ms));
+	loop.exec();
+	if(!finished) {
+		reply->abort();
+		result.error = QStringLiteral("Таймаут HTTPS авторизации");
+		reply->deleteLater();
+		return result;
+	}
+	const QByteArray body = reply->readAll();
+	// 4cloud often returns JSON with HTTP 404; accept a body even on network error.
+	if(reply->error() != QNetworkReply::NoError && body.isEmpty()) {
+		result.error = QStringLiteral("Ошибка HTTPS авторизации: %1").arg(reply->errorString());
+		reply->deleteLater();
+		return result;
+	}
+	reply->deleteLater();
+	QJsonParseError pe;
+	const QJsonDocument doc = QJsonDocument::fromJson(body, &pe);
+	if(pe.error != QJsonParseError::NoError || !doc.isObject()) {
+		result.error = QStringLiteral("Некорректный ответ HTTPS авторизации");
+		return result;
+	}
+	result.ok = true;
+	result.data = doc.object();
+	return result;
+}
+
+static CloudBillingClient::Result sessionFromHttpsDecode(const QJsonObject &decode, const QString &jwt)
+{
+	CloudBillingClient::Result result;
+	const QString decode_error = decode.value(QStringLiteral("error")).toString();
+	if(!decode_error.isEmpty()) {
+		result.error = decode_error;
+		result.ui_message = decode_error;
+		return result;
+	}
+	QJsonObject session = decode;
+	session.insert(QStringLiteral("ok"), true);
+	session.insert(QStringLiteral("status"), QStringLiteral("success"));
+	session.insert(QStringLiteral("jwt"), jwt);
+	session.insert(QStringLiteral("decode"), decode);
+	QString email = decode.value(QStringLiteral("email")).toString().trimmed();
+	if(email.isEmpty())
+		email = decode.value(QStringLiteral("Email")).toString().trimmed();
+	if(!email.isEmpty())
+		session.insert(QStringLiteral("email"), email.toLower());
+
+	bool console_access = decode.value(QStringLiteral("console_access")).toBool(false);
+	bool cloud_access = decode.value(QStringLiteral("cloud_access")).toBool(false);
+	if(!decode.contains(QStringLiteral("console_access"))) {
+		const QString date_exp = decode.value(QStringLiteral("Date_exp")).toString().trimmed();
+		const QDateTime dt = QDateTime::fromString(date_exp, QStringLiteral("dd.MM.yyyy HH:mm"));
+		console_access = dt.isValid() && dt > QDateTime::currentDateTime();
+	}
+	session.insert(QStringLiteral("console_access"), console_access);
+	session.insert(QStringLiteral("cloud_access"), cloud_access);
+	if(!console_access && !cloud_access) {
+		result.error = QStringLiteral("Нет активной подписки");
+		result.ui_message = result.error;
+		result.data = session;
+		return result;
+	}
+	result.ok = true;
+	result.data = session;
+	return result;
+}
+
+CloudBillingClient::Result CloudBillingClient::authHttpsSignIn(const QString &email, const QString &password)
+{
+	QUrl sign_url(QStringLiteral("https://4cloud.pro/api.php"));
+	QUrlQuery sign_q;
+	sign_q.addQueryItem(QStringLiteral("method"), QStringLiteral("sign-in"));
+	sign_q.addQueryItem(QStringLiteral("Email"), email.trimmed().toLower());
+	sign_q.addQueryItem(QStringLiteral("Password"), password);
+	sign_url.setQuery(sign_q);
+
+	qInfo() << "HTTPS auth fallback: sign-in for" << email.trimmed().toLower();
+	Result sign = httpsGetJson(sign_url, 20000);
+	if(!sign.ok)
+		return sign;
+	const QString status = sign.data.value(QStringLiteral("status")).toString();
+	if(status.toLower() != QLatin1String("success")) {
+		Result r;
+		r.error = sign.data.value(QStringLiteral("message")).toString();
+		if(r.error.isEmpty())
+			r.error = QStringLiteral("Неверный логин или пароль");
+		r.ui_message = r.error;
+		return r;
+	}
+	const QString jwt = sign.data.value(QStringLiteral("jwt")).toString().trimmed();
+	if(jwt.isEmpty()) {
+		Result r;
+		r.error = QStringLiteral("Ответ не содержит JWT токена");
+		return r;
+	}
+	return authHttpsCheckSession(jwt);
+}
+
+CloudBillingClient::Result CloudBillingClient::authHttpsCheckSession(const QString &jwt)
+{
+	QUrl decode_url(QStringLiteral("https://4cloud.pro/api.php"));
+	QUrlQuery decode_q;
+	decode_q.addQueryItem(QStringLiteral("method"), QStringLiteral("decode-jwt"));
+	decode_q.addQueryItem(QStringLiteral("jwt"), jwt);
+	decode_url.setQuery(decode_q);
+	Result decoded = httpsGetJson(decode_url, 20000);
+	if(!decoded.ok)
+		return decoded;
+	return sessionFromHttpsDecode(decoded.data, jwt);
 }

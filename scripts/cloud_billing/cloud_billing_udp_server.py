@@ -36,6 +36,7 @@ import base64
 import zlib
 import urllib.parse
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
@@ -114,9 +115,11 @@ OPSTATE_URL = "https://auth.robokassa.ru/Merchant/WebService/Service.asmx/OpStat
 UDP_HOST = os.environ.get("CS_BILLING_UDP_HOST", "0.0.0.0")
 UDP_PORT = int(os.environ.get("CS_BILLING_UDP_PORT", "13750"))
 TCP_PORT = int(os.environ.get("CS_BILLING_TCP_PORT", str(UDP_PORT + 1)))
+UDP_WORKERS = max(4, int(os.environ.get("CS_BILLING_UDP_WORKERS", "32")))
 RETENTION_DAYS = int(os.environ.get("CS_RETENTION_DAYS", "3"))
 SAVE_FREEZE_THRESHOLD_MIN = int(os.environ.get("CS_SAVE_FREEZE_MINUTES", "61"))
 SAVE_INITIAL_RETENTION_HOURS = int(os.environ.get("CS_SAVE_INITIAL_HOURS", "48"))
+LEASE_HOLD_HOURS = int(os.environ.get("CS_LEASE_HOLD_HOURS", "48"))
 SAVE_EXTEND_THRESHOLD_MIN = int(os.environ.get("CS_SAVE_EXTEND_MINUTES", "90"))
 MSK_TZ = ZoneInfo("Europe/Moscow") if ZoneInfo else None
 RENEW_LEAD = timedelta(minutes=int(os.environ.get("CS_RENEW_LEAD_MINUTES", "10")))
@@ -186,7 +189,7 @@ def lease_valid_sql():
     """Lease row still usable for streaming.
 
     With SaveFreezeActive the hold lasts until RetentionUntil.
-    Without freeze the lease stays 'active' through the first 24h after
+    Without freeze the lease stays 'active' through the first 48h after
     assignment (minutes accumulate across sessions); afterward it is released.
     """
     return (
@@ -198,11 +201,69 @@ def lease_valid_sql():
     )
 
 
+LEASE_EXPIRED_UI = (
+    "Аренда PS-аккаунта истекла. Остаток минут сохранён. "
+    "Оформите новую аренду в личном кабинете 4cloud.pro."
+)
+
+
+def park_sessions_after_lease_expired(conn, lease_id=None):
+    """Keep MinutesLeft, but the session is no longer playable until a new lease."""
+    sql = (
+        "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='ended', "
+        "EndedAt=NOW(3), EndReason='lease_expired', BalanceTickAt=NULL, "
+        "UiMessage=%s "
+        "WHERE Status IN ('active','grace_no_stream','renewal_pending','pending_payment') "
+    )
+    params = [LEASE_EXPIRED_UI]
+    if lease_id:
+        sql += "AND LeaseID=%s"
+        params.append(lease_id)
+    else:
+        sql += (
+            "AND LeaseID IN (SELECT ID FROM CloudStreaming_Leases WHERE Status='expired')"
+        )
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+
+
+def disable_payment_method_for_user(conn, user_id):
+    """Disable cloud card if this user has no remaining valid lease."""
+    if not user_id:
+        return 0
+    if list_user_valid_leases(conn, user_id):
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT Email FROM tableu WHERE ID=%s LIMIT 1",
+            (user_id,),
+        )
+        row = cur.fetchone() or {}
+        email = (row.get("Email") or "").strip().lower()
+        cur.execute(
+            "UPDATE CloudStreaming_PaymentMethods SET Status='disabled', UpdatedAt=NOW(3) "
+            "WHERE Status='active' AND (UserID=%s OR (%s != '' AND LOWER(TRIM(Email))=%s))",
+            (user_id, email, email),
+        )
+        n = cur.rowcount or 0
+    if n:
+        log.info("payment method disabled user=%s email=%s (lease expired)", user_id, email)
+    return n
+
+
 def release_lease(conn, lease_id, reason):
     """Expire lease and free the PS account if it still points at this lease."""
     if not lease_id:
         return
+    user_id = None
     with conn.cursor() as cur:
+        cur.execute(
+            "SELECT UserID FROM CloudStreaming_Leases WHERE ID=%s LIMIT 1",
+            (lease_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            user_id = row.get("UserID")
         cur.execute(
             "UPDATE CloudStreaming_Leases SET Status='expired', ReleasedAt=NOW(3), "
             "ReleaseReason=%s, UpdatedAt=NOW(3) "
@@ -214,15 +275,17 @@ def release_lease(conn, lease_id, reason):
             "WHERE CurrentLeaseID=%s AND Status='leased'",
             (lease_id,),
         )
+    park_sessions_after_lease_expired(conn, lease_id)
+    disable_payment_method_for_user(conn, user_id)
 
 
 def finalize_lease_after_stream(conn, user_id, lease_id):
     """
     After a stream ends:
     - Freeze active → keep account in retention until RetentionUntil.
-    - First 24h after assignment, freeze not yet earned → keep lease active
+    - First 48h after assignment, freeze not yet earned → keep lease active
       so the player can accumulate ≥61 minutes across multiple sessions.
-    - After the first 24h without freeze → release account immediately.
+    - After the first 48h without freeze → release account immediately.
     """
     lease = fetch_lease_row(conn, lease_id, for_update=True)
     if not lease:
@@ -238,9 +301,9 @@ def finalize_lease_after_stream(conn, user_id, lease_id):
             )
         return build_save_retention_payload(conn, user_id, lease_id)
 
-    # First 24 hours after account assignment: hold the lease so
+    # First 48 hours after account assignment: hold the lease so
     # play minutes can accumulate across sessions toward the 61-min freeze.
-    if is_lease_first_24h_window(lease):
+    if is_lease_hold_window(lease):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE CloudStreaming_Leases SET Status='active', UpdatedAt=NOW(3) "
@@ -256,7 +319,7 @@ def finalize_lease_after_stream(conn, user_id, lease_id):
     payload = build_save_retention_payload(conn, user_id, lease_id)
     base = (payload.get("save_retention_message") or "").strip()
     released_note = (
-        "Аккаунт освобождён: заморозка сохранений не активирована в первые 24 часа "
+        "Аккаунт освобождён: заморозка сохранений не активирована в первые 48 часов "
         "после выдачи аккаунта, поэтому аренда не удерживается."
     )
     payload["save_retention_message"] = (
@@ -324,7 +387,7 @@ def lease_first_assigned_at(lease):
 
 
 def lease_first_window_end(lease):
-    """End of the initial 24h hold/freeze window from FirstAssignedAt."""
+    """End of the initial 24h freeze-earn window from FirstAssignedAt."""
     first = lease_first_assigned_at(lease)
     if not first:
         return None
@@ -332,8 +395,24 @@ def lease_first_window_end(lease):
 
 
 def is_lease_first_24h_window(lease):
-    """True during the first 24 hours after the PS account was assigned."""
+    """True during the first 24 hours after the PS account was assigned (freeze earn)."""
     end = lease_first_window_end(lease)
+    if not end:
+        return False
+    return msk_now() < end
+
+
+def lease_hold_window_end(lease):
+    """End of the no-freeze account hold (48h from FirstAssignedAt)."""
+    first = lease_first_assigned_at(lease)
+    if not first:
+        return None
+    return first + timedelta(hours=max(1, int(LEASE_HOLD_HOURS)))
+
+
+def is_lease_hold_window(lease):
+    """True while the account is still held without an earned save freeze."""
+    end = lease_hold_window_end(lease)
     if not end:
         return False
     return msk_now() < end
@@ -370,7 +449,11 @@ def is_lease_first_msk_day(lease):
 
 
 def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, daily_row):
-    """Per-lease: first 24h → 48h freeze at 61 min; later MSK days → +1 day at 90 min if freeze active."""
+    """Per-lease freeze:
+    - first 24h → 48h freeze at 61 min;
+    - after that window, 90 min in one MSK day still activates freeze and +1 day;
+    - later MSK days with freeze already on → +1 day at 90 min.
+    """
     lease = fetch_lease_row(conn, lease_id, for_update=True)
     if not lease or not daily_row:
         return lease
@@ -389,6 +472,20 @@ def apply_save_retention_rules(conn, user_id, lease_id, stream_seconds_today, da
     if not freeze_active and first_window and played_first_window_min >= SAVE_FREEZE_THRESHOLD_MIN:
         new_freeze = True
         new_retention = now + timedelta(hours=SAVE_INITIAL_RETENTION_HOURS)
+
+    # After the first 24h: 90 min today still earns freeze (then +1 day below).
+    if (
+        not new_freeze
+        and not first_window
+        and played_today_min >= SAVE_EXTEND_THRESHOLD_MIN
+    ):
+        new_freeze = True
+        log.info(
+            "late freeze earned lease=%s user=%s played_today=%s",
+            lease_id,
+            user_id,
+            played_today_min,
+        )
 
     if new_freeze and played_today_min >= SAVE_EXTEND_THRESHOLD_MIN and not ext_granted:
         base = new_retention if new_retention and new_retention > now else now
@@ -450,13 +547,22 @@ def build_save_retention_payload(conn, user_id, lease_id):
     played_first_window_min = (
         first_window_play_minutes(conn, lease) if lease else played_today_min
     )
-    mins_to_freeze = (
-        max(0, SAVE_FREEZE_THRESHOLD_MIN - played_first_window_min) if first_window else 0
-    )
+    if freeze_active:
+        mins_to_freeze = 0
+    elif first_window:
+        mins_to_freeze = max(0, SAVE_FREEZE_THRESHOLD_MIN - played_first_window_min)
+    else:
+        mins_to_freeze = (
+            0 if ext_granted else max(0, SAVE_EXTEND_THRESHOLD_MIN - played_today_min)
+        )
     mins_to_extend = (
         0 if ext_granted else max(0, SAVE_EXTEND_THRESHOLD_MIN - played_today_min)
     )
-    hold_until = lease_first_window_end(lease) if first_window else None
+    hold_until = (
+        lease_hold_window_end(lease)
+        if (not freeze_active and is_lease_hold_window(lease))
+        else None
+    )
     account_label = lease_account_label(conn, lease) if lease else ""
     account_prefix = (
         ("Аккаунт «%s».\n\n" % account_label) if account_label else ""
@@ -488,14 +594,28 @@ def build_save_retention_payload(conn, user_id, lease_id):
                 "этого аккаунта) достигнут — заморозка будет активирована."
                 % SAVE_FREEZE_THRESHOLD_MIN
             )
+        elif mins_to_freeze > 0:
+            message = (
+                account_prefix
+                + "Заморозка сохранений пока не активирована.\n\n"
+                "Окно первых 24 часов после выдачи уже прошло, но заморозку ещё можно "
+                "включить: отыграйте %s мин сегодня именно на этом аккаунте "
+                "(по московскому времени, 00:00–23:59).\n"
+                "Сегодня отыграно: %s мин из %s мин — осталось ещё %s мин.\n"
+                "После этого сохранения будут храниться ещё 1 день."
+                % (
+                    SAVE_EXTEND_THRESHOLD_MIN,
+                    played_today_min,
+                    SAVE_EXTEND_THRESHOLD_MIN,
+                    mins_to_freeze,
+                )
+            )
         else:
             message = (
                 account_prefix
-                + "Заморозка сохранений не активна.\n\n"
-                "Первоначальная заморозка (48 ч) доступна только в первые 24 часа "
-                "после выдачи этого аккаунта: нужно суммарно отыграть не менее %s мин "
-                "на нём за это окно (можно за несколько сессий)."
-                % SAVE_FREEZE_THRESHOLD_MIN
+                + "Порог для заморозки (%s мин за сегодня) достигнут — "
+                "заморозка будет активирована на +1 день."
+                % SAVE_EXTEND_THRESHOLD_MIN
             )
     else:
         until_str = fmt_dt_msk(retention_until)
@@ -529,6 +649,7 @@ def build_save_retention_payload(conn, user_id, lease_id):
         "daily_play_minutes": played_first_window_min if first_window else played_today_min,
         "minutes_to_freeze": mins_to_freeze,
         "minutes_to_extend": mins_to_extend,
+        "save_freeze_first_window": first_window,
         "extension_granted_today": ext_granted,
         "save_hold_until": fmt_dt_display(hold_until) if hold_until else "",
         "save_retention_message": message,
@@ -1708,7 +1829,9 @@ def _session_matches_resumable(conn, row, target_pool, st, identifiers, catalog_
 
 
 def find_resumable_session(conn, user_id, service_type, game_identifier, game_id=None, game=None):
-    """Resume whenever the shared MinutesLeft balance still has time (any game)."""
+    """Resume leftover MinutesLeft only while the user still has a live lease."""
+    if not list_user_valid_leases(conn, user_id):
+        return None
     sess = get_user_session(conn, user_id, for_update=True)
     if not sess:
         return None
@@ -2045,6 +2168,13 @@ def charge_hour(conn, email, session_id, user_id, block_no, amount, game_name, i
                 (err, idem_key),
             )
         return False, err
+
+    # Release row locks before the Robokassa poll (up to ~180s).
+    try:
+        if not conn.get_autocommit():
+            conn.commit()
+    except Exception:
+        pass
 
     if not wait_paid(result["invoice_id"], email):
         err = "Оплата не подтверждена банком. Проверьте карту и попробуйте снова."
@@ -2645,6 +2775,27 @@ def handle_quote(conn, req):
         )
 
     user = ensure_user(conn, email)
+    if not list_user_valid_leases(conn, user["ID"]):
+        parked = 0
+        parked_sess = get_user_session(conn, user["ID"])
+        if parked_sess:
+            parked_sess = recover_minutes_if_needed(conn, parked_sess)
+            parked = session_minutes_left(parked_sess)
+        extra = ""
+        if parked > 0:
+            extra = (
+                " Остаток %s мин сохранён и станет доступен после новой аренды."
+                % parked
+            )
+        return reply(
+            req_id,
+            False,
+            error=NO_ASSIGNED_ACCOUNT_ERROR,
+            ui_message=NO_ASSIGNED_ACCOUNT_UI + extra,
+            parked_minutes=parked,
+            resume_session=False,
+        )
+
     game = ensure_game(conn, service_type, game_identifier, game_name)
     conn.commit()
 
@@ -3420,17 +3571,21 @@ def handle_end_stream(conn, req):
         left = int(save_info.get("minutes_to_freeze") or 0)
         if left > 0:
             hold_until = (save_info.get("save_hold_until") or "").strip()
+            window_note = (
+                "суммарно за первые 24 часа"
+                if save_info.get("save_freeze_first_window")
+                else "сегодня (90 мин включают заморозку на +1 день)"
+            )
             if hold_until:
                 ui_extra = (
                     " Аккаунт закреплён до %s МСК: до заморозки сейвов осталось %s мин "
-                    "суммарно за первые 24 часа."
-                    % (hold_until, left)
+                    "%s."
+                    % (hold_until, left, window_note)
                 )
             else:
                 ui_extra = (
-                    " Аккаунт закреплён: до заморозки сейвов осталось %s мин "
-                    "суммарно за первые 24 часа."
-                    % left
+                    " Аккаунт закреплён: до заморозки сейвов осталось %s мин %s."
+                    % (left, window_note)
                 )
     return reply(
         req_id,
@@ -3520,12 +3675,23 @@ def expire_leases_job():
             with conn.cursor() as cur:
                 # Save freeze window ended → free account.
                 cur.execute(
-                    "UPDATE CloudStreaming_Leases SET Status='expired', ReleasedAt=NOW(3), "
-                    "ReleaseReason='save_retention_expired' "
+                    "SELECT ID, UserID FROM CloudStreaming_Leases "
                     "WHERE Status IN ('active','retention') "
                     "AND SaveFreezeActive = 1 AND RetentionUntil < NOW(3)"
                 )
-                # Candidates without freeze — decide in Python so the first 24h
+                freeze_expired = cur.fetchall() or []
+                if freeze_expired:
+                    cur.execute(
+                        "UPDATE CloudStreaming_Leases SET Status='expired', ReleasedAt=NOW(3), "
+                        "ReleaseReason='save_retention_expired' "
+                        "WHERE Status IN ('active','retention') "
+                        "AND SaveFreezeActive = 1 AND RetentionUntil < NOW(3)"
+                    )
+            for row in freeze_expired:
+                disable_payment_method_for_user(conn, row.get("UserID"))
+
+            with conn.cursor() as cur:
+                # Candidates without freeze — decide in Python so the first 48h
                 # after assignment is always held (minutes accumulate across sessions).
                 cur.execute(
                     "SELECT ID, FirstAssignedAt, Status, LastActivityAt "
@@ -3536,8 +3702,8 @@ def expire_leases_job():
                 no_freeze_leases = cur.fetchall() or []
 
             for lease in no_freeze_leases:
-                # Hold the PS account for the first 24 hours after assignment.
-                if is_lease_first_24h_window(lease):
+                # Hold the PS account for the first 48 hours after assignment.
+                if is_lease_hold_window(lease):
                     continue
                 lease_id = lease["ID"]
                 with conn.cursor() as cur:
@@ -3573,9 +3739,11 @@ def expire_leases_job():
                     "SET a.Status='available', a.CurrentLeaseID=NULL "
                     "WHERE l.Status='expired' AND a.Status='leased'"
                 )
+            park_sessions_after_lease_expired(conn)
+            with conn.cursor() as cur:
                 # Safety net: client crashed / force-stopped without end_stream.
                 # Tick once (burn only elapsed since last tick), then freeze — do NOT
-                # erase MinutesLeft; resume_session must still work.
+                # erase MinutesLeft; resume still works while the lease is live.
                 cur.execute(
                     "SELECT ID FROM CloudStreaming_Sessions "
                     "WHERE Status IN ('active','renewal_pending') "
@@ -3619,14 +3787,6 @@ def expire_leases_job():
                 )
 
             with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE CloudStreaming_Sessions SET StreamActive=0, Status='grace_no_stream', "
-                    "BalanceTickAt=NULL, "
-                    "UiMessage='Аренда аккаунта истекла — баланс времени сохранён. "
-                    "При следующем запуске будет выдан другой аккаунт (сейвы не заморожены).' "
-                    "WHERE Status IN ('active','grace_no_stream','renewal_pending') "
-                    "AND LeaseID IN (SELECT ID FROM CloudStreaming_Leases WHERE Status='expired')"
-                )
                 cur.execute(
                     "UPDATE CloudStreaming_Sessions SET Status='ended', EndedAt=NOW(3), "
                     "EndReason='payment_aborted', StreamActive=0, BalanceTickAt=NULL "
@@ -3700,6 +3860,23 @@ def main():
     threading.Thread(target=expire_leases_job, daemon=True).start()
     threading.Thread(target=auto_renew_job, daemon=True).start()
     threading.Thread(target=tcp_server_loop, daemon=True).start()
+    executor = ThreadPoolExecutor(max_workers=UDP_WORKERS, thread_name_prefix="bill")
+    log.info("Cloud billing UDP workers=%s", UDP_WORKERS)
+
+    def handle_one(payload, addr):
+        out = dispatch(payload)
+        try:
+            log.info(
+                "REQ %s done action=%s email=%s uid=%s ok=%s",
+                payload.get("id"),
+                payload.get("action"),
+                (out.get("email") if isinstance(out, dict) else None) or (payload.get("email") or "-"),
+                (out.get("user_id") if isinstance(out, dict) else None) or "-",
+                (out.get("ok") if isinstance(out, dict) else None),
+            )
+            send_udp_reply(sock, out, addr)
+        except Exception as e:
+            log.error("send reply %s: %s", addr, e)
 
     while True:
         data, addr = sock.recvfrom(65535)
@@ -3716,19 +3893,7 @@ def main():
             (payload.get("email") or "-"),
             "-",
         )
-        out = dispatch(payload)
-        try:
-            log.info(
-                "REQ %s done action=%s email=%s uid=%s ok=%s",
-                payload.get("id"),
-                payload.get("action"),
-                (out.get("email") if isinstance(out, dict) else None) or (payload.get("email") or "-"),
-                (out.get("user_id") if isinstance(out, dict) else None) or "-",
-                (out.get("ok") if isinstance(out, dict) else None),
-            )
-            send_udp_reply(sock, out, addr)
-        except Exception as e:
-            log.error("send reply %s: %s", addr, e)
+        executor.submit(handle_one, payload, addr)
 
 
 if __name__ == "__main__":
