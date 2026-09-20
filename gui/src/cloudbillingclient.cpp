@@ -523,7 +523,7 @@ static CloudBillingClient::Result httpsGetJson(const QUrl &url, int timeout_ms)
 {
 	CloudBillingClient::Result result;
 	QNetworkAccessManager nam;
-	QNetworkRequest req(url);
+	QNetworkRequest req{url};
 	req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("chiaki-ng"));
 	req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 	QNetworkReply *reply = nam.get(req);
