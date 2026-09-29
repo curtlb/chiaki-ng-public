@@ -1318,7 +1318,7 @@ void StreamSession::SendLocalMultiplayerFeedback(bool dpad_placeholder)
 					chiaki_session_set_local_pad_connected(&session, (uint8_t)np, true);
 					controller->ChangePlayerIndex((uint8_t)np);
 					CHIAKI_LOGI(log.GetChiakiLog(),
-						"Controller %d joined as local player %d. If this DualSense is not already a user on the PS5, Chiaki will send joinUser with your registered PSN account.",
+						"Controller %d joined as local player %d. Extra pads send joinUser with hardcoded PSN user id 2785499203615042766.",
 						device_id, np + 1);
 					controller_state.buttons &= ~CHIAKI_CONTROLLER_BUTTON_OPTIONS;
 				}
