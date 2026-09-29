@@ -68,6 +68,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_message(ChiakiCtrl *ctrl, uint16_
 /** Local-MP seat join (pads 1..3). kind: 1=DS4, 2=DualSense, 3=other. */
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_pad_join(ChiakiCtrl *ctrl, uint8_t pad, uint8_t kind);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_pad_leave(ChiakiCtrl *ctrl, uint8_t pad);
+/** Assign a console-registered PSN user (8-byte little-endian account id) to pad 1..3. */
+CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_user_join(ChiakiCtrl *ctrl, uint8_t pad, uint8_t kind, const uint8_t user_id[8]);
 CHIAKI_EXPORT ChiakiErrorCode ctrl_message_toggle_microphone(ChiakiCtrl *ctrl, bool muted);
 CHIAKI_EXPORT ChiakiErrorCode ctrl_message_connect_microphone(ChiakiCtrl *ctrl);
 CHIAKI_EXPORT void chiaki_ctrl_set_login_pin(ChiakiCtrl *ctrl, const uint8_t *pin, size_t pin_size);

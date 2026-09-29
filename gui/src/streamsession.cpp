@@ -568,6 +568,11 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 		chiaki_connect_info.cloud_mtu_out = 0;
 		chiaki_connect_info.cloud_rtt_us = 0;
 	}
+	{
+		QByteArray psn_account_id = QByteArray::fromBase64(this->psn_account_id.toUtf8());
+		if(psn_account_id.size() == CHIAKI_PSN_ACCOUNT_ID_SIZE)
+			memcpy(chiaki_connect_info.psn_account_id, psn_account_id.constData(), CHIAKI_PSN_ACCOUNT_ID_SIZE);
+	}
 	err = chiaki_session_init(&session, &chiaki_connect_info, GetChiakiLog());
 	if(err != CHIAKI_ERR_SUCCESS)
 		throw ChiakiException("Chiaki Session Init failed: " + QString::fromLocal8Bit(chiaki_error_string(err)));
@@ -1313,7 +1318,7 @@ void StreamSession::SendLocalMultiplayerFeedback(bool dpad_placeholder)
 					chiaki_session_set_local_pad_connected(&session, (uint8_t)np, true);
 					controller->ChangePlayerIndex((uint8_t)np);
 					CHIAKI_LOGI(log.GetChiakiLog(),
-						"Controller %d joined as local player %d. PS5 should prompt to assign a user account to this pad.",
+						"Controller %d joined as local player %d. If this DualSense is not already a user on the PS5, Chiaki will send joinUser with your registered PSN account.",
 						device_id, np + 1);
 					controller_state.buttons &= ~CHIAKI_CONTROLLER_BUTTON_OPTIONS;
 				}

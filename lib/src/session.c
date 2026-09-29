@@ -425,6 +425,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	session->connect_info.enable_keyboard = connect_info->enable_keyboard;
 	session->connect_info.enable_dualsense = connect_info->enable_dualsense;
 	session->connect_info.custom_port_base = connect_info->custom_port_base;
+	memcpy(session->connect_info.psn_account_id, connect_info->psn_account_id, sizeof(session->connect_info.psn_account_id));
 
 	return CHIAKI_ERR_SUCCESS;
 
