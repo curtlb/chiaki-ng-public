@@ -569,7 +569,7 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 		chiaki_connect_info.cloud_rtt_us = 0;
 	}
 	{
-		QByteArray psn_account_id = QByteArray::fromBase64(this->psn_account_id.toUtf8());
+		QByteArray psn_account_id = QByteArray::fromBase64(connect_info.psn_account_id.toUtf8());
 		if(psn_account_id.size() == CHIAKI_PSN_ACCOUNT_ID_SIZE)
 			memcpy(chiaki_connect_info.psn_account_id, psn_account_id.constData(), CHIAKI_PSN_ACCOUNT_ID_SIZE);
 	}
