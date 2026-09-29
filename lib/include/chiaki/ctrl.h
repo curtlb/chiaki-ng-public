@@ -65,6 +65,9 @@ CHIAKI_EXPORT void chiaki_ctrl_stop(ChiakiCtrl *ctrl);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_join(ChiakiCtrl *ctrl);
 CHIAKI_EXPORT void chiaki_ctrl_fini(ChiakiCtrl *ctrl);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_message(ChiakiCtrl *ctrl, uint16_t type, const uint8_t *payload, size_t payload_size);
+/** Local-MP seat join (pads 1..3). kind: 1=DS4, 2=DualSense, 3=other. */
+CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_pad_join(ChiakiCtrl *ctrl, uint8_t pad, uint8_t kind);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_pad_leave(ChiakiCtrl *ctrl, uint8_t pad);
 CHIAKI_EXPORT ChiakiErrorCode ctrl_message_toggle_microphone(ChiakiCtrl *ctrl, bool muted);
 CHIAKI_EXPORT ChiakiErrorCode ctrl_message_connect_microphone(ChiakiCtrl *ctrl);
 CHIAKI_EXPORT void chiaki_ctrl_set_login_pin(ChiakiCtrl *ctrl, const uint8_t *pin, size_t pin_size);

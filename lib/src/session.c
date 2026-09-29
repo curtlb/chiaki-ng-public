@@ -542,6 +542,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_local_pad_connected(ChiakiSessi
 			chiaki_controller_state_set_idle(&idle);
 			chiaki_feedback_sender_set_pad_state(&session->stream_connection.feedback_sender, pad, &idle);
 		}
+		chiaki_mutex_unlock(&session->stream_connection.feedback_sender_mutex);
+		if(connected)
+			chiaki_ctrl_send_pad_join(&session->ctrl, pad, session->connect_info.enable_dualsense ? 2 : 1);
+		else
+			chiaki_ctrl_send_pad_leave(&session->ctrl, pad);
+		return CHIAKI_ERR_SUCCESS;
 	}
 	chiaki_mutex_unlock(&session->stream_connection.feedback_sender_mutex);
 	return CHIAKI_ERR_SUCCESS;

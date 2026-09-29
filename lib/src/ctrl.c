@@ -54,7 +54,11 @@ typedef enum ctrl_message_type_t {
 	CTRL_MESSAGE_TYPE_MIC_CONNECT = 0x30,
 	CTRL_MESSAGE_TYPE_MIC_TOGGLE = 0x36,
 	CTRL_MESSAGE_TYPE_DISPLAY_DEVICES = 0x910,
-	CTRL_MESSAGE_TYPE_SWITCH_TO_STREAM_CONNECTION = 0x34
+	CTRL_MESSAGE_TYPE_SWITCH_TO_STREAM_CONNECTION = 0x34,
+	CTRL_MESSAGE_TYPE_PAD_JOIN = 0x8,
+	CTRL_MESSAGE_TYPE_PAD_LEAVE = 0x9,
+	CTRL_MESSAGE_TYPE_PAD_JOIN_RESULT = 0x8008,
+	CTRL_MESSAGE_TYPE_PAD_LEAVE_RESULT = 0x8009
 } CtrlMessageType;
 
 typedef enum ctrl_login_state_t {
@@ -194,6 +198,58 @@ static void ctrl_message_queue_free(ChiakiCtrlMessageQueue *queue)
 {
 	free(queue->payload);
 	free(queue);
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_pad_join(ChiakiCtrl *ctrl, uint8_t pad, uint8_t kind)
+{
+	if(pad == 0 || pad > 3)
+		return CHIAKI_ERR_INVALID_DATA;
+	if(kind < 1 || kind > 3)
+		kind = 3;
+	const uint8_t payload[2] = { pad, kind };
+	CHIAKI_LOGI(ctrl->session->log, "Ctrl pad join pad=%u kind=%u", (unsigned)pad, (unsigned)kind);
+	return chiaki_ctrl_send_message(ctrl, CTRL_MESSAGE_TYPE_PAD_JOIN, payload, sizeof(payload));
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_pad_leave(ChiakiCtrl *ctrl, uint8_t pad)
+{
+	if(pad == 0 || pad > 3)
+		return CHIAKI_ERR_INVALID_DATA;
+	const uint8_t payload[1] = { pad };
+	CHIAKI_LOGI(ctrl->session->log, "Ctrl pad leave pad=%u", (unsigned)pad);
+	return chiaki_ctrl_send_message(ctrl, CTRL_MESSAGE_TYPE_PAD_LEAVE, payload, sizeof(payload));
+}
+
+static const char *ctrl_pad_join_result_str(uint8_t code)
+{
+	switch(code)
+	{
+		case 0: return "accepted";
+		case 1: return "refused, the id is already registered";
+		default: return "refused";
+	}
+}
+
+static void ctrl_message_received_pad_join(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 2)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "PS5 join result carried %u byte(s), expected 2", (unsigned)payload_size);
+		return;
+	}
+	CHIAKI_LOGI(ctrl->session->log, "Console answered the pad %u join with %u (%s). Assign a user on the PS5 if accepted.",
+		(unsigned)payload[0], (unsigned)payload[1], ctrl_pad_join_result_str(payload[1]));
+}
+
+static void ctrl_message_received_pad_leave(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 2)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Pad leave result carried %u byte(s), expected 2", (unsigned)payload_size);
+		return;
+	}
+	CHIAKI_LOGI(ctrl->session->log, "Console answered leave of pad %u with %u",
+		(unsigned)payload[0], (unsigned)payload[1]);
 }
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_message(ChiakiCtrl *ctrl, uint16_t type, const uint8_t *payload, size_t payload_size)
@@ -730,6 +786,14 @@ static void ctrl_message_received(ChiakiCtrl *ctrl, uint16_t msg_type, uint8_t *
 			break;
 		case CTRL_MESSAGE_TYPE_SWITCH_TO_STREAM_CONNECTION:
 			ctrl_message_received_switch_to_stream_connection(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_PAD_JOIN:
+		case CTRL_MESSAGE_TYPE_PAD_JOIN_RESULT:
+			ctrl_message_received_pad_join(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_PAD_LEAVE:
+		case CTRL_MESSAGE_TYPE_PAD_LEAVE_RESULT:
+			ctrl_message_received_pad_leave(ctrl, payload, payload_size);
 			break;
 		default:
 			// CHIAKI_LOGW(ctrl->session->log, "Received Ctrl Message with unknown type %#x", msg_type);

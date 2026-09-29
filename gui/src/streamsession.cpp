@@ -1313,7 +1313,7 @@ void StreamSession::SendLocalMultiplayerFeedback(bool dpad_placeholder)
 					chiaki_session_set_local_pad_connected(&session, (uint8_t)np, true);
 					controller->ChangePlayerIndex((uint8_t)np);
 					CHIAKI_LOGI(log.GetChiakiLog(),
-						"Controller %d joined as local player %d. On PS5 assign a user account to this pad.",
+						"Controller %d joined as local player %d. PS5 should prompt to assign a user account to this pad.",
 						device_id, np + 1);
 					controller_state.buttons &= ~CHIAKI_CONTROLLER_BUTTON_OPTIONS;
 				}
