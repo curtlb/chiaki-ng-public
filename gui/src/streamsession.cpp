@@ -1178,6 +1178,10 @@ void StreamSession::UpdateGamepads()
 		if(!controller->IsConnected())
 		{
 			CHIAKI_LOGI(log.GetChiakiLog(), "Controller %d disconnected", controller->GetDeviceID());
+			int dropped_pad = local_pad.take(controller_id);
+			local_pad_buttons_prev.remove(controller_id);
+			if(dropped_pad >= 1)
+				chiaki_session_set_local_pad_connected(&session, (uint8_t)dropped_pad, false);
 			controllers.remove(controller_id);
 			if (controller->IsDualSense() || controller->IsDualSenseEdge())
 			{
@@ -1206,6 +1210,15 @@ void StreamSession::UpdateGamepads()
 			connect(controller, &Controller::StateChanged, this, &StreamSession::SendFeedbackState);
 			connect(controller, &Controller::MicButtonPush, this, &StreamSession::ToggleMute);
 			controllers[controller_id] = controller;
+			if(!local_pad.values().contains(0))
+			{
+				local_pad[controller_id] = 0;
+				CHIAKI_LOGI(log.GetChiakiLog(), "Controller %d is local player 1", controller_id);
+			}
+			else
+			{
+				CHIAKI_LOGI(log.GetChiakiLog(), "Controller %d waiting: press Options to join as player 2-4", controller_id);
+			}
 			if(controller->IsHandheld())
 			{
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
@@ -1220,9 +1233,13 @@ void StreamSession::UpdateGamepads()
 			{
 				haptics_handheld--;
 			}
-			QTimer::singleShot(1000, this, [this, controller] {
-				controller->ChangePlayerIndex(player_index);
-				controller->ChangeLEDColor(led_color);
+			QTimer::singleShot(1000, this, [this, controller, controller_id] {
+				int pad = local_pad.value(controller_id, -1);
+				if(pad < 0)
+					return;
+				controller->ChangePlayerIndex((uint8_t)pad);
+				if(pad == 0)
+					controller->ChangeLEDColor(led_color);
 			});
 			if (controller->IsDualSense() || controller->IsDualSenseEdge())
 			{
@@ -1247,77 +1264,71 @@ void StreamSession::WaitHaptics()
 		QTimer::singleShot(14000, this, &StreamSession::ConnectHaptics);
 }
 
-void StreamSession::DpadSendFeedbackState()
+int StreamSession::NextFreeLocalPad() const
 {
-	ChiakiControllerState state;
-	chiaki_controller_state_set_idle(&state);
-
-#if CHIAKI_GUI_ENABLE_SETSU
-	// setsu is the one that potentially has gyro/accel/orient so copy that directly first
-	state = setsu_state;
-#endif
-
-	for(auto controller : controllers)
+	for(int pad = 1; pad <= 3; pad++)
 	{
-		auto controller_state = controller->GetState();
-		chiaki_controller_state_or(&state, &state, &controller_state);
+		if(!local_pad.values().contains(pad))
+			return pad;
 	}
-
-#if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
-	chiaki_controller_state_or(&state, &state, &sdeck_state);
-#endif
-	chiaki_controller_state_or(&state, &state, &keyboard_state);
-	chiaki_controller_state_or(&state, &state, &touch_state);
-
-	if(input_block)
-	{
-		// Only unblock input after all buttons were released
-		if(input_block == 2 && !state.buttons)
-			input_block = 0;
-		else
-		{
-			chiaki_controller_state_set_idle(&state);
-			chiaki_controller_state_set_idle(&keyboard_state);
-		}
-	}
-	if((dpad_touch_shortcut1 || dpad_touch_shortcut2 || dpad_touch_shortcut3 || dpad_touch_shortcut4) && (!dpad_touch_shortcut1 || (state.buttons & dpad_touch_shortcut1)) && (!dpad_touch_shortcut2 || (state.buttons & dpad_touch_shortcut2)) && (!dpad_touch_shortcut3 || (state.buttons & dpad_touch_shortcut3)) && (!dpad_touch_shortcut4 || (state.buttons & dpad_touch_shortcut4)))
-	{
-		if(!dpad_regular_touch_switched)
-		{
-			dpad_regular_touch_switched = true;
-			dpad_regular = !dpad_regular;
-		}
-	}
-	else
-		dpad_regular_touch_switched = false;
-	if(dpad_touch_increment && !dpad_regular && (state.buttons & (CHIAKI_CONTROLLER_BUTTON_DPAD_DOWN | CHIAKI_CONTROLLER_BUTTON_DPAD_LEFT | CHIAKI_CONTROLLER_BUTTON_DPAD_RIGHT | CHIAKI_CONTROLLER_BUTTON_DPAD_UP)))
-	{
-		HandleDpadTouchEvent(&state, true);
-	}
-	else
-	{
-		if(dpad_touch_id >= 0 && !dpad_touch_stop_timer->isActive())
-			dpad_touch_stop_timer->start(NEW_DPAD_TOUCH_INTERVAL_MS);
-	}
-	chiaki_controller_state_or(&state, &state, &dpad_touch_state);
-	chiaki_session_set_controller_state(&session, &state);
+	return -1;
 }
 
-void StreamSession::SendFeedbackState()
+bool StreamSession::ControllerIsLocalPad(Controller *controller, int pad) const
+{
+	if(!controller)
+		return false;
+	return local_pad.value(controller->GetDeviceID(), -1) == pad;
+}
+
+void StreamSession::SendLocalMultiplayerFeedback(bool dpad_placeholder)
 {
 	ChiakiControllerState state;
 	chiaki_controller_state_set_idle(&state);
 
 #if CHIAKI_GUI_ENABLE_SETSU
-	// setsu is the one that potentially has gyro/accel/orient so copy that directly first
 	state = setsu_state;
 #endif
 
+#if CHIAKI_GUI_ENABLE_SDL_GAMECONTROLLER
 	for(auto controller : controllers)
 	{
-		auto controller_state = controller->GetState();
-		chiaki_controller_state_or(&state, &state, &controller_state);
+		const int device_id = controller->GetDeviceID();
+		ChiakiControllerState controller_state = controller->GetState();
+		const uint32_t prev_buttons = local_pad_buttons_prev.value(device_id, 0);
+		local_pad_buttons_prev[device_id] = controller_state.buttons;
+		int pad = local_pad.value(device_id, -1);
+		if(pad < 0)
+		{
+			const bool options_edge =
+				(controller_state.buttons & CHIAKI_CONTROLLER_BUTTON_OPTIONS)
+				&& !(prev_buttons & CHIAKI_CONTROLLER_BUTTON_OPTIONS);
+			if(options_edge)
+			{
+				const int np = NextFreeLocalPad();
+				if(np >= 1)
+				{
+					local_pad[device_id] = np;
+					pad = np;
+					chiaki_session_set_local_pad_connected(&session, (uint8_t)np, true);
+					controller->ChangePlayerIndex((uint8_t)np);
+					CHIAKI_LOGI(log.GetChiakiLog(),
+						"Controller %d joined as local player %d. On PS5 assign a user account to this pad.",
+						device_id, np + 1);
+					controller_state.buttons &= ~CHIAKI_CONTROLLER_BUTTON_OPTIONS;
+				}
+				else
+					CHIAKI_LOGW(log.GetChiakiLog(), "No free local pad (already 4 players)");
+			}
+		}
+		if(pad < 0)
+			continue;
+		if(pad == 0)
+			chiaki_controller_state_or(&state, &state, &controller_state);
+		else
+			chiaki_session_set_controller_state_pad(&session, (uint8_t)pad, &controller_state);
 	}
+#endif
 
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 	chiaki_controller_state_or(&state, &state, &sdeck_state);
@@ -1327,7 +1338,6 @@ void StreamSession::SendFeedbackState()
 
 	if(input_block)
 	{
-		// Only unblock input after all buttons were released
 		if(input_block == 2 && !state.buttons)
 			input_block = 0;
 		else
@@ -1347,20 +1357,14 @@ void StreamSession::SendFeedbackState()
 	else
 		dpad_regular_touch_switched = false;
 	if(dpad_touch_increment && !dpad_regular && (state.buttons & (CHIAKI_CONTROLLER_BUTTON_DPAD_DOWN | CHIAKI_CONTROLLER_BUTTON_DPAD_LEFT | CHIAKI_CONTROLLER_BUTTON_DPAD_RIGHT | CHIAKI_CONTROLLER_BUTTON_DPAD_UP)))
-	{
-		HandleDpadTouchEvent(&state);
-	}
+		HandleDpadTouchEvent(&state, dpad_placeholder);
 	else
 	{
 		if(dpad_touch_id >= 0 && !dpad_touch_stop_timer->isActive())
 			dpad_touch_stop_timer->start(NEW_DPAD_TOUCH_INTERVAL_MS);
 	}
 
-	// L1+R1+L3+R3 (configurable stream-menu shortcut) → in-stream menu on release.
-	// L2+R2+L3+R3 → toggle fullscreen on release.
-	// Detected here because during an active stream QmlController UI shortcuts
-	// are unreliable while the session owns the pad feedback path.
-	if(settings && settings->GetStreamMenuEnabled())
+	if(!dpad_placeholder && settings && settings->GetStreamMenuEnabled())
 	{
 		auto bit_for = [](uint idx) -> uint32_t {
 			return idx > 0 ? (1u << (idx - 1)) : 0u;
@@ -1379,8 +1383,9 @@ void StreamSession::SendFeedbackState()
 		}
 	}
 
+	if(!dpad_placeholder)
 	{
-		constexpr uint8_t kTriggerDown = 0x80; // ~50%
+		constexpr uint8_t kTriggerDown = 0x80;
 		const bool l2 = state.l2_state >= kTriggerDown
 			|| (state.buttons & CHIAKI_CONTROLLER_ANALOG_BUTTON_L2);
 		const bool r2 = state.r2_state >= kTriggerDown
@@ -1398,6 +1403,16 @@ void StreamSession::SendFeedbackState()
 
 	chiaki_controller_state_or(&state, &state, &dpad_touch_state);
 	chiaki_session_set_controller_state(&session, &state);
+}
+
+void StreamSession::DpadSendFeedbackState()
+{
+	SendLocalMultiplayerFeedback(true);
+}
+
+void StreamSession::SendFeedbackState()
+{
+	SendLocalMultiplayerFeedback(false);
 }
 
 void StreamSession::InitAudio(unsigned int channels, unsigned int rate)
@@ -1688,6 +1703,8 @@ void StreamSession::ConnectRumbleHaptics()
 		QMetaObject::invokeMethod(this, [this, strength]() {
 			for(auto controller : controllers)
 			{
+				if(!ControllerIsLocalPad(controller, 0))
+					continue;
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 				if(haptics_handheld < 1 && (controller->IsHandheld() || (sdeck && controller->IsSteamVirtualUnmasked())))
 #else
@@ -2170,9 +2187,12 @@ void StreamSession::Event(ChiakiEvent *event)
 			uint8_t right = event->rumble.right;
 			uint8_t left_adj = left * rumble_multiplier;
 			uint8_t right_adj = right * rumble_multiplier;
-			QMetaObject::invokeMethod(this, [this, left, right, left_adj, right_adj]() {
+			int pad = (int)event->rumble.pad;
+			QMetaObject::invokeMethod(this, [this, left, right, left_adj, right_adj, pad]() {
 				for(auto controller : controllers)
 				{
+					if(!ControllerIsLocalPad(controller, pad))
+						continue;
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 					if(haptics_handheld < 1 && (controller->IsHandheld() || (sdeck && controller->IsSteamVirtualUnmasked())))
 #else
@@ -2193,7 +2213,10 @@ void StreamSession::Event(ChiakiEvent *event)
 			memcpy(led_state, led_color, 3);
 			QMetaObject::invokeMethod(this, [this, led_state]() {
 				for(auto controller : controllers)
-					controller->ChangeLEDColor(led_state);
+				{
+					if(local_pad.value(controller->GetDeviceID(), -1) == 0)
+						controller->ChangeLEDColor(led_state);
+				}
 			});
 			break;
 		}
@@ -2201,7 +2224,13 @@ void StreamSession::Event(ChiakiEvent *event)
 			player_index = event->player_index;
 			QMetaObject::invokeMethod(this, [this]() {
 				for(auto controller : controllers)
-					controller->ChangePlayerIndex(player_index);
+				{
+					int pad = local_pad.value(controller->GetDeviceID(), -1);
+					if(pad == 0)
+						controller->ChangePlayerIndex(player_index);
+					else if(pad > 0)
+						controller->ChangePlayerIndex((uint8_t)pad);
+				}
 			});
 			break;
 		}
@@ -2294,9 +2323,13 @@ void StreamSession::Event(ChiakiEvent *event)
 			uint8_t data_right[10];
 			memcpy(data_right, event->trigger_effects.right, 10);
 			uint8_t type_right = event->trigger_effects.type_right;
-			QMetaObject::invokeMethod(this, [this, type_left, data_left, type_right, data_right]() {
+			int pad = (int)event->trigger_effects.pad;
+			QMetaObject::invokeMethod(this, [this, type_left, data_left, type_right, data_right, pad]() {
 				for(auto controller : controllers)
-					controller->SetTriggerEffects(type_left, data_left, type_right, data_right);
+				{
+					if(ControllerIsLocalPad(controller, pad))
+						controller->SetTriggerEffects(type_left, data_left, type_right, data_right);
+				}
 			});
 			break;
 		}

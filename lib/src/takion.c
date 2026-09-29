@@ -846,7 +846,7 @@ beach:
 	return err;
 }
 
-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, ChiakiFeedbackState *feedback_state)
+CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *takion, ChiakiSeqNum16 seq_num, ChiakiFeedbackState *feedback_state, uint8_t pad_index)
 {
 	uint8_t buf[0xc + CHIAKI_FEEDBACK_STATE_BUF_SIZE_MAX + TAKION_PSN_WRAPPER_SIZE];
 	buf[0] = TAKION_PACKET_TYPE_FEEDBACK_STATE;
@@ -865,6 +865,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_feedback_state(ChiakiTakion *ta
 		buf_sz = 0xc + CHIAKI_FEEDBACK_STATE_BUF_SIZE_V12;
 		chiaki_feedback_state_format_v12(buf + 0xc, feedback_state);
 	}
+	chiaki_feedback_stamp_pad_index(buf + 0xc, pad_index);
 	return takion_send_feedback_packet(takion, buf, buf_sz);
 }
 

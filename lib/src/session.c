@@ -397,6 +397,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
 	}
 
 	chiaki_controller_state_set_idle(&session->controller_state);
+	for(uint8_t pad = 1; pad < 4; pad++)
+	{
+		session->extra_pad_connected[pad] = false;
+		chiaki_controller_state_set_idle(&session->extra_pad_state[pad]);
+	}
 
 	// Default OFF in the lib: only frontends that explicitly call
 	// chiaki_session_set_ps_chord (Qt/Android/iOS, default on via their own pref)
@@ -495,6 +500,49 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state(ChiakiSession 
 	session->controller_state = *state;
 	if(session->stream_connection.feedback_sender_active)
 		chiaki_feedback_sender_set_controller_state(&session->stream_connection.feedback_sender, &session->controller_state);
+	chiaki_mutex_unlock(&session->stream_connection.feedback_sender_mutex);
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state_pad(ChiakiSession *session, uint8_t pad, ChiakiControllerState *state)
+{
+	if(pad == 0)
+		return chiaki_session_set_controller_state(session, state);
+	if(pad > 3 || !state)
+		return CHIAKI_ERR_INVALID_DATA;
+	ChiakiErrorCode err = chiaki_mutex_lock(&session->stream_connection.feedback_sender_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	session->extra_pad_state[pad] = *state;
+	if(session->stream_connection.feedback_sender_active && session->extra_pad_connected[pad])
+		chiaki_feedback_sender_set_pad_state(&session->stream_connection.feedback_sender, pad, state);
+	chiaki_mutex_unlock(&session->stream_connection.feedback_sender_mutex);
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_local_pad_connected(ChiakiSession *session, uint8_t pad, bool connected)
+{
+	if(pad == 0 || pad > 3)
+		return CHIAKI_ERR_INVALID_DATA;
+	ChiakiErrorCode err = chiaki_mutex_lock(&session->stream_connection.feedback_sender_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	session->extra_pad_connected[pad] = connected;
+	if(!connected)
+		chiaki_controller_state_set_idle(&session->extra_pad_state[pad]);
+	if(session->stream_connection.feedback_sender_active)
+	{
+		chiaki_stream_connection_send_controller_connection(&session->stream_connection, (int32_t)pad, connected, true);
+		chiaki_feedback_sender_set_pad_enabled(&session->stream_connection.feedback_sender, pad, connected);
+		if(connected)
+			chiaki_feedback_sender_set_pad_state(&session->stream_connection.feedback_sender, pad, &session->extra_pad_state[pad]);
+		else
+		{
+			ChiakiControllerState idle;
+			chiaki_controller_state_set_idle(&idle);
+			chiaki_feedback_sender_set_pad_state(&session->stream_connection.feedback_sender, pad, &idle);
+		}
+	}
 	chiaki_mutex_unlock(&session->stream_connection.feedback_sender_mutex);
 	return CHIAKI_ERR_SUCCESS;
 }

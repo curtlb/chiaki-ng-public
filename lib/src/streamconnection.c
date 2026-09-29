@@ -73,7 +73,6 @@ static void stream_connection_takion_data_rumble(ChiakiStreamConnection *stream_
 static void stream_connection_takion_data_pad_info(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size);
 static void stream_connection_takion_data_trigger_effects(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size);
 static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream_connection);
-static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStreamConnection *stream_connection);
 static ChiakiErrorCode stream_connection_enable_microphone(ChiakiStreamConnection *stream_connection);
 static ChiakiErrorCode stream_connection_send_disconnect(ChiakiStreamConnection *stream_connection);
 static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_connection, uint8_t *buf, size_t buf_size);
@@ -359,6 +358,14 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 	chiaki_feedback_sender_set_ps_chord_fired_cb(&stream_connection->feedback_sender, stream_connection_ps_chord_fired, session);
 	chiaki_feedback_sender_set_ps_chord(&stream_connection->feedback_sender, session->ps_chord_enabled, session->ps_chord_hold_ms);
 	chiaki_feedback_sender_set_controller_state(&stream_connection->feedback_sender, &session->controller_state);
+	for(uint8_t pad = 1; pad < 4; pad++)
+	{
+		if(!session->extra_pad_connected[pad])
+			continue;
+		chiaki_stream_connection_send_controller_connection(stream_connection, (int32_t)pad, true, true);
+		chiaki_feedback_sender_set_pad_enabled(&stream_connection->feedback_sender, pad, true);
+		chiaki_feedback_sender_set_pad_state(&stream_connection->feedback_sender, pad, &session->extra_pad_state[pad]);
+	}
 	chiaki_mutex_unlock(&stream_connection->feedback_sender_mutex);
 
 	stream_connection->state = STATE_IDLE;
@@ -560,6 +567,7 @@ static void stream_connection_takion_data_rumble(ChiakiStreamConnection *stream_
 	ChiakiEvent event = { 0 };
 	event.type = CHIAKI_EVENT_RUMBLE;
 	event.rumble.unknown = buf[0];
+	event.rumble.pad = (uint8_t)(buf[0] & 0x03);
 	event.rumble.left = buf[1];
 	event.rumble.right = buf[2];
 	chiaki_session_send_event(stream_connection->session, &event);
@@ -576,6 +584,7 @@ static void stream_connection_takion_data_trigger_effects(ChiakiStreamConnection
 	}
 	ChiakiEvent event = { 0 };
 	event.type = CHIAKI_EVENT_TRIGGER_EFFECTS;
+	event.trigger_effects.pad = (uint8_t)(buf[0] & 0x03);
 	event.trigger_effects.type_left = buf[1];
 	event.trigger_effects.type_right = buf[2];
 	memcpy(&event.trigger_effects.left, buf + 5, 10);
@@ -1103,7 +1112,7 @@ static void stream_connection_takion_data_expect_streaminfo(ChiakiStreamConnecti
 
 	stream_connection_send_streaminfo_ack(stream_connection);
 	
-	ChiakiErrorCode err = stream_connection_send_controller_connection(stream_connection);
+	ChiakiErrorCode err = chiaki_stream_connection_send_controller_connection(stream_connection, 0, true, false);
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
 		CHIAKI_LOGE(stream_connection->log, "StreamConnection failed to send controller connection");
@@ -1291,7 +1300,7 @@ static ChiakiErrorCode stream_connection_send_big(ChiakiStreamConnection *stream
 	return err;
 }
 
-static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStreamConnection *stream_connection)
+CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_send_controller_connection(ChiakiStreamConnection *stream_connection, int32_t controller_id, bool connected, bool has_controller_id)
 {
 	ChiakiSession *session = stream_connection->session;
 	tkproto_TakionMessage msg;
@@ -1300,8 +1309,10 @@ static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStream
 	msg.type = tkproto_TakionMessage_PayloadType_CONTROLLERCONNECTION;
 	msg.has_controller_connection_payload = true;
 	msg.controller_connection_payload.has_connected = true;
-	msg.controller_connection_payload.connected = true;
-	msg.controller_connection_payload.has_controller_id = false;
+	msg.controller_connection_payload.connected = connected;
+	msg.controller_connection_payload.has_controller_id = has_controller_id;
+	if(has_controller_id)
+		msg.controller_connection_payload.controller_id = controller_id;
 	msg.controller_connection_payload.has_controller_type = true;
 	msg.controller_connection_payload.controller_type = session->connect_info.enable_dualsense
 		? tkproto_ControllerConnectionPayload_ControllerType_DUALSENSE
@@ -1319,6 +1330,8 @@ static ChiakiErrorCode stream_connection_send_controller_connection(ChiakiStream
 	}
 
 	buf_size = stream.bytes_written;
+	CHIAKI_LOGI(stream_connection->log, "ControllerConnection id=%d connected=%d has_id=%d",
+		(int)controller_id, connected ? 1 : 0, has_controller_id ? 1 : 0);
 	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 1, buf, buf_size, NULL);
 }
 

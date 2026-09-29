@@ -84,6 +84,15 @@ CHIAKI_EXPORT void chiaki_feedback_state_format_v12(uint8_t *buf, ChiakiFeedback
 	buf[0x1b] = 0x1;
 }
 
+CHIAKI_EXPORT void chiaki_feedback_stamp_pad_index(uint8_t *first_byte, uint8_t pad)
+{
+	if(!first_byte || pad > 3)
+		return;
+	uint8_t kind = (uint8_t)(*first_byte & 0xe0);
+	if(kind == 0x80 || kind == 0xa0 || kind == 0xc0)
+		*first_byte = (uint8_t)((*first_byte & 0xfc) | pad);
+}
+
 CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_history_event_set_button(ChiakiFeedbackHistoryEvent *event, uint64_t button, uint8_t state)
 {
 	// some buttons use a third byte for the state, some don't

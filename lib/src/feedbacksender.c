@@ -29,11 +29,34 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_init(ChiakiFeedbackSender *
 	feedback_sender->ps_chord_fired_user = NULL;
 
 	feedback_sender->state_seq_num = 0;
+	feedback_sender->should_stop = false;
+	feedback_sender->controller_state_changed = false;
 
 	feedback_sender->history_seq_num = 0;
 	ChiakiErrorCode err = chiaki_feedback_history_buffer_init(&feedback_sender->history_buf, FEEDBACK_HISTORY_BUFFER_SIZE);
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
+
+	for(uint8_t pad = 0; pad < 4; pad++)
+	{
+		chiaki_controller_state_set_idle(&feedback_sender->extra_raw[pad]);
+		chiaki_controller_state_set_idle(&feedback_sender->extra_state[pad]);
+		chiaki_controller_state_set_idle(&feedback_sender->extra_prev[pad]);
+		feedback_sender->extra_enabled[pad] = false;
+		feedback_sender->extra_presence_pending[pad] = false;
+		feedback_sender->extra_presence_on[pad] = false;
+		err = chiaki_feedback_history_buffer_init(&feedback_sender->extra_history[pad], FEEDBACK_HISTORY_BUFFER_SIZE);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			while(pad > 0)
+			{
+				pad--;
+				chiaki_feedback_history_buffer_fini(&feedback_sender->extra_history[pad]);
+			}
+			chiaki_feedback_history_buffer_fini(&feedback_sender->history_buf);
+			return err;
+		}
+	}
 
 	err = chiaki_mutex_init(&feedback_sender->state_mutex, false);
 	if(err != CHIAKI_ERR_SUCCESS)
@@ -55,6 +78,8 @@ error_cond:
 error_mutex:
 	chiaki_mutex_fini(&feedback_sender->state_mutex);
 error_history_buffer:
+	for(uint8_t pad = 0; pad < 4; pad++)
+		chiaki_feedback_history_buffer_fini(&feedback_sender->extra_history[pad]);
 	chiaki_feedback_history_buffer_fini(&feedback_sender->history_buf);
 	return err;
 }
@@ -68,6 +93,8 @@ CHIAKI_EXPORT void chiaki_feedback_sender_fini(ChiakiFeedbackSender *feedback_se
 	chiaki_thread_join(&feedback_sender->thread, NULL);
 	chiaki_cond_fini(&feedback_sender->state_cond);
 	chiaki_mutex_fini(&feedback_sender->state_mutex);
+	for(uint8_t pad = 0; pad < 4; pad++)
+		chiaki_feedback_history_buffer_fini(&feedback_sender->extra_history[pad]);
 	chiaki_feedback_history_buffer_fini(&feedback_sender->history_buf);
 }
 
@@ -91,6 +118,50 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_controller_state(Chiaki
 	chiaki_mutex_unlock(&feedback_sender->state_mutex);
 	chiaki_cond_signal(&feedback_sender->state_cond);
 
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_pad_state(ChiakiFeedbackSender *feedback_sender, uint8_t pad, ChiakiControllerState *state)
+{
+	if(pad == 0)
+		return chiaki_feedback_sender_set_controller_state(feedback_sender, state);
+	if(pad > 3 || !state)
+		return CHIAKI_ERR_INVALID_DATA;
+	ChiakiErrorCode err = chiaki_mutex_lock(&feedback_sender->state_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	if(chiaki_controller_state_equals(&feedback_sender->extra_raw[pad], state))
+	{
+		chiaki_mutex_unlock(&feedback_sender->state_mutex);
+		return CHIAKI_ERR_SUCCESS;
+	}
+	feedback_sender->extra_raw[pad] = *state;
+	feedback_sender->controller_state_changed = true;
+	chiaki_mutex_unlock(&feedback_sender->state_mutex);
+	chiaki_cond_signal(&feedback_sender->state_cond);
+	return CHIAKI_ERR_SUCCESS;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_pad_enabled(ChiakiFeedbackSender *feedback_sender, uint8_t pad, bool enabled)
+{
+	if(pad == 0)
+		return CHIAKI_ERR_SUCCESS;
+	if(pad > 3)
+		return CHIAKI_ERR_INVALID_DATA;
+	ChiakiErrorCode err = chiaki_mutex_lock(&feedback_sender->state_mutex);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return err;
+	if(feedback_sender->extra_enabled[pad] != enabled)
+	{
+		feedback_sender->extra_enabled[pad] = enabled;
+		if(!enabled)
+			chiaki_controller_state_set_idle(&feedback_sender->extra_raw[pad]);
+		feedback_sender->extra_presence_pending[pad] = true;
+		feedback_sender->extra_presence_on[pad] = enabled;
+		feedback_sender->controller_state_changed = true;
+	}
+	chiaki_mutex_unlock(&feedback_sender->state_mutex);
+	chiaki_cond_signal(&feedback_sender->state_cond);
 	return CHIAKI_ERR_SUCCESS;
 }
 
@@ -180,26 +251,25 @@ static bool controller_state_equals_for_feedback_state(ChiakiControllerState *a,
 	return true;
 }
 
-static void feedback_sender_send_state(ChiakiFeedbackSender *feedback_sender)
+static void feedback_sender_send_state(ChiakiFeedbackSender *feedback_sender, ChiakiControllerState *cs, uint8_t pad)
 {
 	ChiakiFeedbackState state;
-	state.left_x = feedback_sender->controller_state.left_x;
-	state.left_y = feedback_sender->controller_state.left_y;
-	state.right_x = feedback_sender->controller_state.right_x;
-	state.right_y = feedback_sender->controller_state.right_y;
-	state.gyro_x = feedback_sender->controller_state.gyro_x;
-	state.gyro_y = feedback_sender->controller_state.gyro_y;
-	state.gyro_z = feedback_sender->controller_state.gyro_z;
-	state.accel_x = feedback_sender->controller_state.accel_x;
-	state.accel_y = feedback_sender->controller_state.accel_y;
-	state.accel_z = feedback_sender->controller_state.accel_z;
+	state.left_x = cs->left_x;
+	state.left_y = cs->left_y;
+	state.right_x = cs->right_x;
+	state.right_y = cs->right_y;
+	state.gyro_x = cs->gyro_x;
+	state.gyro_y = cs->gyro_y;
+	state.gyro_z = cs->gyro_z;
+	state.accel_x = cs->accel_x;
+	state.accel_y = cs->accel_y;
+	state.accel_z = cs->accel_z;
+	state.orient_x = cs->orient_x;
+	state.orient_y = cs->orient_y;
+	state.orient_z = cs->orient_z;
+	state.orient_w = cs->orient_w;
 
-	state.orient_x = feedback_sender->controller_state.orient_x;
-	state.orient_y = feedback_sender->controller_state.orient_y;
-	state.orient_z = feedback_sender->controller_state.orient_z;
-	state.orient_w = feedback_sender->controller_state.orient_w;
-
-	ChiakiErrorCode err = chiaki_takion_send_feedback_state(feedback_sender->takion, feedback_sender->state_seq_num++, &state);
+	ChiakiErrorCode err = chiaki_takion_send_feedback_state(feedback_sender->takion, feedback_sender->state_seq_num++, &state, pad);
 	if(err != CHIAKI_ERR_SUCCESS)
 		CHIAKI_LOGE(feedback_sender->log, "FeedbackSender failed to send Feedback State");
 }
@@ -221,11 +291,11 @@ static bool controller_state_equals_for_feedback_history(ChiakiControllerState *
 	return true;
 }
 
-static void feedback_sender_send_history_packet(ChiakiFeedbackSender *feedback_sender)
+static void feedback_sender_send_history_packet(ChiakiFeedbackSender *feedback_sender, ChiakiFeedbackHistoryBuffer *hist)
 {
 	uint8_t buf[0x300];
 	size_t buf_size = sizeof(buf);
-	ChiakiErrorCode err = chiaki_feedback_history_buffer_format(&feedback_sender->history_buf, buf, &buf_size);
+	ChiakiErrorCode err = chiaki_feedback_history_buffer_format(hist, buf, &buf_size);
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
 		CHIAKI_LOGE(feedback_sender->log, "Feedback Sender failed to format history buffer");
@@ -235,10 +305,16 @@ static void feedback_sender_send_history_packet(ChiakiFeedbackSender *feedback_s
 	chiaki_takion_send_feedback_history(feedback_sender->takion, feedback_sender->history_seq_num++, buf, buf_size);
 }
 
-static void feedback_sender_send_history(ChiakiFeedbackSender *feedback_sender)
+static void feedback_sender_push_event(ChiakiFeedbackSender *feedback_sender, ChiakiFeedbackHistoryBuffer *hist, ChiakiFeedbackHistoryEvent *event, uint8_t pad)
 {
-	ChiakiControllerState *state_prev = &feedback_sender->controller_state_prev;
-	ChiakiControllerState *state_now = &feedback_sender->controller_state;
+	if(event->len)
+		chiaki_feedback_stamp_pad_index(event->buf, pad);
+	chiaki_feedback_history_buffer_push(hist, event);
+	feedback_sender_send_history_packet(feedback_sender, hist);
+}
+
+static void feedback_sender_send_history(ChiakiFeedbackSender *feedback_sender, ChiakiControllerState *state_prev, ChiakiControllerState *state_now, ChiakiFeedbackHistoryBuffer *hist, uint8_t pad)
+{
 	uint64_t buttons_prev = state_prev->buttons;
 	uint64_t buttons_now = state_now->buttons;
 	for(uint8_t i=0; i<CHIAKI_CONTROLLER_BUTTONS_COUNT; i++)
@@ -255,8 +331,7 @@ static void feedback_sender_send_history(ChiakiFeedbackSender *feedback_sender)
 				CHIAKI_LOGE(feedback_sender->log, "Feedback Sender failed to format button history event for button id %llu", (unsigned long long)button_id);
 				continue;
 			}
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender_send_history_packet(feedback_sender);
+			feedback_sender_push_event(feedback_sender, hist, &event, pad);
 		}
 	}
 
@@ -265,10 +340,7 @@ static void feedback_sender_send_history(ChiakiFeedbackSender *feedback_sender)
 		ChiakiFeedbackHistoryEvent event;
 		ChiakiErrorCode err = chiaki_feedback_history_event_set_button(&event, CHIAKI_CONTROLLER_ANALOG_BUTTON_L2, state_now->l2_state);
 		if(err == CHIAKI_ERR_SUCCESS)
-		{
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender_send_history_packet(feedback_sender);
-		}
+			feedback_sender_push_event(feedback_sender, hist, &event, pad);
 		else
 			CHIAKI_LOGE(feedback_sender->log, "Feedback Sender failed to format button history event for L2");
 	}
@@ -278,10 +350,7 @@ static void feedback_sender_send_history(ChiakiFeedbackSender *feedback_sender)
 		ChiakiFeedbackHistoryEvent event;
 		ChiakiErrorCode err = chiaki_feedback_history_event_set_button(&event, CHIAKI_CONTROLLER_ANALOG_BUTTON_R2, state_now->r2_state);
 		if(err == CHIAKI_ERR_SUCCESS)
-		{
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender_send_history_packet(feedback_sender);
-		}
+			feedback_sender_push_event(feedback_sender, hist, &event, pad);
 		else
 			CHIAKI_LOGE(feedback_sender->log, "Feedback Sender failed to format button history event for R2");
 	}
@@ -293,8 +362,7 @@ static void feedback_sender_send_history(ChiakiFeedbackSender *feedback_sender)
 			ChiakiFeedbackHistoryEvent event;
 			chiaki_feedback_history_event_set_touchpad(&event, false, (uint8_t)state_prev->touches[i].id,
 					state_prev->touches[i].x, state_prev->touches[i].y);
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender_send_history_packet(feedback_sender);
+			feedback_sender_push_event(feedback_sender, hist, &event, pad);
 		}
 		else if(state_now->touches[i].id >= 0
 				&& (state_prev->touches[i].id != state_now->touches[i].id
@@ -304,8 +372,7 @@ static void feedback_sender_send_history(ChiakiFeedbackSender *feedback_sender)
 			ChiakiFeedbackHistoryEvent event;
 			chiaki_feedback_history_event_set_touchpad(&event, true, (uint8_t)state_now->touches[i].id,
 					state_now->touches[i].x, state_now->touches[i].y);
-			chiaki_feedback_history_buffer_push(&feedback_sender->history_buf, &event);
-			feedback_sender_send_history_packet(feedback_sender);
+			feedback_sender_push_event(feedback_sender, hist, &event, pad);
 		}
 	}
 }
@@ -349,12 +416,36 @@ static void *feedback_sender_thread_func(void *user)
 		bool send_feedback_history = !controller_state_equals_for_feedback_history(&feedback_sender->controller_state, &feedback_sender->controller_state_prev);
 
 		if(send_feedback_state)
-			feedback_sender_send_state(feedback_sender);
+			feedback_sender_send_state(feedback_sender, &feedback_sender->controller_state, 0);
 
 		if(send_feedback_history)
-			feedback_sender_send_history(feedback_sender);
+			feedback_sender_send_history(feedback_sender, &feedback_sender->controller_state_prev, &feedback_sender->controller_state, &feedback_sender->history_buf, 0);
 
 		feedback_sender->controller_state_prev = feedback_sender->controller_state;
+
+		for(uint8_t pad = 1; pad < 4; pad++)
+		{
+			if(feedback_sender->extra_presence_pending[pad])
+			{
+				ChiakiFeedbackHistoryEvent presence;
+				presence.len = 2;
+				presence.buf[0] = (uint8_t)(0x80 | pad);
+				presence.buf[1] = (uint8_t)(0x1f | 0x80 | (feedback_sender->extra_presence_on[pad] ? 0x20 : 0));
+				feedback_sender_push_event(feedback_sender, &feedback_sender->extra_history[pad], &presence, pad);
+				feedback_sender->extra_presence_pending[pad] = false;
+			}
+			if(!feedback_sender->extra_enabled[pad])
+				continue;
+			feedback_sender->extra_state[pad] = feedback_sender->extra_raw[pad];
+			bool send_state = timeout_wake
+				|| !controller_state_equals_for_feedback_state(&feedback_sender->extra_state[pad], &feedback_sender->extra_prev[pad]);
+			bool send_hist = !controller_state_equals_for_feedback_history(&feedback_sender->extra_state[pad], &feedback_sender->extra_prev[pad]);
+			if(send_state)
+				feedback_sender_send_state(feedback_sender, &feedback_sender->extra_state[pad], pad);
+			if(send_hist)
+				feedback_sender_send_history(feedback_sender, &feedback_sender->extra_prev[pad], &feedback_sender->extra_state[pad], &feedback_sender->extra_history[pad], pad);
+			feedback_sender->extra_prev[pad] = feedback_sender->extra_state[pad];
+		}
 
 		if(chord_just_fired && feedback_sender->ps_chord_fired_cb)
 		{
