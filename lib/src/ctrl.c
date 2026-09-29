@@ -57,8 +57,13 @@ typedef enum ctrl_message_type_t {
 	CTRL_MESSAGE_TYPE_SWITCH_TO_STREAM_CONNECTION = 0x34,
 	CTRL_MESSAGE_TYPE_PAD_JOIN = 0x8,
 	CTRL_MESSAGE_TYPE_PAD_LEAVE = 0x9,
+	CTRL_MESSAGE_TYPE_PAD_DROPPED = 0xa,
+	CTRL_MESSAGE_TYPE_PAD_IDENTITY = 0x61,
+	CTRL_MESSAGE_TYPE_PAD_PASSCODE_REQ = 0x64,
+	CTRL_MESSAGE_TYPE_USER_JOIN = 0x68,
 	CTRL_MESSAGE_TYPE_PAD_JOIN_RESULT = 0x8008,
-	CTRL_MESSAGE_TYPE_PAD_LEAVE_RESULT = 0x8009
+	CTRL_MESSAGE_TYPE_PAD_LEAVE_RESULT = 0x8009,
+	CTRL_MESSAGE_TYPE_USER_JOIN_RESULT = 0x8068
 } CtrlMessageType;
 
 typedef enum ctrl_login_state_t {
@@ -130,6 +135,10 @@ static void ctrl_message_received_keyboard_open(ChiakiCtrl *ctrl, uint8_t *paylo
 static void ctrl_message_received_keyboard_close(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
 static void ctrl_message_received_keyboard_text_change(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
 static void ctrl_message_received_switch_to_stream_connection(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_pad_identity(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_pad_passcode(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_user_join_result(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
+static void ctrl_message_received_pad_dropped(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size);
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_init(ChiakiCtrl *ctrl, ChiakiSession *session)
 {
@@ -220,6 +229,27 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_pad_leave(ChiakiCtrl *ctrl, uint8
 	return chiaki_ctrl_send_message(ctrl, CTRL_MESSAGE_TYPE_PAD_LEAVE, payload, sizeof(payload));
 }
 
+static void ctrl_fill_user_join_payload(uint8_t payload[16], uint8_t pad, uint8_t kind, const uint8_t user_id[8])
+{
+	memset(payload, 0, 16);
+	if(user_id)
+		memcpy(payload, user_id, 8);
+	payload[8] = pad;
+	payload[9] = kind;
+}
+
+CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_user_join(ChiakiCtrl *ctrl, uint8_t pad, uint8_t kind, const uint8_t user_id[8])
+{
+	if(pad == 0 || pad > 3)
+		return CHIAKI_ERR_INVALID_DATA;
+	if(kind < 1 || kind > 3)
+		kind = 3;
+	uint8_t payload[16];
+	ctrl_fill_user_join_payload(payload, pad, kind, user_id);
+	CHIAKI_LOGI(ctrl->session->log, "Ctrl user join pad=%u kind=%u", (unsigned)pad, (unsigned)kind);
+	return chiaki_ctrl_send_message(ctrl, CTRL_MESSAGE_TYPE_USER_JOIN, payload, sizeof(payload));
+}
+
 static const char *ctrl_pad_join_result_str(uint8_t code)
 {
 	switch(code)
@@ -250,6 +280,135 @@ static void ctrl_message_received_pad_leave(ChiakiCtrl *ctrl, uint8_t *payload, 
 	}
 	CHIAKI_LOGI(ctrl->session->log, "Console answered leave of pad %u with %u",
 		(unsigned)payload[0], (unsigned)payload[1]);
+}
+
+static bool ctrl_psn_account_id_set(const uint8_t *id)
+{
+	size_t i;
+	for(i = 0; i < CHIAKI_PSN_ACCOUNT_ID_SIZE; i++)
+	{
+		if(id[i])
+			return true;
+	}
+	return false;
+}
+
+static bool ctrl_parse_decimal_u64(const char *s, uint64_t *out)
+{
+	uint64_t v = 0;
+	if(!s || !*s)
+		return false;
+	for(; *s; s++)
+	{
+		if(*s < '0' || *s > '9')
+			return false;
+		if(v > (UINT64_MAX - (uint64_t)(*s - '0')) / 10)
+			return false;
+		v = v * 10 + (uint64_t)(*s - '0');
+	}
+	*out = v;
+	return true;
+}
+
+static void ctrl_write_u64_le(uint8_t *p, uint64_t v)
+{
+	int i;
+	for(i = 0; i < 8; i++)
+		p[i] = (uint8_t)(v >> (8 * i));
+}
+
+static uint8_t ctrl_pad_kind(ChiakiCtrl *ctrl)
+{
+	return ctrl->session->connect_info.enable_dualsense ? 2 : 1;
+}
+
+static void ctrl_message_received_pad_identity(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	char asked[64];
+	size_t n = 0;
+	uint8_t pad;
+	uint8_t kind;
+	uint8_t user_id[8];
+	uint8_t join_payload[16];
+	const char *src;
+
+	if(!payload_size)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "PS5 identity message carried no pad byte");
+		return;
+	}
+
+	pad = payload[0];
+	memset(asked, 0, sizeof(asked));
+	for(size_t i = 1; i < payload_size && n + 1 < sizeof(asked); i++)
+	{
+		uint8_t c = payload[i];
+		if(c >= 32 && c < 127)
+			asked[n++] = (char)c;
+	}
+
+	CHIAKI_LOGI(ctrl->session->log,
+		"Console will not auto-assign pad %u (DualSense account '%s' is not a user on this PS5). Sending joinUser so the console can assign a registered account.",
+		(unsigned)pad, asked);
+
+	if(pad == 0 || pad > 3)
+		return;
+
+	kind = ctrl_pad_kind(ctrl);
+	memset(user_id, 0, sizeof(user_id));
+	src = "zero (set PSN Account ID in Chiaki settings)";
+	if(ctrl_psn_account_id_set(ctrl->session->connect_info.psn_account_id))
+	{
+		memcpy(user_id, ctrl->session->connect_info.psn_account_id, sizeof(user_id));
+		src = "registered PSN account id";
+	}
+	else
+	{
+		uint64_t parsed;
+		if(ctrl_parse_decimal_u64(asked, &parsed))
+		{
+			ctrl_write_u64_le(user_id, parsed);
+			src = "account id from DualSense identity";
+		}
+	}
+
+	CHIAKI_LOGI(ctrl->session->log, "Ctrl user join pad=%u kind=%u via %s", (unsigned)pad, (unsigned)kind, src);
+	ctrl_fill_user_join_payload(join_payload, pad, kind, user_id);
+	ctrl_message_send(ctrl, CTRL_MESSAGE_TYPE_USER_JOIN, join_payload, sizeof(join_payload));
+}
+
+static void ctrl_message_received_pad_passcode(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(!payload_size)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "PS5 passcode request carried no pad byte");
+		return;
+	}
+	CHIAKI_LOGI(ctrl->session->log,
+		"Console is asking for pad %u's four-digit passcode; the join stays parked until that user is unlocked on the PS5.",
+		(unsigned)payload[0]);
+}
+
+static void ctrl_message_received_user_join_result(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(payload_size != 2)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "PS5 user-join result carried %u byte(s), expected 2", (unsigned)payload_size);
+		return;
+	}
+	CHIAKI_LOGI(ctrl->session->log, "Console answered user-join of pad %u with %u%s",
+		(unsigned)payload[0], (unsigned)payload[1],
+		payload[1] == 0 ? " (accepted)" : " (refused)");
+}
+
+static void ctrl_message_received_pad_dropped(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+{
+	if(!payload_size)
+	{
+		CHIAKI_LOGW(ctrl->session->log, "Console dropped a pad but named none");
+		return;
+	}
+	CHIAKI_LOGI(ctrl->session->log, "Console dropped pad %u", (unsigned)payload[0]);
 }
 
 CHIAKI_EXPORT ChiakiErrorCode chiaki_ctrl_send_message(ChiakiCtrl *ctrl, uint16_t type, const uint8_t *payload, size_t payload_size)
@@ -794,6 +953,18 @@ static void ctrl_message_received(ChiakiCtrl *ctrl, uint16_t msg_type, uint8_t *
 		case CTRL_MESSAGE_TYPE_PAD_LEAVE:
 		case CTRL_MESSAGE_TYPE_PAD_LEAVE_RESULT:
 			ctrl_message_received_pad_leave(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_PAD_IDENTITY:
+			ctrl_message_received_pad_identity(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_PAD_PASSCODE_REQ:
+			ctrl_message_received_pad_passcode(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_USER_JOIN_RESULT:
+			ctrl_message_received_user_join_result(ctrl, payload, payload_size);
+			break;
+		case CTRL_MESSAGE_TYPE_PAD_DROPPED:
+			ctrl_message_received_pad_dropped(ctrl, payload, payload_size);
 			break;
 		default:
 			// CHIAKI_LOGW(ctrl->session->log, "Received Ctrl Message with unknown type %#x", msg_type);
