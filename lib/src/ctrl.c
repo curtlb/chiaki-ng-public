@@ -294,7 +294,12 @@ static void ctrl_write_u64_le(uint8_t *p, uint64_t v)
 
 static uint8_t ctrl_pad_kind(ChiakiCtrl *ctrl)
 {
-	return ctrl->session->connect_info.enable_dualsense ? 2 : 1;
+	/*
+	 * PX Play CTRL kind is not the Takion DualSense type.
+	 * eg.a(controller): Vita=1, DS3=2, everything else including DualSense/DS4=3.
+	 */
+	(void)ctrl;
+	return 3;
 }
 
 static void ctrl_message_received_pad_identity(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
@@ -330,8 +335,9 @@ static void ctrl_message_received_pad_identity(ChiakiCtrl *ctrl, uint8_t *payloa
 
 	kind = ctrl_pad_kind(ctrl);
 	ctrl_write_u64_le(user_id, CTRL_EXTRA_PAD_USER_ID_U64);
-	CHIAKI_LOGI(ctrl->session->log, "Ctrl user join pad=%u kind=%u user_id=%" PRIu64, (unsigned)pad, (unsigned)kind, CTRL_EXTRA_PAD_USER_ID_U64);
 	ctrl_fill_user_join_payload(join_payload, pad, kind, user_id);
+	CHIAKI_LOGI(ctrl->session->log, "Ctrl user join pad=%u kind=%u user_id=%" PRIu64, (unsigned)pad, (unsigned)kind, CTRL_EXTRA_PAD_USER_ID_U64);
+	chiaki_log_hexdump(ctrl->session->log, CHIAKI_LOG_INFO, join_payload, sizeof(join_payload));
 	ctrl_message_send(ctrl, CTRL_MESSAGE_TYPE_USER_JOIN, join_payload, sizeof(join_payload));
 }
 
@@ -354,9 +360,9 @@ static void ctrl_message_received_user_join_result(ChiakiCtrl *ctrl, uint8_t *pa
 		CHIAKI_LOGW(ctrl->session->log, "PS5 user-join result carried %u byte(s), expected 2", (unsigned)payload_size);
 		return;
 	}
-	CHIAKI_LOGI(ctrl->session->log, "Console answered user-join of pad %u with %u%s",
+	CHIAKI_LOGI(ctrl->session->log, "Console answered user-join of pad %u with %u (%s)",
 		(unsigned)payload[0], (unsigned)payload[1],
-		payload[1] == 0 ? " (accepted)" : " (refused)");
+		payload[1] == 0 ? "seated" : payload[1] == 3 ? "passcode required" : "refused");
 }
 
 static void ctrl_message_received_pad_dropped(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)

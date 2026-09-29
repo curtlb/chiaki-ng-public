@@ -545,7 +545,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_local_pad_connected(ChiakiSessi
 		}
 		chiaki_mutex_unlock(&session->stream_connection.feedback_sender_mutex);
 		if(connected)
-			chiaki_ctrl_send_pad_join(&session->ctrl, pad, session->connect_info.enable_dualsense ? 2 : 1);
+			chiaki_ctrl_send_pad_join(&session->ctrl, pad, 3);
 		else
 			chiaki_ctrl_send_pad_leave(&session->ctrl, pad);
 		return CHIAKI_ERR_SUCCESS;

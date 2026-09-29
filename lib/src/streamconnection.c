@@ -365,7 +365,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 		chiaki_stream_connection_send_controller_connection(stream_connection, (int32_t)pad, true, true);
 		chiaki_feedback_sender_set_pad_enabled(&stream_connection->feedback_sender, pad, true);
 		chiaki_feedback_sender_set_pad_state(&stream_connection->feedback_sender, pad, &session->extra_pad_state[pad]);
-		chiaki_ctrl_send_pad_join(&session->ctrl, pad, session->connect_info.enable_dualsense ? 2 : 1);
+		chiaki_ctrl_send_pad_join(&session->ctrl, pad, 3);
 	}
 	chiaki_mutex_unlock(&stream_connection->feedback_sender_mutex);
 
