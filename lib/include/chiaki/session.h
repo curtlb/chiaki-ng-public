@@ -146,13 +146,15 @@ typedef struct chiaki_audio_stream_info_event_t
 
 typedef struct chiaki_rumble_event_t
 {
-	uint8_t unknown;
+	uint8_t unknown; // packet byte 0; low 2 bits are local pad 0..3 (PX Play)
+	uint8_t pad; // 0..3
 	uint8_t left; // low-frequency
 	uint8_t right; // high-frequency
 } ChiakiRumbleEvent;
 
 typedef struct chiaki_trigger_effects_event_t
 {
+	uint8_t pad; // 0..3 from packet byte 0
 	uint8_t type_left;
 	uint8_t type_right;
 	uint8_t left[10];
@@ -293,6 +295,9 @@ typedef struct chiaki_session_t
 	ChiakiStreamConnection stream_connection;
 
 	ChiakiControllerState controller_state;
+	/** Extra local pads 1..3 (pad 0 is controller_state). Survives until the feedback sender starts. */
+	bool extra_pad_connected[4];
+	ChiakiControllerState extra_pad_state[4];
 
 	// Unified PS-button chord (OPTIONS+SHARE hold -> BUTTON_PS pulse), applied in
 	// the feedback sender. Stored here so platforms can configure it before the
@@ -307,6 +312,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_start(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_stop(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_join(ChiakiSession *session);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state(ChiakiSession *session, ChiakiControllerState *state);
+/** Pad 0 is chiaki_session_set_controller_state. Pads 1..3 are extra local players. */
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state_pad(ChiakiSession *session, uint8_t pad, ChiakiControllerState *state);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_local_pad_connected(ChiakiSession *session, uint8_t pad, bool connected);
 /**
  * Configure the OPTIONS+SHARE -> PS chord (see ChiakiPsChord). Safe to call
  * before or during a stream. hold_ms == 0 keeps the current hold duration.

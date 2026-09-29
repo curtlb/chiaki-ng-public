@@ -40,6 +40,13 @@ CHIAKI_EXPORT void chiaki_feedback_state_format_v9(uint8_t *buf, ChiakiFeedbackS
  */
 CHIAKI_EXPORT void chiaki_feedback_state_format_v12(uint8_t *buf, ChiakiFeedbackState *state);
 
+/**
+ * Stamp local-multiplayer pad index 0..3 into a feedback/history event's first byte.
+ * PX Play / official Remote Play multiplex pads in the low 2 bits of the kind byte
+ * (0x80 buttons, 0xA0 analog+motion, 0xC0 touch). Pad 0 is the legacy unstamped value.
+ */
+CHIAKI_EXPORT void chiaki_feedback_stamp_pad_index(uint8_t *first_byte, uint8_t pad);
+
 #define CHIAKI_HISTORY_EVENT_SIZE_MAX 0x5
 
 typedef struct chiaki_feedback_history_event_t

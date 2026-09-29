@@ -209,6 +209,8 @@ class StreamSession : public QObject
 		uint8_t led_color[3];
 		uint8_t player_index;
 		QHash<int, Controller *> controllers;
+		QHash<int, int> local_pad; // SDL device id -> Remote Play pad 0..3
+		QHash<int, uint32_t> local_pad_buttons_prev;
 #if CHIAKI_GUI_ENABLE_SETSU
 		Setsu *setsu;
 		QMap<QPair<QString, SetsuTrackingId>, uint8_t> setsu_ids;
@@ -316,6 +318,9 @@ class StreamSession : public QObject
 #endif
 		void AdjustAdaptiveTriggerPacket(uint8_t *buf, uint8_t type);
 		void WaitHaptics();
+		int NextFreeLocalPad() const;
+		void SendLocalMultiplayerFeedback(bool dpad_placeholder);
+		bool ControllerIsLocalPad(Controller *controller, int pad) const;
 
 	private slots:
 		void InitAudio(unsigned int channels, unsigned int rate);

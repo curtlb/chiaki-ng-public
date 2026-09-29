@@ -112,6 +112,8 @@ CHIAKI_EXPORT ChiakiErrorCode stream_connection_send_toggle_mute_direct_message(
 CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_stop(ChiakiStreamConnection *stream_connection);
 
 CHIAKI_EXPORT ChiakiErrorCode stream_connection_send_corrupt_frame(ChiakiStreamConnection *stream_connection, ChiakiSeqNum16 start, ChiakiSeqNum16 end);
+/** controller_id 0..3. connected=false disconnects that local pad from the console. */
+CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_send_controller_connection(ChiakiStreamConnection *stream_connection, int32_t controller_id, bool connected, bool has_controller_id);
 
 /**
  * Thread-safe read of the currently-decoded video resolution (the negotiated/adaptive

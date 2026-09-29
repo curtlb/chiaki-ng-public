@@ -50,6 +50,17 @@ typedef struct chiaki_feedback_sender_t
 	ChiakiControllerState controller_state_raw;
 	ChiakiControllerState controller_state;
 	bool controller_state_changed;
+	/**
+	 * Extra local pads 1..3 (pad 0 is controller_state above).
+	 * Official Remote Play / PX Play send a separate stamped feedback stream per pad.
+	 */
+	ChiakiControllerState extra_raw[4];
+	ChiakiControllerState extra_state[4];
+	ChiakiControllerState extra_prev[4];
+	bool extra_enabled[4];
+	bool extra_presence_pending[4];
+	bool extra_presence_on[4];
+	ChiakiFeedbackHistoryBuffer extra_history[4];
 	ChiakiPsChord ps_chord;
 	// Invoked (outside state_mutex) on the rising edge of a chord fire, so the
 	// owner can emit a client event. NULL = no notification. Set by streamconnection.
@@ -62,6 +73,8 @@ typedef struct chiaki_feedback_sender_t
 CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_init(ChiakiFeedbackSender *feedback_sender, ChiakiTakion *takion);
 CHIAKI_EXPORT void chiaki_feedback_sender_fini(ChiakiFeedbackSender *feedback_sender);
 CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_controller_state(ChiakiFeedbackSender *feedback_sender, ChiakiControllerState *state);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_pad_state(ChiakiFeedbackSender *feedback_sender, uint8_t pad, ChiakiControllerState *state);
+CHIAKI_EXPORT ChiakiErrorCode chiaki_feedback_sender_set_pad_enabled(ChiakiFeedbackSender *feedback_sender, uint8_t pad, bool enabled);
 CHIAKI_EXPORT void chiaki_feedback_sender_set_ps_chord(ChiakiFeedbackSender *feedback_sender, bool enabled, uint32_t hold_ms);
 
 /**
