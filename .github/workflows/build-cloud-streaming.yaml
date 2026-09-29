@@ -1,6 +1,7 @@
 name: Build cloud-streaming branch
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - feature/cloud-streaming
@@ -43,13 +44,13 @@ jobs:
         with:
           msystem: mingw64
           update: true
-          install: git
+          suppress-deprecation-warnings: msystem-mingw64
+          install: git diffutils
           pacboy: >-
             ca-certificates:p
             cc:p
             cmake:p
             curl:p
-            diffutils:p
             fast_float:p
             fftw:p
             hidapi:p
@@ -73,6 +74,7 @@ jobs:
             qt6-base:p
             qt6-declarative:p
             qt6-svg:p
+            qt6-tools:p
             SDL2:p
             shaderc:p
             speexdsp:p
