@@ -282,33 +282,8 @@ static void ctrl_message_received_pad_leave(ChiakiCtrl *ctrl, uint8_t *payload, 
 		(unsigned)payload[0], (unsigned)payload[1]);
 }
 
-static bool ctrl_psn_account_id_set(const uint8_t *id)
-{
-	size_t i;
-	for(i = 0; i < CHIAKI_PSN_ACCOUNT_ID_SIZE; i++)
-	{
-		if(id[i])
-			return true;
-	}
-	return false;
-}
-
-static bool ctrl_parse_decimal_u64(const char *s, uint64_t *out)
-{
-	uint64_t v = 0;
-	if(!s || !*s)
-		return false;
-	for(; *s; s++)
-	{
-		if(*s < '0' || *s > '9')
-			return false;
-		if(v > (UINT64_MAX - (uint64_t)(*s - '0')) / 10)
-			return false;
-		v = v * 10 + (uint64_t)(*s - '0');
-	}
-	*out = v;
-	return true;
-}
+/* Extra DualSense pads: console-registered PSN user id (PX Play decimal). */
+#define CTRL_EXTRA_PAD_USER_ID_U64 UINT64_C(2785499203615042766)
 
 static void ctrl_write_u64_le(uint8_t *p, uint64_t v)
 {
@@ -330,7 +305,6 @@ static void ctrl_message_received_pad_identity(ChiakiCtrl *ctrl, uint8_t *payloa
 	uint8_t kind;
 	uint8_t user_id[8];
 	uint8_t join_payload[16];
-	const char *src;
 
 	if(!payload_size)
 	{
@@ -348,31 +322,15 @@ static void ctrl_message_received_pad_identity(ChiakiCtrl *ctrl, uint8_t *payloa
 	}
 
 	CHIAKI_LOGI(ctrl->session->log,
-		"Console will not auto-assign pad %u (DualSense account '%s' is not a user on this PS5). Sending joinUser so the console can assign a registered account.",
-		(unsigned)pad, asked);
+		"Console will not auto-assign pad %u (DualSense identity '%s' is not a user on this PS5). Sending joinUser with extra-pad account %" PRIu64 ".",
+		(unsigned)pad, asked, CTRL_EXTRA_PAD_USER_ID_U64);
 
 	if(pad == 0 || pad > 3)
 		return;
 
 	kind = ctrl_pad_kind(ctrl);
-	memset(user_id, 0, sizeof(user_id));
-	src = "zero (set PSN Account ID in Chiaki settings)";
-	if(ctrl_psn_account_id_set(ctrl->session->connect_info.psn_account_id))
-	{
-		memcpy(user_id, ctrl->session->connect_info.psn_account_id, sizeof(user_id));
-		src = "registered PSN account id";
-	}
-	else
-	{
-		uint64_t parsed;
-		if(ctrl_parse_decimal_u64(asked, &parsed))
-		{
-			ctrl_write_u64_le(user_id, parsed);
-			src = "account id from DualSense identity";
-		}
-	}
-
-	CHIAKI_LOGI(ctrl->session->log, "Ctrl user join pad=%u kind=%u via %s", (unsigned)pad, (unsigned)kind, src);
+	ctrl_write_u64_le(user_id, CTRL_EXTRA_PAD_USER_ID_U64);
+	CHIAKI_LOGI(ctrl->session->log, "Ctrl user join pad=%u kind=%u user_id=%" PRIu64, (unsigned)pad, (unsigned)kind, CTRL_EXTRA_PAD_USER_ID_U64);
 	ctrl_fill_user_join_payload(join_payload, pad, kind, user_id);
 	ctrl_message_send(ctrl, CTRL_MESSAGE_TYPE_USER_JOIN, join_payload, sizeof(join_payload));
 }
