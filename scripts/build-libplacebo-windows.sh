@@ -13,6 +13,6 @@ fi
 cd libplacebo || exit 1
 git checkout $TAG || exit 1
 DIR=./build || exit 1
-meson setup --prefix /mingw64 -Dxxhash=disabled $DIR || exit 1
+meson setup --prefix /ucrt64 -Dxxhash=disabled $DIR || exit 1
 ninja -C$DIR || exit 1
 ninja -Cbuild install || exit 1
