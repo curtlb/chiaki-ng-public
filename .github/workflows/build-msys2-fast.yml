@@ -38,7 +38,7 @@ jobs:
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: mingw64
+          msystem: UCRT64
           update: true
           install: >-
             git
@@ -101,7 +101,7 @@ jobs:
         id: cache-libplacebo
         uses: actions/cache@v4
         with:
-          path: /mingw64/lib/libplacebo*
+          path: /ucrt64/lib/libplacebo*
           key: libplacebo-${{ runner.os }}-${{ hashFiles('scripts/build-libplacebo-windows.sh') }}
           
       - name: Build libplacebo
@@ -115,14 +115,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            /mingw64/bin/avcodec*.dll
-            /mingw64/bin/avformat*.dll
-            /mingw64/bin/avutil*.dll
-            /mingw64/bin/swscale*.dll
-            /mingw64/bin/swresample*.dll
-            /mingw64/include/libav*
-            /mingw64/lib/libav*
-            /mingw64/lib/pkgconfig/libav*
+            /ucrt64/bin/avcodec*.dll
+            /ucrt64/bin/avformat*.dll
+            /ucrt64/bin/avutil*.dll
+            /ucrt64/bin/swscale*.dll
+            /ucrt64/bin/swresample*.dll
+            /ucrt64/include/libav*
+            /ucrt64/lib/libav*
+            /ucrt64/lib/pkgconfig/libav*
           key: ffmpeg-7.1-${{ runner.os }}
           
       - name: Setup FFmpeg
@@ -130,9 +130,9 @@ jobs:
         run: |
           curl -LO https://github.com/streetpea/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip
           unzip -q ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip
-          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/bin/." /mingw64/bin
-          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/include/." /mingw64/include
-          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/lib/." /mingw64/lib
+          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/bin/." /ucrt64/bin
+          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/include/." /ucrt64/include
+          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/lib/." /ucrt64/lib
           
       # Кэш для CMake build (частичный)
       - name: Cache CMake build
@@ -150,7 +150,7 @@ jobs:
           cmake -S . -B build -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCHIAKI_ENABLE_CLI=OFF \
-            -DCMAKE_PREFIX_PATH="/mingw64" \
+            -DCMAKE_PREFIX_PATH="/ucrt64" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
             
@@ -165,9 +165,9 @@ jobs:
           
       - name: Collect dependencies
         run: |
-          export PATH="${{ github.workspace }}/build/third-party/cpp-steam-tools:/mingw64/share/qt6/bin/:${PATH}"
-          export QT_PLUGIN_PATH="/mingw64/share/qt6/plugins"
-          export QML2_IMPORT_PATH="/mingw64/share/qt6/qml"
+          export PATH="${{ github.workspace }}/build/third-party/cpp-steam-tools:/ucrt64/share/qt6/bin/:${PATH}"
+          export QT_PLUGIN_PATH="/ucrt64/share/qt6/plugins"
+          export QML2_IMPORT_PATH="/ucrt64/share/qt6/qml"
           
           echo "Copying DLL dependencies..."
           echo chiaki-ng-Win/chiaki.exe > tmp0.txt
