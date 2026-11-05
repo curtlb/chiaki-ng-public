@@ -40,7 +40,6 @@
 // The only stream server the PS Now client has a scope for. A PS5 session names a
 // different id; sso:none against the PS Now redirect is rejected (401 / 4170).
 #define GK_PSNOW_STREAM_CLIENT_ID "52b0e92a-e131-4940-86f5-5d4447c73dd1"
-#define GK_REDIR_LOCAL "gaikai://local"
 
 typedef struct
 {
@@ -271,8 +270,9 @@ static struct json_object *gk_build_spec(GaikaiCtx *c, const char *entitlement_i
 	S_STR("npEnv", "np");
 	S_STR("language", lang);
 	S_STR("cloudEndpoint", "https://cc.prod.gaikai.com");
-	// The spec field is gaikai://local. The OAuth redirect stays the PS Now page.
-	S_STR("redirectUri", c->pscloud ? GK_REDIR_LOCAL : c->redirect_uri);
+	// Gaikai redeems the auth codes with this URI. It must be the redirect they
+	// were issued for; gaikai://local makes the exchange fail with 002.2009.
+	S_STR("redirectUri", c->redirect_uri);
 	S_STR("resolutionSetting", res_set);
 	S_INT("clientWidth", cw);
 	S_INT("clientHeight", ch);
