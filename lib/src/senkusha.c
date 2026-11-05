@@ -1120,7 +1120,7 @@ static ChiakiErrorCode senkusha_send_big(ChiakiSenkusha *senkusha)
 	
 	// Cloud streaming ping path - follows streamconnection.c structure closely
 	{
-		// Cloud mode: get session key (x-gaikai-session) - this will go in session_key field (field 2)
+		// Field 2 is the Gaikai sessionId for PS5 (short) or the session cookie for PS4.
 		const char *launch_spec_str = (senkusha->cloud_launch_spec && senkusha->cloud_launch_spec[0] != '\0') 
 			? senkusha->cloud_launch_spec : "";
 		

@@ -792,7 +792,16 @@ static ChiakiErrorCode gk_step11_datacenters(GaikaiCtx *c)
 			j->ip   = strdup(cc_json_str(dc, "publicIp"));
 			j->port = cc_json_int(dc, "port");
 			j->bw   = cc_json_int(dc, "maxBandwidth");
-			j->session_key   = strdup(c->lock_session_key ? c->lock_session_key : "");
+			// PS5 senkusha primes the Gaikai slot only when BIG session_key is the short
+			// sessionId. The x-gaikai-session cookie still gets echoed, but allocate then
+			// returns 002.2008. PS4 cloud keeps the cookie that already works there.
+			{
+				bool pscloud = c->cfg->service_type && strcmp(c->cfg->service_type, "pscloud") == 0;
+				const char *ping_key = (pscloud && c->gaikai_session_id && *c->gaikai_session_id)
+					? c->gaikai_session_id
+					: (c->lock_session_key ? c->lock_session_key : "");
+				j->session_key = strdup(ping_key);
+			}
 			j->service_type  = strdup(c->cfg->service_type ? c->cfg->service_type : "");
 			atomic_init(&j->done, 0);
 			atomic_init(&j->handoff, 0);
