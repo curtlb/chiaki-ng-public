@@ -173,8 +173,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 	takion_info.enable_crypt = false;
 	takion_info.disable_audio_video = false;
 	takion_info.enable_dualsense = session->connect_info.enable_dualsense;
-	// Takion INIT: 7 remote play, 9 cloud (PS4 and PS5). PS5 cloud now allocates
-	// a protocol 9 session; protocol 12 was the old Portal/HEVC profile.
+	// Senkusha BIG is client_version 9 for both clouds. The PS5 game stream is v12.
 	if(senkusha->protocol_version == 0)
 	{
 		if(!chiaki_service_type_is_cloud(session->service_type))
@@ -422,8 +421,8 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		uint8_t *ping_data = data;
 		size_t ping_data_size = sizeof(data);
 		uint8_t wrapped_data[sizeof(data) + 4];
-		// Cloud senkusha pings use the PSN wrapper for both PS4 and PS5 cloud.
-		bool should_add_wrapper = chiaki_service_type_is_cloud(senkusha->session->service_type);
+		// PS4 cloud senkusha pings are wrapped. PS5 cloud senkusha is not (wrapper type 0).
+		bool should_add_wrapper = senkusha->takion.psn_wrapper_type > 0;
 		
 		if(should_add_wrapper)
 		{
@@ -660,11 +659,11 @@ static ChiakiErrorCode senkusha_run_mtu_out_test(ChiakiSenkusha *senkusha, uint3
 
 			CHIAKI_LOGI(senkusha->log, "Senkusha MTU %u out ping attempt %u", (unsigned int)cur, (unsigned int)attempt);
 
-			// CLOUD PLAY: Add PSN wrapper for MTU test packets (PS4 and PS5 cloud).
+			// CLOUD PLAY: wrap MTU probes only when this senkusha session uses a PSN wrapper.
 			size_t mtu_packet_size = cur - MTU_UDP_PACKET_ADD;
 			uint8_t *mtu_packet_data = packet_buf;
 			uint8_t mtu_wrapped_data[1500]; // Max MTU size
-			if(chiaki_service_type_is_cloud(senkusha->session->service_type))
+			if(senkusha->takion.psn_wrapper_type > 0)
 			{
 				// Add 4-byte PSN wrapper at the beginning
 				if(mtu_packet_size + 4 > sizeof(mtu_wrapped_data))

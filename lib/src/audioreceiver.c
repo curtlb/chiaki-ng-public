@@ -33,7 +33,23 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_audio_receiver_init(ChiakiAudioReceiver *au
 	if(err != CHIAKI_ERR_SUCCESS)
 		return err;
 
-	if(session)
+	if(session && session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+	{
+		CHIAKI_LOGI(session->log, "Audio Receiver: PSCLOUD session — initializing unitized audio reassembler");
+		ChiakiPSCLOUDAudioReassembler *reassembler = malloc(sizeof(ChiakiPSCLOUDAudioReassembler));
+		if(!reassembler)
+			return CHIAKI_ERR_MEMORY;
+
+		err = chiaki_pscloud_audio_reassembler_init(reassembler, session->log);
+		if(err != CHIAKI_ERR_SUCCESS)
+		{
+			free(reassembler);
+			return err;
+		}
+
+		audio_receiver->pscloud_audio_reassembler = reassembler;
+	}
+	else if(session)
 	{
 		CHIAKI_LOGI(session->log, "Audio Receiver: standard decoder for %s",
 			chiaki_service_type_string(session->service_type));

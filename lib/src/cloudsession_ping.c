@@ -62,9 +62,18 @@ ChiakiErrorCode cc_ping_datacenter(ChiakiLog *log, const char *public_ip, int po
 	session->connect_info.enable_dualsense = false;
 	session->target = CHIAKI_TARGET_PS5_1;
 	session->cloud_port = port;
-	session->cloud_psn_wrapper_type = 0x01;  // PSN wrapper for PS4 and PS5 cloud
-	session->service_type = (service_type && strcmp(service_type, "pscloud") == 0)
-		? CHIAKI_SERVICE_TYPE_PSCLOUD : CHIAKI_SERVICE_TYPE_PSNOW;
+	// playstation-cloud senkusha (PS5) rejects a wrapped INIT. PS4 senkusha still wants it.
+	// The game stream wrapper is chosen later from the private IP, not here.
+	if(service_type && strcmp(service_type, "pscloud") == 0)
+	{
+		session->cloud_psn_wrapper_type = 0;
+		session->service_type = CHIAKI_SERVICE_TYPE_PSCLOUD;
+	}
+	else
+	{
+		session->cloud_psn_wrapper_type = 0x01;
+		session->service_type = CHIAKI_SERVICE_TYPE_PSNOW;
+	}
 
 	ChiakiSenkusha senkusha;
 	ChiakiErrorCode err = chiaki_senkusha_init(&senkusha, session);
