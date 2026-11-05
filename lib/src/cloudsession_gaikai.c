@@ -34,6 +34,9 @@
 // allocate poll loop before failing -- the slot is usually still coming.
 #define GK_ALLOC_MAX_NET_ERRORS 5
 #define GK_ALLOC_NET_RETRY_S 5
+// PS Now PC authorizes the PS3 commerce client separately from the stream server.
+// client_ids currently returns the stream-server id in the ps3 field as well.
+#define GK_PSNOW_PS3_CLIENT_ID "95505df0-0bd8-444a-81b8-8f420c990ca6"
 
 typedef struct
 {
@@ -460,7 +463,18 @@ static ChiakiErrorCode gk_step8_start(GaikaiCtx *c, ChiakiCloudProvisionResult *
 	}
 	gk_update_session_key(c, &resp);
 	struct json_object *j = resp.data ? json_tokener_parse(resp.data) : NULL;
-	if(j) { const char *sid = cc_json_str(j, "sessionId"); if(*sid) { free(c->gaikai_session_id); c->gaikai_session_id = strdup(sid); } json_object_put(j); }
+	if(j)
+	{
+		const char *sid = cc_json_str(j, "sessionId");
+		if(*sid) { free(c->gaikai_session_id); c->gaikai_session_id = strdup(sid); }
+		// The PS5 session names its own stream server. gkClientId and ps3GkClientId
+		// in this answer are not used for the auth codes.
+		const char *stream = cc_json_str(j, "streamServerClientId");
+		if(*stream)
+			snprintf(c->stream_server_client_id, sizeof(c->stream_server_client_id), "%s", stream);
+		CHIAKI_LOGI(c->log, "[GAIKAI] step8 start streamServerClientId=%s", c->stream_server_client_id);
+		json_object_put(j);
+	}
 	cc_http_response_fini(&resp);
 	return (c->gaikai_session_id && *c->gaikai_session_id) ? CHIAKI_ERR_SUCCESS : CHIAKI_ERR_UNKNOWN;
 }
@@ -480,25 +494,45 @@ static ChiakiErrorCode gk_step8a_gk_authcode(GaikaiCtx *c)
 	return e;
 }
 
+static ChiakiErrorCode gk_oauth_psnow_code(GaikaiCtx *c, const char *client_id, const char *scope, char **out_code)
+{
+	char url[2048];
+	snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&redirect_uri=%s"
+		"&service_entity=urn:service-entity:psn&prompt=none&client_id=%s&duid=%s"
+		"&smcid=pc:psnow&applicationId=psnow&mid=PSNOW&scope=%s"
+		"&renderMode=mobilePortrait&hidePageElements=forgotPasswordLink&displayFooter=none"
+		"&disableLinks=qriocityLink&layout_type=popup&service_logo=ps&tp_psn=true&noEVBlock=true",
+		ACCOUNT_BASE, c->oauth_api_path, GK_REDIR_PSNOW, client_id, c->duid, scope);
+	return gk_oauth_code(c, url, out_code);
+}
+
 static ChiakiErrorCode gk_step8b_server_authcode(GaikaiCtx *c)
 {
 	gk_progress(c, "Getting Server Tokens - Step 5 of 10");
-	char url[2048];
 	bool ps3 = strcmp(c->platform, "ps3") == 0;
-	char duid_param[128];
-	if(ps3) duid_param[0] = '\0';                              // PS3 omits duid
-	else snprintf(duid_param, sizeof(duid_param), "&duid=%s", c->duid); // PS4 and PS5 include it
-	snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&redirect_uri=%s"
-		"&service_entity=urn:service-entity:psn&prompt=none&client_id=%s&smcid=pc:psnow&applicationId=psnow&mid=PSNOW"
-		"&scope=%s%s&renderMode=mobilePortrait&hidePageElements=forgotPasswordLink&displayFooter=none"
-		"&disableLinks=qriocityLink&layout_type=popup&service_logo=ps&tp_psn=true&noEVBlock=true",
-		ACCOUNT_BASE, c->oauth_api_path, GK_REDIR_PSNOW, c->ps3_gk_client_id,
-		ps3 ? "kamaji:commerce_native" : "sso:none", duid_param);
-	char *code = NULL;
-	ChiakiErrorCode e = gk_oauth_code(c, url, &code);
-	if(e != CHIAKI_ERR_SUCCESS) return e;
-	c->ps3_auth_code = code;
-	c->stream_server_auth_code = strdup(code);
+	if(ps3)
+	{
+		char url[2048];
+		snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&redirect_uri=%s"
+			"&service_entity=urn:service-entity:psn&prompt=none&client_id=%s&smcid=pc:psnow&applicationId=psnow&mid=PSNOW"
+			"&scope=kamaji:commerce_native&renderMode=mobilePortrait&hidePageElements=forgotPasswordLink&displayFooter=none"
+			"&disableLinks=qriocityLink&layout_type=popup&service_logo=ps&tp_psn=true&noEVBlock=true",
+			ACCOUNT_BASE, c->oauth_api_path, GK_REDIR_PSNOW, c->ps3_gk_client_id);
+		char *code = NULL;
+		ChiakiErrorCode e = gk_oauth_code(c, url, &code);
+		if(e != CHIAKI_ERR_SUCCESS) return e;
+		c->ps3_auth_code = code;
+		c->stream_server_auth_code = strdup(code);
+	}
+	else
+	{
+		const char *stream_client = c->stream_server_client_id[0]
+			? c->stream_server_client_id : "52b0e92a-e131-4940-86f5-5d4447c73dd1";
+		ChiakiErrorCode e = gk_oauth_psnow_code(c, GK_PSNOW_PS3_CLIENT_ID, "kamaji:commerce_native", &c->ps3_auth_code);
+		if(e != CHIAKI_ERR_SUCCESS) return e;
+		e = gk_oauth_psnow_code(c, stream_client, "sso:none", &c->stream_server_auth_code);
+		if(e != CHIAKI_ERR_SUCCESS) return e;
+	}
 	gk_patch_auth_codes(c);
 	CHIAKI_LOGI(c->log, "[GAIKAI] step8b got server auth code");
 	return CHIAKI_ERR_SUCCESS;
