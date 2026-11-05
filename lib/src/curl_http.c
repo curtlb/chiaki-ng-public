@@ -80,17 +80,102 @@ static void redact_credentials(char *buf, size_t len)
 	}
 }
 
-static void log_verbose_redacted(ChiakiLog *log, const char *label, const char *data, size_t size)
+static bool cc_http_trace_secrets(void)
 {
+	const char *v = getenv("CHIAKI_CLOUD_HTTP_TRACE_SECRETS");
+	return v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' || v[0] == 't' || v[0] == 'T');
+}
+
+static bool cc_http_want_trace(ChiakiLog *log)
+{
+	if(!log)
+		return false;
+	const char *v = getenv("CHIAKI_CLOUD_HTTP_TRACE");
+	if(v && (v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F'))
+		return false;
+	if(v && v[0])
+		return true;
+	return (log->level_mask & CHIAKI_LOG_VERBOSE) != 0;
+}
+
+static void log_http_blob(ChiakiLog *log, ChiakiLogLevel level, const char *label, const char *data, size_t size)
+{
+	if(!log || !data || !size)
+	{
+		if(log && label)
+			CHIAKI_LOGI(log, "%s (empty)", label);
+		return;
+	}
 	char *copy = malloc(size + 1);
 	if(!copy)
 		return;
 	memcpy(copy, data, size);
 	copy[size] = 0;
-	redact_credentials(copy, size);
-	CHIAKI_LOGV(log, "%s", label);
-	CHIAKI_LOGV(log, "%s", copy);
+	if(!cc_http_trace_secrets())
+		redact_credentials(copy, size);
+	if(label && *label)
+		chiaki_log(log, level, "%s", label);
+	// chiaki_cloud.log lines: split large bodies so nothing is truncated silently.
+	const size_t chunk = 3500;
+	for(size_t off = 0; off < size; off += chunk)
+	{
+		size_t n = size - off;
+		if(n > chunk)
+			n = chunk;
+		char *part = malloc(n + 1);
+		if(!part)
+			break;
+		memcpy(part, copy + off, n);
+		part[n] = 0;
+		chiaki_log(log, level, "%s", part);
+		free(part);
+	}
 	free(copy);
+}
+
+static void log_verbose_redacted(ChiakiLog *log, const char *label, const char *data, size_t size)
+{
+	log_http_blob(log, CHIAKI_LOG_VERBOSE, label, data, size);
+}
+
+static void cc_http_log_outgoing(ChiakiLog *log, const CCHttpRequest *request)
+{
+	const char *method = (request->method && *request->method) ? request->method : "GET";
+	CHIAKI_LOGI(log, "[HTTP] >>> %s %s", method, request->url ? request->url : "(null)");
+	for(size_t i = 0; i < request->header_count; i++)
+	{
+		const char *h = request->headers[i];
+		if(!h)
+			continue;
+		char line[1024];
+		snprintf(line, sizeof(line), "%s", h);
+		if(!cc_http_trace_secrets())
+			redact_credentials(line, strlen(line));
+		CHIAKI_LOGI(log, "[HTTP] >>> hdr: %s", line);
+	}
+	if(request->body && (request->body_len > 0 || request->body[0]))
+	{
+		size_t blen = request->body_len > 0 ? (size_t)request->body_len : strlen(request->body);
+		log_http_blob(log, CHIAKI_LOG_INFO, "[HTTP] >>> body:", request->body, blen);
+	}
+}
+
+static void cc_http_log_incoming(ChiakiLog *log, const CCHttpRequest *request, const CCHttpResponse *response)
+{
+	CHIAKI_LOGI(log, "[HTTP] <<< %ld %s", response->status_code,
+		request->url ? request->url : "(null)");
+	if(response->redirect_url && *response->redirect_url)
+	{
+		char redir[2048];
+		snprintf(redir, sizeof(redir), "%s", response->redirect_url);
+		if(!cc_http_trace_secrets())
+			redact_credentials(redir, strlen(redir));
+		CHIAKI_LOGI(log, "[HTTP] <<< redirect: %s", redir);
+	}
+	if(response->headers && response->headers_size)
+		log_http_blob(log, CHIAKI_LOG_INFO, "[HTTP] <<< headers:", response->headers, response->headers_size);
+	if(response->data && response->size)
+		log_http_blob(log, CHIAKI_LOG_INFO, "[HTTP] <<< body:", response->data, response->size);
 }
 
 static int cc_http_debug_cb(CURL *handle, curl_infotype type, char *data, size_t size, void *userptr)
@@ -136,7 +221,7 @@ static CURL *easy_init_logged(ChiakiLog *log)
 	if(ca_bundle && *ca_bundle)
 		curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle);
 
-	if(log && (log->level_mask & CHIAKI_LOG_VERBOSE))
+	if(log && cc_http_want_trace(log))
 	{
 		curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 		curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, cc_http_debug_cb);
@@ -154,6 +239,7 @@ CHIAKI_EXPORT ChiakiErrorCode cc_http_perform(
 		return CHIAKI_ERR_INVALID_DATA;
 
 	memset(response, 0, sizeof(*response));
+	const bool trace = cc_http_want_trace(log);
 
 	CURL *curl = easy_init_logged(log);
 	if(!curl)
@@ -198,11 +284,15 @@ CHIAKI_EXPORT ChiakiErrorCode cc_http_perform(
 
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, grow_buffer_write);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body_buf);
-	if(request->capture_headers)
+	// Always capture response headers when tracing so chiaki_cloud.log has the full exchange.
+	if(request->capture_headers || trace)
 	{
 		curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, grow_buffer_write);
 		curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_buf);
 	}
+
+	if(trace)
+		cc_http_log_outgoing(log, request);
 
 	CURLcode res = curl_easy_perform(curl);
 	if(res != CURLE_OK)
@@ -225,12 +315,15 @@ CHIAKI_EXPORT ChiakiErrorCode cc_http_perform(
 	response->data = body_buf.data;
 	response->size = body_buf.size;
 	body_buf.data = NULL;
-	if(request->capture_headers)
+	if(request->capture_headers || trace)
 	{
 		response->headers = header_buf.data;
 		response->headers_size = header_buf.size;
 		header_buf.data = NULL;
 	}
+
+	if(trace && (err == CHIAKI_ERR_SUCCESS || response->data || response->headers))
+		cc_http_log_incoming(log, request, response);
 
 cleanup:
 	free(body_buf.data);

@@ -566,11 +566,15 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     std::thread([self, reqId, svc, gameId, npsso, storeCountry, storeLang, gameLang,
                  forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat,
                  fromBillingLaunch]() mutable {
-        CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, "Session");
+        // Verbose HTTP trace (all request/response headers + bodies) -> chiaki_cloud.log via cc_http_perform.
+        // Set CHIAKI_CLOUD_HTTP_TRACE_SECRETS=1 for unredacted npsso/tokens (debug only).
+        CloudChiakiLog file_log(CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR
+            | CHIAKI_LOG_VERBOSE | CHIAKI_LOG_DEBUG, "Session");
         ChiakiLog *log = file_log.GetChiakiLog();
-        CHIAKI_LOGI(log, "provisioning started (service=%s, game=%s, npsso=%s)",
+        CHIAKI_LOGI(log, "provisioning started (service=%s, game=%s, npsso=%s, http_trace=on)",
             svc.constData(), gameId.constData(),
             npsso.isEmpty() ? "missing" : (fromBillingLaunch ? "billing_ephemeral" : "present"));
+        CHIAKI_LOGI(log, "HTTP debug: full exchange in this log; secrets redacted unless CHIAKI_CLOUD_HTTP_TRACE_SECRETS=1");
 
         ChiakiCloudProvisionConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
