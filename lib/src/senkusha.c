@@ -33,6 +33,8 @@
 #define CONNECT_TIMEOUT_MS 30000
 
 #define SENKUSHA_PING_COUNT_DEFAULT 10
+#define SENKUSHA_PSCLOUD_PING_COUNT 6
+#define SENKUSHA_PSCLOUD_PING_SIZE 547
 #define EXPECT_PONG_TIMEOUT_MS 1000
 
 // Assuming IPv4, sizeof(ip header) + sizeof(udp header)
@@ -280,11 +282,24 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 			CHIAKI_LOGW(session->log, "Senkusha BIG echo timeout after 2s, proceeding anyway");
 		else
 			CHIAKI_LOGI(session->log, "Senkusha BIG echo complete, proceeding to RTT test");
-		err = senkusha_run_rtt_test(senkusha, 0, SENKUSHA_PING_COUNT_DEFAULT, rtt_us);
+		uint16_t ping_count = session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD
+			? SENKUSHA_PSCLOUD_PING_COUNT : SENKUSHA_PING_COUNT_DEFAULT;
+		err = senkusha_run_rtt_test(senkusha, 0, ping_count, rtt_us);
 		if(err != CHIAKI_ERR_SUCCESS)
 		{
 			CHIAKI_LOGE(senkusha->log, "Senkusha Ping Test failed");
 			goto disconnect;
+		}
+		if(session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+		{
+			// Six audio probes prime the slot. The remote-play MTU exchange and
+			// "Client Disconnecting" leave allocate at 002.2008.
+			if(mtu_in)
+				*mtu_in = 1454;
+			if(mtu_out)
+				*mtu_out = 1254;
+			chiaki_mutex_unlock(&senkusha->state_mutex);
+			goto quit_takion;
 		}
 	}
 	else
@@ -384,26 +399,44 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 	{
 		CHIAKI_LOGI(senkusha->log, "Senkusha sending Ping %u of test index %u", (unsigned int)ping_index, (unsigned int)ping_test_index);
 
-		ChiakiTakionAVPacket av_packet = { 0 };
-		av_packet.codec = 0xff;
-		av_packet.is_video = false;
-		av_packet.frame_index = ping_test_index;
-		av_packet.unit_index = ping_index;
-		av_packet.units_in_frame_total = 0x800; // or 0
-
-		uint8_t data[0x224];
-		memset(data, 0, sizeof(data));
-
-		size_t header_size;
-		err = chiaki_takion_v7_av_packet_format_header(data, sizeof(data), &header_size, &av_packet);
-		if(err != CHIAKI_ERR_SUCCESS)
-		{
-			CHIAKI_LOGE(senkusha->log, "Senkusha failed to format AV Header");
-			return err;
-		}
-
 		uint32_t tag = chiaki_random_32();
-		*((chiaki_unaligned_uint32_t *)(data + header_size + 4)) = htonl(tag);
+		uint8_t data[0x224];
+		size_t probe_size = sizeof(data);
+		bool pscloud_probe = senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD;
+		if(pscloud_probe)
+		{
+			// Audio probe the PS5 senkusha counts: dword 0x800, codec 0xff, 547 bytes.
+			// The v9 parser reads the echo tag at payload offset 3 (byte 22).
+			memset(data, 0, SENKUSHA_PSCLOUD_PING_SIZE);
+			data[0] = 0x03;
+			*((chiaki_unaligned_uint16_t *)(data + 1)) = htons(ping_index);
+			*((chiaki_unaligned_uint16_t *)(data + 3)) = htons(ping_test_index);
+			*((chiaki_unaligned_uint32_t *)(data + 5)) = htonl(0x800);
+			data[9] = 0xff;
+			*((chiaki_unaligned_uint32_t *)(data + 22)) = htonl(tag);
+			probe_size = SENKUSHA_PSCLOUD_PING_SIZE;
+		}
+		else
+		{
+			ChiakiTakionAVPacket av_packet = { 0 };
+			av_packet.codec = 0xff;
+			av_packet.is_video = false;
+			av_packet.frame_index = ping_test_index;
+			av_packet.unit_index = ping_index;
+			av_packet.units_in_frame_total = 0x800; // or 0
+
+			memset(data, 0, sizeof(data));
+
+			size_t header_size;
+			err = chiaki_takion_v7_av_packet_format_header(data, sizeof(data), &header_size, &av_packet);
+			if(err != CHIAKI_ERR_SUCCESS)
+			{
+				CHIAKI_LOGE(senkusha->log, "Senkusha failed to format AV Header");
+				return err;
+			}
+
+			*((chiaki_unaligned_uint32_t *)(data + header_size + 4)) = htonl(tag);
+		}
 
 		senkusha->state = STATE_EXPECT_PONG;
 		senkusha->state_finished = false;
@@ -415,11 +448,11 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		uint64_t time_start_us = chiaki_time_now_monotonic_us();
 
 		CHIAKI_LOGV(senkusha->log, "[OUTGOING PING] Sending ping packet: tag=0x%x, size=%zu, ping_test_index=%u, ping_index=%u", 
-		            tag, sizeof(data), ping_test_index, ping_index);
+		            tag, probe_size, ping_test_index, ping_index);
 		
 		// For cloud mode, add PSN wrapper to ping packets (skip wrapper for PSCloud)
 		uint8_t *ping_data = data;
-		size_t ping_data_size = sizeof(data);
+		size_t ping_data_size = probe_size;
 		uint8_t wrapped_data[sizeof(data) + 4];
 		// PS4 cloud senkusha pings are wrapped. PS5 cloud senkusha is not (wrapper type 0).
 		bool should_add_wrapper = senkusha->takion.psn_wrapper_type > 0;
