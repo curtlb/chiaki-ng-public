@@ -7,6 +7,7 @@
 #define CHIAKI_CLOUDSESSION_INTERNAL_H
 
 #include <chiaki/common.h>
+#include <chiaki/sock.h>
 #include <chiaki/cloudsession.h>
 #include <chiaki/log.h>
 
@@ -133,11 +134,14 @@ ChiakiErrorCode cc_gaikai_allocate(ChiakiLog *log,
  * @param service_type "psnow" (adds the PSN wrapper) or "pscloud"
  * @param out_rtt_us  averaged RTT in microseconds, or <0 on failure
  * @param out_mtu_in/out_mtu_out  negotiated MTU (0 on failure)
+ * @param out_socket  PS5 cloud only: the senkusha UDP socket, still open. Caller
+ *                    closes it. NULL closes the socket before return, as before.
  * @return CHIAKI_ERR_SUCCESS only when a valid RTT was measured.
  */
 ChiakiErrorCode cc_ping_datacenter(ChiakiLog *log, const char *public_ip, int port,
 	const char *session_key, const char *service_type,
-	int64_t *out_rtt_us, uint32_t *out_mtu_in, uint32_t *out_mtu_out);
+	int64_t *out_rtt_us, uint32_t *out_mtu_in, uint32_t *out_mtu_out,
+	chiaki_socket_t *out_socket);
 
 #ifdef __cplusplus
 }

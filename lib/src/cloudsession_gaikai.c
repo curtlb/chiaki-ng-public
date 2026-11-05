@@ -40,6 +40,13 @@
 // The only stream server the PS Now client has a scope for. A PS5 session names a
 // different id; sso:none against the PS Now redirect is rejected (401 / 4170).
 #define GK_PSNOW_STREAM_CLIENT_ID "52b0e92a-e131-4940-86f5-5d4447c73dd1"
+#define GK_HELD_PING_MAX 32
+
+typedef struct
+{
+	char name[32];
+	chiaki_socket_t sock;
+} GkHeldPing;
 
 typedef struct
 {
@@ -67,6 +74,11 @@ typedef struct
 	struct json_object *selected_ping; // borrowed ref into ping_results
 	char selected_datacenter[128];
 	int selected_dc_port;
+	// PS5 senkusha sockets. Gaikai drops the slot-priming test when the chosen
+	// datacenter's socket closes before /allocate, so that one stays open.
+	GkHeldPing held_ping[GK_HELD_PING_MAX];
+	int held_ping_n;
+	chiaki_socket_t prime_sock;
 	bool ping_timeout;          // best measured RTT exceeded the auto-select gate (>80ms)
 	bool forced_dc_unavailable; // settings-forced datacenter not in this title's list
 } GaikaiCtx;
@@ -78,6 +90,56 @@ static void gk_progress(GaikaiCtx *c, const char *stage)
 static bool gk_cancelled(GaikaiCtx *c)
 {
 	return c->cfg->is_cancelled && c->cfg->is_cancelled(c->cfg->user);
+}
+
+static void gk_close_sock(chiaki_socket_t *sock)
+{
+	if(!sock || CHIAKI_SOCKET_IS_INVALID(*sock))
+		return;
+	CHIAKI_SOCKET_CLOSE(*sock);
+	*sock = CHIAKI_INVALID_SOCKET;
+}
+
+static void gk_hold_ping_socket(GaikaiCtx *c, const char *name, chiaki_socket_t sock)
+{
+	if(CHIAKI_SOCKET_IS_INVALID(sock))
+		return;
+	if(!name || !*name || c->held_ping_n >= GK_HELD_PING_MAX)
+	{
+		CHIAKI_SOCKET_CLOSE(sock);
+		return;
+	}
+	snprintf(c->held_ping[c->held_ping_n].name, sizeof(c->held_ping[c->held_ping_n].name), "%s", name);
+	c->held_ping[c->held_ping_n].sock = sock;
+	c->held_ping_n++;
+}
+
+static void gk_close_held_pings(GaikaiCtx *c)
+{
+	for(int i = 0; i < c->held_ping_n; i++)
+		gk_close_sock(&c->held_ping[i].sock);
+	c->held_ping_n = 0;
+	gk_close_sock(&c->prime_sock);
+}
+
+// Close every senkusha socket except the datacenter we are about to allocate.
+static void gk_retain_selected_ping(GaikaiCtx *c)
+{
+	chiaki_socket_t keep = CHIAKI_INVALID_SOCKET;
+	for(int i = 0; i < c->held_ping_n; i++)
+	{
+		if(CHIAKI_SOCKET_IS_INVALID(keep) && strcmp(c->held_ping[i].name, c->selected_datacenter) == 0)
+		{
+			keep = c->held_ping[i].sock;
+			c->held_ping[i].sock = CHIAKI_INVALID_SOCKET;
+		}
+		else
+			gk_close_sock(&c->held_ping[i].sock);
+	}
+	c->held_ping_n = 0;
+	c->prime_sock = keep;
+	if(!CHIAKI_SOCKET_IS_INVALID(keep))
+		CHIAKI_LOGI(c->log, "[GAIKAI] senkusha socket for %s stays open through allocate", c->selected_datacenter);
 }
 // Sleep up to seconds, checking cancellation every 100ms. false if cancelled.
 static bool gk_sleep_cancellable(GaikaiCtx *c, int seconds)
@@ -684,6 +746,7 @@ typedef struct
 	char *name, *ip, *session_key, *service_type; // strdup'd — owned by the job
 	int port, bw;
 	int64_t rtt_us; uint32_t mtu_in, mtu_out; bool ok;
+	chiaki_socket_t sock; // PS5: left open by senkusha; INVALID until then. Owner closes it.
 	atomic_int done;    // 1 once results are written; portable poll target for the deadline wait
 	atomic_int handoff; // 0 = thread running; first of {owner,thread} to exchange→1 must NOT free, second frees
 } GkPingJob;
@@ -691,6 +754,7 @@ typedef struct
 static void gk_ping_job_free(GkPingJob *j)
 {
 	if(!j) return;
+	gk_close_sock(&j->sock);
 	free(j->name); free(j->ip); free(j->session_key); free(j->service_type);
 	free(j);
 }
@@ -699,8 +763,9 @@ static void *gk_ping_thread(void *arg)
 {
 	GkPingJob *j = (GkPingJob *)arg;
 	j->rtt_us = -1; j->mtu_in = 0; j->mtu_out = 0;
+	j->sock = CHIAKI_INVALID_SOCKET;
 	cc_ping_datacenter(&j->log, j->ip, j->port, j->session_key, j->service_type,
-		&j->rtt_us, &j->mtu_in, &j->mtu_out);
+		&j->rtt_us, &j->mtu_in, &j->mtu_out, &j->sock);
 	j->ok = (j->rtt_us > 0);
 	atomic_store(&j->done, 1);
 	if(atomic_exchange(&j->handoff, 1) == 1)
@@ -850,6 +915,7 @@ static ChiakiErrorCode gk_step11_datacenters(GaikaiCtx *c)
 				j->session_key = strdup(ping_key);
 			}
 			j->service_type  = strdup(c->cfg->service_type ? c->cfg->service_type : "");
+			j->sock = CHIAKI_INVALID_SOCKET;
 			atomic_init(&j->done, 0);
 			atomic_init(&j->handoff, 0);
 			jobs[i] = j;
@@ -918,6 +984,8 @@ static ChiakiErrorCode gk_step11_datacenters(GaikaiCtx *c)
 					CHIAKI_LOGI(c->log, "[GAIKAI] ping %s = %dms", j->name, (int)(j->rtt_us / 1000));
 				else
 					CHIAKI_LOGI(c->log, "[GAIKAI] ping %s = unreachable", j->name);
+				gk_hold_ping_socket(c, j->name, j->sock);
+				j->sock = CHIAKI_INVALID_SOCKET;
 				gk_ping_job_free(j);
 			}
 			else
@@ -1005,6 +1073,7 @@ static ChiakiErrorCode gk_step12_select(GaikaiCtx *c)
 		}
 	}
 	snprintf(c->selected_datacenter, sizeof(c->selected_datacenter), "%s", cc_json_str(c->selected_ping, "dataCenter"));
+	gk_retain_selected_ping(c);
 	int port = cc_json_int(c->selected_ping, "port");
 	c->selected_dc_port = port > 0 ? port : 2053;
 
@@ -1176,6 +1245,7 @@ ChiakiErrorCode cc_gaikai_allocate(ChiakiLog *log,
 	memset(&c, 0, sizeof(c));
 	c.log = log;
 	c.cfg = cfg;
+	c.prime_sock = CHIAKI_INVALID_SOCKET;
 	c.platform = (platform && *platform) ? platform : "ps4";
 	c.pscloud = cfg->service_type && strcmp(cfg->service_type, "pscloud") == 0;
 	// PS5 (pscloud) and PS4 (psnow) both authenticate as the PS Now PC client.
@@ -1231,6 +1301,7 @@ ChiakiErrorCode cc_gaikai_allocate(ChiakiLog *log,
 		out->error_message = strdup(m);
 	}
 
+	gk_close_held_pings(&c);
 	free(c.config_key); free(c.lock_session_key); free(c.gaikai_session_id);
 	free(c.gk_cloud_auth_code); free(c.ps3_auth_code); free(c.stream_server_auth_code);
 	if(c.spec) json_object_put(c.spec);

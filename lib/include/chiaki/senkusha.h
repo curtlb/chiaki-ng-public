@@ -34,6 +34,11 @@ typedef struct senkusha_t
 	uint8_t *echo_reassembly_buf;   // accumulates echoed BANG fragments from server
 	size_t echo_reassembly_pos;
 
+	// PS5 cloud: after the probes, hand the UDP socket back instead of closing it.
+	// Gaikai records the slot-priming test only while this socket is still open.
+	bool keep_socket;
+	chiaki_socket_t kept_socket;
+
 	/**
 	 * signaled on change of state_finished or should_stop
 	 */

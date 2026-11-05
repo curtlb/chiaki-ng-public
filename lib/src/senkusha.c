@@ -103,6 +103,8 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_init(ChiakiSenkusha *senkusha, Chi
 	senkusha->sent_big_size = 0;
 	senkusha->echo_reassembly_buf = NULL;
 	senkusha->echo_reassembly_pos = 0;
+	senkusha->keep_socket = false;
+	senkusha->kept_socket = CHIAKI_INVALID_SOCKET;
 
 	chiaki_key_state_init(&senkusha->takion.key_state);
 
@@ -298,8 +300,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		if(session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
 		{
 			// Six audio probes prime the slot. The remote-play MTU exchange and
-			// "Client Disconnecting" leave allocate at 002.2008. The socket stays
-			// open afterwards: closing it drops the test before Gaikai records it.
+			// "Client Disconnecting" leave allocate at 002.2008. Gaikai records the
+			// test only while this socket is still open, so the caller holds it
+			// through /allocate. Closing here makes the next allocate 002.2008.
 			if(mtu_in)
 				*mtu_in = 1454;
 			if(mtu_out)
@@ -310,6 +313,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 #else
 			usleep(SENKUSHA_PSCLOUD_LINGER_MS * 1000);
 #endif
+			if(senkusha->keep_socket && !CHIAKI_SOCKET_IS_INVALID(senkusha->takion.sock))
+			{
+				senkusha->takion.close_socket = false;
+				senkusha->kept_socket = senkusha->takion.sock;
+				CHIAKI_LOGI(session->log, "Senkusha leaving the datacenter socket open");
+			}
 			goto quit_takion;
 		}
 	}

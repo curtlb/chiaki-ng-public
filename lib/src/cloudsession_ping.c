@@ -24,11 +24,13 @@
 
 ChiakiErrorCode cc_ping_datacenter(ChiakiLog *log, const char *public_ip, int port,
 	const char *session_key, const char *service_type,
-	int64_t *out_rtt_us, uint32_t *out_mtu_in, uint32_t *out_mtu_out)
+	int64_t *out_rtt_us, uint32_t *out_mtu_in, uint32_t *out_mtu_out,
+	chiaki_socket_t *out_socket)
 {
 	if(out_rtt_us) *out_rtt_us = -1;
 	if(out_mtu_in) *out_mtu_in = 0;
 	if(out_mtu_out) *out_mtu_out = 0;
+	if(out_socket) *out_socket = CHIAKI_INVALID_SOCKET;
 	if(!public_ip || !*public_ip)
 		return CHIAKI_ERR_INVALID_DATA;
 
@@ -86,6 +88,8 @@ ChiakiErrorCode cc_ping_datacenter(ChiakiLog *log, const char *public_ip, int po
 	}
 
 	senkusha.protocol_version = 9; // cloud ping always v9
+	// PS5 allocate records the senkusha test only while this UDP socket is open.
+	senkusha.keep_socket = out_socket && service_type && strcmp(service_type, "pscloud") == 0;
 	// x-gaikai-session key -> BIG message launch_spec (senkusha owns nothing here;
 	// it reads the pointer during run, so a stack/heap copy that outlives run() is fine).
 	char *key_copy = NULL;
@@ -98,6 +102,19 @@ ChiakiErrorCode cc_ping_datacenter(ChiakiLog *log, const char *public_ip, int po
 	uint32_t mtu_in = 0, mtu_out = 0;
 	uint64_t rtt_us = 0;
 	err = chiaki_senkusha_run(&senkusha, &mtu_in, &mtu_out, &rtt_us, NULL);
+	if(out_socket && !CHIAKI_SOCKET_IS_INVALID(senkusha.kept_socket))
+	{
+		if(err == CHIAKI_ERR_SUCCESS && rtt_us > 0)
+		{
+			*out_socket = senkusha.kept_socket;
+			senkusha.kept_socket = CHIAKI_INVALID_SOCKET;
+		}
+		else
+		{
+			CHIAKI_SOCKET_CLOSE(senkusha.kept_socket);
+			senkusha.kept_socket = CHIAKI_INVALID_SOCKET;
+		}
+	}
 
 	senkusha.cloud_launch_spec = NULL;
 	free(key_copy);
