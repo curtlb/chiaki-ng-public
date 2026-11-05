@@ -453,7 +453,8 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		senkusha->state_finished = false;
 		senkusha->state_failed = false;
 		senkusha->ping_test_index = ping_test_index;
-		senkusha->ping_index = ping_index;
+		// The server echoes only the first PS5 probe. Later probes must still match that echo.
+		senkusha->ping_index = pscloud_probe ? 0 : ping_index;
 		senkusha->ping_tag = tag;
 
 		uint64_t time_start_us = chiaki_time_now_monotonic_us();
@@ -487,6 +488,23 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 			return err;
 		}
 
+		// PS5 senkusha echoes probe 0 only. Waiting out the timeout on the rest
+		// spaces the samples by a second, and the slot is never primed.
+		if(pscloud_probe && ping_index > 0)
+		{
+			if(ping_index + 1 < ping_count)
+			{
+				chiaki_mutex_unlock(&senkusha->state_mutex);
+#ifdef _WIN32
+				Sleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS);
+#else
+				usleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS * 1000);
+#endif
+				chiaki_mutex_lock(&senkusha->state_mutex);
+			}
+			continue;
+		}
+
 		err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_PONG_TIMEOUT_MS, state_finished_cond_check, senkusha);
 		assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
 
@@ -507,17 +525,17 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		rtt_us_acc += delta_us;
 		pings_successful += 1;
 		CHIAKI_LOGI(senkusha->log, "Senkusha received Pong, RTT = %.3f ms", (float)delta_us * 0.001f);
+	}
 
-		if(pscloud_probe && ping_index + 1 < ping_count)
-		{
-			chiaki_mutex_unlock(&senkusha->state_mutex);
+	if(senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+	{
+		chiaki_mutex_unlock(&senkusha->state_mutex);
 #ifdef _WIN32
-			Sleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS);
+		Sleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS);
 #else
-			usleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS * 1000);
+		usleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS * 1000);
 #endif
-			chiaki_mutex_lock(&senkusha->state_mutex);
-		}
+		chiaki_mutex_lock(&senkusha->state_mutex);
 	}
 
 	err = senkusha_send_echo_command(senkusha, false);
