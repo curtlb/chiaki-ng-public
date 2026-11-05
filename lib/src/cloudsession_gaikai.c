@@ -403,9 +403,25 @@ static struct json_object *gk_build_spec(GaikaiCtx *c, const char *entitlement_i
 		S_STR("audioEncoderProfile", "default");
 		struct json_object *ass = json_object_new_object();
 		json_object_object_add(ass, "audioEncoderProfile", json_object_new_string("default"));
-		json_object_object_add(ass, "maxAudioChannels", json_object_new_string("2.1"));
-		json_object_object_add(ass, "preferredNumberAudioChannels", json_object_new_string("2.1"));
+		// Nested channel count is "2". The top-level audioChannels string stays "2.1".
+		json_object_object_add(ass, "maxAudioChannels", json_object_new_string("2"));
+		json_object_object_add(ass, "preferredNumberAudioChannels", json_object_new_string("2"));
 		json_object_object_add(s, "audioStreamSettings", ass);
+		// The PS Now spec builder always sends these. Without them sessions/start
+		// assigns the PS5 cronos stream server, and allocate then asks for a
+		// CRONOS access token the PS Now codes cannot produce.
+		S_STR("timeZone", "America/New_York");
+		S_INT("maxBitrate", 256);
+		S_INT("minBitrate", 64);
+		struct json_object *one_res = json_object_new_object();
+		json_object_object_add(one_res, "resolution", json_object_new_string(res_set));
+		json_object_object_add(one_res, "width", json_object_new_int(cw));
+		json_object_object_add(one_res, "height", json_object_new_int(ch));
+		json_object_object_add(one_res, "maxFps", json_object_new_int(60));
+		json_object_object_add(one_res, "score", json_object_new_int(10));
+		struct json_object *resolutions = json_object_new_array();
+		json_object_array_add(resolutions, one_res);
+		json_object_object_add(s, "streamResolutions", resolutions);
 	}
 	else
 	{
@@ -1121,14 +1137,20 @@ static ChiakiErrorCode gk_step13_allocate(GaikaiCtx *c, ChiakiCloudProvisionResu
 		json_object_object_add(net, "mtu", json_object_new_int(mtu_in));
 		json_object_object_add(net, "rtt", json_object_new_int(rtt));
 		json_object_object_add(net, "port", json_object_new_int(c->selected_dc_port));
-		json_object_object_add(net, "bwKbpsReceived", json_object_new_int(c->cfg->bitrate_kbps));
-		json_object_object_add(net, "bwLossUpstream", json_object_new_int(0));
-		json_object_object_add(net, "mtuUpstream", json_object_new_int(mtu_out));
+		// PS4 cloud still sends the Portal-shaped extras. A PS5 session rejects that
+		// shape: those keys are not in the PS Now client's allocate body.
+		if(!c->pscloud)
+		{
+			json_object_object_add(net, "bwKbpsReceived", json_object_new_int(c->cfg->bitrate_kbps));
+			json_object_object_add(net, "bwLossUpstream", json_object_new_int(0));
+			json_object_object_add(net, "mtuUpstream", json_object_new_int(mtu_out));
+		}
 		json_object_object_add(extra, "network", net);
-		// Fixed client-telemetry timings the allocate body schema expects (sampled from the
-		// PS Portal client); the server records but doesn't act on them, so they're constant.
-		json_object_object_add(extra, "stateExecutionTime", json_object_new_double(5974.7632));
-		json_object_object_add(extra, "streamTestTime", json_object_new_double(11262.8423));
+		if(!c->pscloud)
+		{
+			json_object_object_add(extra, "stateExecutionTime", json_object_new_double(5974.7632));
+			json_object_object_add(extra, "streamTestTime", json_object_new_double(11262.8423));
+		}
 
 		CCHttpResponse resp = { 0 };
 		ChiakiErrorCode e = gk_post_session(c, "/allocate", extra, &resp);
