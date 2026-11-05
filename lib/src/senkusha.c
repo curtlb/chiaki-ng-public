@@ -416,17 +416,15 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		bool pscloud_probe = senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD;
 		if(pscloud_probe)
 		{
-			// Audio probe the PS5 senkusha counts. packet_index stays 0, frame_index
-			// runs 0..5, dword is 0x800, and byte 18 is a microsecond clock.
-			// The v9 parser reads the echo tag at payload offset 3 (byte 22).
+			// Audio probe the PS5 senkusha counts. packet_index and frame_index stay 0.
+			// The sample number is the high byte of the 0x800 dword (0x800, 0x01000800, ...).
+			// Byte 18 stays 0; the microsecond clock is the first four payload bytes.
 			memset(data, 0, SENKUSHA_PSCLOUD_PING_SIZE);
 			data[0] = 0x03;
-			*((chiaki_unaligned_uint16_t *)(data + 1)) = 0;
-			*((chiaki_unaligned_uint16_t *)(data + 3)) = htons(ping_index);
-			*((chiaki_unaligned_uint32_t *)(data + 5)) = htonl(0x800);
+			*((chiaki_unaligned_uint32_t *)(data + 5)) = htonl(((uint32_t)ping_index << 24) | 0x800);
 			data[9] = 0xff;
-			*((chiaki_unaligned_uint32_t *)(data + 18)) = htonl((uint32_t)chiaki_time_now_monotonic_us());
-			*((chiaki_unaligned_uint32_t *)(data + 22)) = htonl(tag);
+			*((chiaki_unaligned_uint32_t *)(data + 19)) = htonl((uint32_t)chiaki_time_now_monotonic_us());
+			tag = 0;
 			probe_size = SENKUSHA_PSCLOUD_PING_SIZE;
 		}
 		else
@@ -992,13 +990,11 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 		
 		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 		{
-			// Cloud play: unit_index validation is relaxed (pongs often return 0)
-			// Only validate frame_index, is_video, and data_size.
-			// PS5 probes put the sample number in frame_index and leave packet_index at 0.
-			unit_index_fail = false; // Skip unit_index check for cloud play
+			// PS4 cloud echoes do not carry unit_index. PS5 probes do: it is the sample number.
+			unit_index_fail = false;
 			if(senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
-				frame_index_fail = packet->frame_index != senkusha->ping_index;
-			validation_failed = is_video_fail || frame_index_fail || data_size_fail;
+				unit_index_fail = packet->unit_index != senkusha->ping_index;
+			validation_failed = is_video_fail || frame_index_fail || unit_index_fail || data_size_fail;
 			
 			if(validation_failed)
 			{
@@ -1032,8 +1028,11 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 		if(validation_failed)
 			goto beach;
 
+		// PS5 probes have no tag: those bytes are the microsecond clock, matched by unit_index above.
+		uint32_t tag = 0;
+		if(senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+			goto pong_accept;
 		// Tag location: Cloud streaming uses offset 3, Remote play uses offset 4
-		uint32_t tag;
 		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 		{
 			// Cloud play (v9): Tag is at offset 3 in data portion
@@ -1079,6 +1078,7 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 			goto beach;
 		}
 
+pong_accept:
 		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 		{
 			CHIAKI_LOGV(senkusha->log, "Senkusha [CLOUD] received valid Pong %u/%u, size: %#llx, tag: 0x%x",

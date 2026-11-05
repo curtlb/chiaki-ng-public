@@ -1395,7 +1395,8 @@ static void takion_flush_data_queue(ChiakiTakion *takion)
 		free(entry);
 	}
 
-	if(ack)
+	// PS5 senkusha does not ack the BIG echo. An ack ends the server's retransmit, and the slot stays unprimed.
+	if(ack && !(takion->is_ping_handshake && takion->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD))
 		chiaki_takion_send_message_data_ack(takion, (uint32_t)seq_num);
 }
 
