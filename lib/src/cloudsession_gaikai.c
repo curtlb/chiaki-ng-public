@@ -531,17 +531,19 @@ static ChiakiErrorCode gk_step8b_server_authcode(GaikaiCtx *c)
 	}
 	else
 	{
-		const char *stream_client = c->stream_server_client_id[0]
+		// sso:none is registered only for the PS Now stream server. The id a PS5
+		// session names (08900a2b) is rejected with 401/4170 on both redirects.
+		const char *named = c->stream_server_client_id[0]
 			? c->stream_server_client_id : GK_PSNOW_STREAM_CLIENT_ID;
-		// sso:none is registered for the PS Now stream server on the PS Now redirect.
-		// The id a PS5 session returns is not; Sony answers 401 unless the redirect
-		// is the one carried in the request spec.
-		const char *stream_redir = strcmp(stream_client, GK_PSNOW_STREAM_CLIENT_ID) == 0
-			? GK_REDIR_PSNOW : GK_REDIR_LOCAL;
-		CHIAKI_LOGI(c->log, "[GAIKAI] step8b stream client=%s", stream_client);
+		const char *stream_client = strcmp(named, GK_PSNOW_STREAM_CLIENT_ID) == 0
+			? named : GK_PSNOW_STREAM_CLIENT_ID;
+		if(stream_client != named)
+			CHIAKI_LOGI(c->log, "[GAIKAI] step8b stream client %s has no sso:none scope, using %s", named, stream_client);
+		else
+			CHIAKI_LOGI(c->log, "[GAIKAI] step8b stream client=%s", stream_client);
 		ChiakiErrorCode e = gk_oauth_psnow_code(c, GK_PSNOW_PS3_CLIENT_ID, "kamaji:commerce_native", GK_REDIR_PSNOW, &c->ps3_auth_code);
 		if(e != CHIAKI_ERR_SUCCESS) return e;
-		e = gk_oauth_psnow_code(c, stream_client, "sso:none", stream_redir, &c->stream_server_auth_code);
+		e = gk_oauth_psnow_code(c, stream_client, "sso:none", GK_REDIR_PSNOW, &c->stream_server_auth_code);
 		if(e != CHIAKI_ERR_SUCCESS) return e;
 	}
 	gk_patch_auth_codes(c);
