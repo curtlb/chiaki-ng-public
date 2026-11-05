@@ -18,11 +18,14 @@
 #include <chiaki/takion.h>
 #include <chiaki/gkcrypt.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <unistd.h>
 #endif
 
 
@@ -35,6 +38,8 @@
 #define SENKUSHA_PING_COUNT_DEFAULT 10
 #define SENKUSHA_PSCLOUD_PING_COUNT 6
 #define SENKUSHA_PSCLOUD_PING_SIZE 547
+#define SENKUSHA_PSCLOUD_PING_INTERVAL_MS 200
+#define SENKUSHA_PSCLOUD_LINGER_MS 6000
 #define EXPECT_PONG_TIMEOUT_MS 1000
 
 // Assuming IPv4, sizeof(ip header) + sizeof(udp header)
@@ -293,12 +298,18 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		if(session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
 		{
 			// Six audio probes prime the slot. The remote-play MTU exchange and
-			// "Client Disconnecting" leave allocate at 002.2008.
+			// "Client Disconnecting" leave allocate at 002.2008. The socket stays
+			// open afterwards: closing it drops the test before Gaikai records it.
 			if(mtu_in)
 				*mtu_in = 1454;
 			if(mtu_out)
 				*mtu_out = 1254;
 			chiaki_mutex_unlock(&senkusha->state_mutex);
+#ifdef _WIN32
+			Sleep(SENKUSHA_PSCLOUD_LINGER_MS);
+#else
+			usleep(SENKUSHA_PSCLOUD_LINGER_MS * 1000);
+#endif
 			goto quit_takion;
 		}
 	}
@@ -405,14 +416,16 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		bool pscloud_probe = senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD;
 		if(pscloud_probe)
 		{
-			// Audio probe the PS5 senkusha counts: dword 0x800, codec 0xff, 547 bytes.
+			// Audio probe the PS5 senkusha counts. packet_index stays 0, frame_index
+			// runs 0..5, dword is 0x800, and byte 18 is a microsecond clock.
 			// The v9 parser reads the echo tag at payload offset 3 (byte 22).
 			memset(data, 0, SENKUSHA_PSCLOUD_PING_SIZE);
 			data[0] = 0x03;
-			*((chiaki_unaligned_uint16_t *)(data + 1)) = htons(ping_index);
-			*((chiaki_unaligned_uint16_t *)(data + 3)) = htons(ping_test_index);
+			*((chiaki_unaligned_uint16_t *)(data + 1)) = 0;
+			*((chiaki_unaligned_uint16_t *)(data + 3)) = htons(ping_index);
 			*((chiaki_unaligned_uint32_t *)(data + 5)) = htonl(0x800);
 			data[9] = 0xff;
+			*((chiaki_unaligned_uint32_t *)(data + 18)) = htonl((uint32_t)chiaki_time_now_monotonic_us());
 			*((chiaki_unaligned_uint32_t *)(data + 22)) = htonl(tag);
 			probe_size = SENKUSHA_PSCLOUD_PING_SIZE;
 		}
@@ -496,6 +509,17 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		rtt_us_acc += delta_us;
 		pings_successful += 1;
 		CHIAKI_LOGI(senkusha->log, "Senkusha received Pong, RTT = %.3f ms", (float)delta_us * 0.001f);
+
+		if(pscloud_probe && ping_index + 1 < ping_count)
+		{
+			chiaki_mutex_unlock(&senkusha->state_mutex);
+#ifdef _WIN32
+			Sleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS);
+#else
+			usleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS * 1000);
+#endif
+			chiaki_mutex_lock(&senkusha->state_mutex);
+		}
 	}
 
 	err = senkusha_send_echo_command(senkusha, false);
@@ -969,8 +993,11 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 		{
 			// Cloud play: unit_index validation is relaxed (pongs often return 0)
-			// Only validate frame_index, is_video, and data_size
+			// Only validate frame_index, is_video, and data_size.
+			// PS5 probes put the sample number in frame_index and leave packet_index at 0.
 			unit_index_fail = false; // Skip unit_index check for cloud play
+			if(senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
+				frame_index_fail = packet->frame_index != senkusha->ping_index;
 			validation_failed = is_video_fail || frame_index_fail || data_size_fail;
 			
 			if(validation_failed)

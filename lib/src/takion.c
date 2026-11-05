@@ -239,7 +239,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
 	takion->gkcrypt_remote = NULL;
 	takion->cb = info->cb;
 	takion->cb_user = info->cb_user;
-	takion->a_rwnd = TAKION_A_RWND;
+	// PS5 senkusha advertises the PS Now window. The game stream keeps the remote-play window.
+	takion->a_rwnd = (takion->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD && takion->is_ping_handshake)
+		? 0x19000 : TAKION_A_RWND;
 
 	takion->tag_local = chiaki_random_32();
 	takion->seq_num_local = takion->tag_local;
@@ -937,7 +939,7 @@ static ChiakiErrorCode takion_handshake(ChiakiTakion *takion, uint32_t *seq_num_
 
 	TakionMessagePayloadInit init_payload;
 	init_payload.tag = takion->tag_local;
-	init_payload.a_rwnd = TAKION_A_RWND;
+	init_payload.a_rwnd = takion->a_rwnd;
 	init_payload.outbound_streams = TAKION_OUTBOUND_STREAMS;
 	init_payload.inbound_streams = TAKION_INBOUND_STREAMS;
 	init_payload.initial_seq_num = takion->seq_num_local;
