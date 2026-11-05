@@ -2414,7 +2414,7 @@ ChiakiConnectVideoProfile Settings::GetCloudVideoProfile(const QString &serviceT
 	}
 	profile.bitrate = cloud_bitrate;
 	profile.max_fps = 60;
-	profile.codec = pscloud ? CHIAKI_CODEC_H265 : CHIAKI_CODEC_H264;
+	profile.codec = CHIAKI_CODEC_H264;
 	return profile;
 }
 

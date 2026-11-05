@@ -25,10 +25,8 @@
 #define GK_BASE        "https://cc.prod.gaikai.com/v1"
 #define GK_CONFIG_BASE "https://config.cc.prod.gaikai.com/v1"
 #define ACCOUNT_BASE   "https://ca.account.sony.com"
-#define GK_UA_PSCLOUD  "PlayStation Portal/6.0.0-rel.444+6a9cea6f5"
 #define GK_UA_PSNOW    CS_PSNOW_USER_AGENT  // shared (cloudsession_internal.h)
 #define GK_REDIR_PSNOW CS_PSNOW_REDIRECT
-#define GK_REDIR_PSCLOUD "gaikai://local"
 #define MAX_LOCK_RETRIES 12
 #define DEFAULT_ALLOC_WAIT_S 300
 #define MAX_ALLOC_WAIT_S 900
@@ -43,7 +41,7 @@ typedef struct
 	const ChiakiCloudProvisionConfig *cfg;
 	bool pscloud;
 	const char *platform;       // "ps3"|"ps4"|"ps5"
-	const char *virt_type;      // "konan"|"kratos"|"cronos"
+	const char *virt_type;      // "konan"|"kratos" (PS5 cloud uses kratos too)
 	const char *user_agent;
 	const char *oauth_api_path; // "/api/authz/v3" | "/api/v1"
 	const char *redirect_uri;
@@ -300,39 +298,43 @@ static struct json_object *gk_build_spec(GaikaiCtx *c, const char *entitlement_i
 
 	if(c->pscloud)
 	{
-		S_STR("videoEncoderProfile", "hw5.0");
+		// PS5 cloud no longer accepts the Portal profile (qlite / protocol 12 / hw5.0 / HEVC).
+		// The working client sends the PS Now PC profile, with gaikaiPlayer 16.4.0.
+		S_STR("videoEncoderProfile", "hw4.1");
+		struct json_object *vprof_top = json_object_new_array();
+		json_object_array_add(vprof_top, json_object_new_string("avc_hw4"));
+		json_object_object_add(s, "supportedVideoEncoderProfiles", vprof_top);
 		struct json_object *ctrls = json_object_new_array();
 		json_object_array_add(ctrls, json_object_new_string("ds4"));
-		json_object_array_add(ctrls, json_object_new_string("ds5"));
 		json_object_array_add(ctrls, json_object_new_string("xinput"));
 		json_object_object_add(s, "connectedControllers", json_object_get(ctrls));
 		struct json_object *input = json_object_new_object();
 		json_object_object_add(input, "controllers", ctrls);
 		json_object_object_add(s, "input", input);
-		S_STR("model", "portal");
-		S_STR("platform", "qlite");
+		S_STR("model", "WINDOWS");
+		S_STR("platform", "PC");
 		S_STR("gaikaiPlayer", "16.4.0");
-		S_INT("protocolVersion", 12);
+		S_INT("protocolVersion", 9);
 		S_STR("ps3AuthCode", "");
 		S_STR("streamServerAuthCode", "");
-		json_object_array_add(caps, json_object_new_string("cronos"));
+		json_object_array_add(caps, json_object_new_string("kratos"));
 		struct json_object *vss = json_object_new_object();
 		json_object_object_add(vss, "clientHeight", json_object_new_int(ch));
-		json_object_object_add(vss, "supportedMaxResolution", json_object_new_int(ch));
+		json_object_object_add(vss, "supportedMaxResolution", json_object_new_int(2160));
 		struct json_object *vprof = json_object_new_array();
-		json_object_array_add(vprof, json_object_new_string("hevc_hw4"));
+		json_object_array_add(vprof, json_object_new_string("avc_hw4"));
 		json_object_object_add(vss, "supportedVideoEncoderProfiles", vprof);
 		json_object_object_add(vss, "supportedDynamicRange", json_object_new_string("sdr"));
 		json_object_object_add(vss, "preferredMaxResolution", json_object_new_int(ch));
 		json_object_object_add(vss, "preferredDynamicRange", json_object_new_string("sdr"));
 		json_object_object_add(vss, "hqMode", json_object_new_int(1));
 		json_object_object_add(s, "videoStreamSettings", vss);
-		S_STR("audioChannels", "2");
+		S_STR("audioChannels", "2.1");
 		S_STR("audioEncoderProfile", "default");
 		struct json_object *ass = json_object_new_object();
 		json_object_object_add(ass, "audioEncoderProfile", json_object_new_string("default"));
-		json_object_object_add(ass, "maxAudioChannels", json_object_new_string("2"));
-		json_object_object_add(ass, "preferredNumberAudioChannels", json_object_new_string("2"));
+		json_object_object_add(ass, "maxAudioChannels", json_object_new_string("2.1"));
+		json_object_object_add(ass, "preferredNumberAudioChannels", json_object_new_string("2.1"));
 		json_object_object_add(s, "audioStreamSettings", ass);
 	}
 	else
@@ -409,8 +411,7 @@ static ChiakiErrorCode gk_step7_config(GaikaiCtx *c)
 	char url[256];
 	snprintf(url, sizeof(url), "%s/config", GK_CONFIG_BASE);
 	char body[256];
-	snprintf(body, sizeof(body), "{\"product\":\"%s\",\"platform\":\"%s\",\"sessionId\":\"\"}",
-		c->pscloud ? "qlite" : "psnow", c->pscloud ? "qlite" : "PC");
+	snprintf(body, sizeof(body), "{\"product\":\"psnow\",\"platform\":\"PC\",\"sessionId\":\"\"}");
 	char *h_ua = gk_hdr("User-Agent", c->user_agent);
 	const char *hdrs[] = { "Content-Type: application/json", "Accept: */*", h_ua };
 	CCHttpRequest req = { 0 };
@@ -468,18 +469,12 @@ static ChiakiErrorCode gk_step8a_gk_authcode(GaikaiCtx *c)
 {
 	gk_progress(c, "Getting Tokens - Step 4 of 10");
 	char url[2048];
-	if(c->pscloud)
-		snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&client_id=%s&redirect_uri=%s"
-			"&service_entity=urn:service-entity:psn&prompt=none&duid=%s&smcid=qlite&applicationId=qlite&mid=qlite"
-			"&scope=id_token:psn.basic_claims%%20kamaji:s2s.subscriptionsPremium.get%%20id_token:duid%%20id_token:online_id%%20openid%%20psn:s2s",
-			ACCOUNT_BASE, c->oauth_api_path, c->gk_client_id, GK_REDIR_PSCLOUD, c->duid);
-	else
-		snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&client_id=%s&redirect_uri=%s"
-			"&service_entity=urn:service-entity:psn&prompt=none&duid=%s&smcid=pc:psnow&applicationId=psnow&mid=PSNOW"
-			"&scope=kamaji:commerce_native%%20versa:user_update_entitlements_first_play%%20kamaji:lists"
-			"&renderMode=mobilePortrait&hidePageElements=forgotPasswordLink&displayFooter=none&disableLinks=qriocityLink"
-			"&layout_type=popup&service_logo=ps&tp_psn=true&noEVBlock=true",
-			ACCOUNT_BASE, c->oauth_api_path, c->gk_client_id, GK_REDIR_PSNOW, c->duid);
+	snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&client_id=%s&redirect_uri=%s"
+		"&service_entity=urn:service-entity:psn&prompt=none&duid=%s&smcid=pc:psnow&applicationId=psnow&mid=PSNOW"
+		"&scope=kamaji:commerce_native%%20versa:user_update_entitlements_first_play%%20kamaji:lists"
+		"&renderMode=mobilePortrait&hidePageElements=forgotPasswordLink&displayFooter=none&disableLinks=qriocityLink"
+		"&layout_type=popup&service_logo=ps&tp_psn=true&noEVBlock=true",
+		ACCOUNT_BASE, c->oauth_api_path, c->gk_client_id, GK_REDIR_PSNOW, c->duid);
 	ChiakiErrorCode e = gk_oauth_code(c, url, &c->gk_cloud_auth_code);
 	if(e == CHIAKI_ERR_SUCCESS) CHIAKI_LOGI(c->log, "[GAIKAI] step8a got gkCloudAuthCode");
 	return e;
@@ -489,29 +484,21 @@ static ChiakiErrorCode gk_step8b_server_authcode(GaikaiCtx *c)
 {
 	gk_progress(c, "Getting Server Tokens - Step 5 of 10");
 	char url[2048];
-	if(c->pscloud)
-		snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&redirect_uri=%s"
-			"&service_entity=urn:service-entity:psn&prompt=none&client_id=%s&smcid=qlite&applicationId=qlite&mid=qlite"
-			"&scope=id_token:duid%%20id_token:online_id%%20openid%%20oauth:create_authn_ticket_for_cloud_console_signin&duid=%s",
-			ACCOUNT_BASE, c->oauth_api_path, GK_REDIR_PSCLOUD, c->stream_server_client_id, c->duid);
-	else
-	{
-		bool ps3 = strcmp(c->platform, "ps3") == 0;
-		char duid_param[128];
-		if(ps3) duid_param[0] = '\0';                              // PS3 omits duid
-		else snprintf(duid_param, sizeof(duid_param), "&duid=%s", c->duid); // PS4 includes it
-		snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&redirect_uri=%s"
-			"&service_entity=urn:service-entity:psn&prompt=none&client_id=%s&smcid=pc:psnow&applicationId=psnow&mid=PSNOW"
-			"&scope=%s%s&renderMode=mobilePortrait&hidePageElements=forgotPasswordLink&displayFooter=none"
-			"&disableLinks=qriocityLink&layout_type=popup&service_logo=ps&tp_psn=true&noEVBlock=true",
-			ACCOUNT_BASE, c->oauth_api_path, GK_REDIR_PSNOW, c->ps3_gk_client_id,
-			ps3 ? "kamaji:commerce_native" : "sso:none", duid_param);
-	}
+	bool ps3 = strcmp(c->platform, "ps3") == 0;
+	char duid_param[128];
+	if(ps3) duid_param[0] = '\0';                              // PS3 omits duid
+	else snprintf(duid_param, sizeof(duid_param), "&duid=%s", c->duid); // PS4 and PS5 include it
+	snprintf(url, sizeof(url), "%s%s/oauth/authorize?response_type=code&redirect_uri=%s"
+		"&service_entity=urn:service-entity:psn&prompt=none&client_id=%s&smcid=pc:psnow&applicationId=psnow&mid=PSNOW"
+		"&scope=%s%s&renderMode=mobilePortrait&hidePageElements=forgotPasswordLink&displayFooter=none"
+		"&disableLinks=qriocityLink&layout_type=popup&service_logo=ps&tp_psn=true&noEVBlock=true",
+		ACCOUNT_BASE, c->oauth_api_path, GK_REDIR_PSNOW, c->ps3_gk_client_id,
+		ps3 ? "kamaji:commerce_native" : "sso:none", duid_param);
 	char *code = NULL;
 	ChiakiErrorCode e = gk_oauth_code(c, url, &code);
 	if(e != CHIAKI_ERR_SUCCESS) return e;
-	if(c->pscloud) { c->stream_server_auth_code = code; c->ps3_auth_code = strdup(""); }
-	else { c->ps3_auth_code = code; c->stream_server_auth_code = strdup(code); }
+	c->ps3_auth_code = code;
+	c->stream_server_auth_code = strdup(code);
 	gk_patch_auth_codes(c);
 	CHIAKI_LOGI(c->log, "[GAIKAI] step8b got server auth code");
 	return CHIAKI_ERR_SUCCESS;
@@ -1135,11 +1122,11 @@ ChiakiErrorCode cc_gaikai_allocate(ChiakiLog *log,
 	c.cfg = cfg;
 	c.platform = (platform && *platform) ? platform : "ps4";
 	c.pscloud = cfg->service_type && strcmp(cfg->service_type, "pscloud") == 0;
-	c.user_agent = c.pscloud ? GK_UA_PSCLOUD : GK_UA_PSNOW;
-	c.oauth_api_path = c.pscloud ? "/api/authz/v3" : "/api/v1";
-	c.redirect_uri = c.pscloud ? GK_REDIR_PSCLOUD : GK_REDIR_PSNOW;
+	// PS5 (pscloud) and PS4 (psnow) both authenticate as the PS Now PC client.
+	c.user_agent = GK_UA_PSNOW;
+	c.oauth_api_path = "/api/v1";
+	c.redirect_uri = GK_REDIR_PSNOW;
 	if(strcmp(c.platform, "ps3") == 0) c.virt_type = "konan";
-	else if(strcmp(c.platform, "ps5") == 0) c.virt_type = "cronos";
 	else c.virt_type = "kratos";
 
 	// Shared client device uid (same one Kamaji used), threaded into the OAuth URLs.

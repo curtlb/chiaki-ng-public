@@ -173,13 +173,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 	takion_info.enable_crypt = false;
 	takion_info.disable_audio_video = false;
 	takion_info.enable_dualsense = session->connect_info.enable_dualsense;
-	// Takion INIT: 7 remote play, 9 PS Now cloud, 12 PS Cloud (matches streamconnection.c).
+	// Takion INIT: 7 remote play, 9 cloud (PS4 and PS5). PS5 cloud now allocates
+	// a protocol 9 session; protocol 12 was the old Portal/HEVC profile.
 	if(senkusha->protocol_version == 0)
 	{
 		if(!chiaki_service_type_is_cloud(session->service_type))
 			senkusha->protocol_version = 7;
-		else if(session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
-			senkusha->protocol_version = 12;
 		else
 			senkusha->protocol_version = 9;
 	}
@@ -423,15 +422,8 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		uint8_t *ping_data = data;
 		size_t ping_data_size = sizeof(data);
 		uint8_t wrapped_data[sizeof(data) + 4];
-		// Add wrapper for PSNOW, but skip for PSCloud
-		bool should_add_wrapper = false;
-		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
-		{
-			should_add_wrapper = senkusha->session->service_type != CHIAKI_SERVICE_TYPE_PSCLOUD;
-			CHIAKI_LOGV(senkusha->log, "[OUTGOING PING] service_type=%s, psn_wrapper=%s",
-				chiaki_service_type_string(senkusha->session->service_type),
-				should_add_wrapper ? "enabled" : "disabled");
-		}
+		// Cloud senkusha pings use the PSN wrapper for both PS4 and PS5 cloud.
+		bool should_add_wrapper = chiaki_service_type_is_cloud(senkusha->session->service_type);
 		
 		if(should_add_wrapper)
 		{
@@ -668,13 +660,11 @@ static ChiakiErrorCode senkusha_run_mtu_out_test(ChiakiSenkusha *senkusha, uint3
 
 			CHIAKI_LOGI(senkusha->log, "Senkusha MTU %u out ping attempt %u", (unsigned int)cur, (unsigned int)attempt);
 
-			// CLOUD PLAY: Add PSN wrapper for MTU test packets (skip wrapper for PSCloud)
+			// CLOUD PLAY: Add PSN wrapper for MTU test packets (PS4 and PS5 cloud).
 			size_t mtu_packet_size = cur - MTU_UDP_PACKET_ADD;
 			uint8_t *mtu_packet_data = packet_buf;
 			uint8_t mtu_wrapped_data[1500]; // Max MTU size
-			// Add wrapper for PSNOW, but skip for PSCloud
-			if(chiaki_service_type_is_cloud(senkusha->session->service_type) &&
-			   senkusha->session->service_type != CHIAKI_SERVICE_TYPE_PSCLOUD)
+			if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 			{
 				// Add 4-byte PSN wrapper at the beginning
 				if(mtu_packet_size + 4 > sizeof(mtu_wrapped_data))

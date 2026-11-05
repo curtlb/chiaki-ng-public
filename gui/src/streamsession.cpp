@@ -339,8 +339,7 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 		ffmpeg_decoder = new ChiakiFfmpegDecoder;
 		ChiakiLogSniffer sniffer;
 		chiaki_log_sniffer_init(&sniffer, CHIAKI_LOG_ALL, GetChiakiLog());
-		// Use the codec from video_profile (set based on service type)
-		// For PSCLOUD, this will be H265; for PSNOW, this will be H264
+		// Cloud (PS4 and PS5) is H.264. Remote Play may be H.265 on PS5.
 		ChiakiCodec codec = connect_info.video_profile.codec;
 		const char* codec_name = (codec == CHIAKI_CODEC_H264) ? "H264" : 
 		                         (codec == CHIAKI_CODEC_H265) ? "H265" : 

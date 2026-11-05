@@ -51,28 +51,23 @@ CHIAKI_EXPORT void chiaki_cloud_provision_result_fini(ChiakiCloudProvisionResult
 // POST the service's authorize parameters to authorizeCheck with the npsso cookie;
 // HTTP 200/204 means the NPSSO is still valid. Scopes are SPACE-separated here (they
 // go in a JSON body), unlike the %20-encoded OAuth-query scopes in
-// cloudsession_kamaji.c. The pscloud client id is the fixed pre-flight id the
-// platforms used (distinct from the step0-fetched streaming client id).
+// cloudsession_kamaji.c. PS5 cloud uses the same PS Now pre-flight client as PS4.
+// The old Portal client (qlite / gaikai://local) is rejected for PS5 sessions.
 #define CA_URL            "https://ca.account.sony.com/api/authz/v3/oauth/authorizeCheck"
 #define CA_PSNOW_CLIENT   CS_PSNOW_CLIENT_ID  // shared (cloudsession_internal.h)
 #define CA_PSNOW_SCOPE    "kamaji:commerce_native kamaji:commerce_container kamaji:lists kamaji:s2s.subscriptionsPremium.get"
 #define CA_PSNOW_REDIR    CS_PSNOW_REDIRECT
 #define CA_PSNOW_UA       CS_PSNOW_USER_AGENT
-#define CA_PSCLOUD_CLIENT "19ae39c4-3f88-4d11-a792-94e4f52c996d"
-#define CA_PSCLOUD_SCOPE  "id_token:psn.basic_claims kamaji:s2s.subscriptionsPremium.get id_token:duid id_token:online_id openid psn:s2s"
-#define CA_PSCLOUD_REDIR  "gaikai://local"
-#define CA_PSCLOUD_UA     "PlayStation Portal/6.0.0-rel.444+6a9cea6f5"
 
 // Validate the NPSSO before any real work (silently, like the old platform pre-flight).
 // Returns SUCCESS on HTTP 200/204; any other status / transport error -> failure.
 static ChiakiErrorCode cc_authorize_check(ChiakiLog *log,
 	const ChiakiCloudProvisionConfig *cfg, const char *duid)
 {
-	bool pscloud = cfg->service_type && strcmp(cfg->service_type, "pscloud") == 0;
-	const char *client_id = pscloud ? CA_PSCLOUD_CLIENT : CA_PSNOW_CLIENT;
-	const char *scope     = pscloud ? CA_PSCLOUD_SCOPE  : CA_PSNOW_SCOPE;
-	const char *redirect  = pscloud ? CA_PSCLOUD_REDIR  : CA_PSNOW_REDIR;
-	const char *ua        = pscloud ? CA_PSCLOUD_UA     : CA_PSNOW_UA;
+	const char *client_id = CA_PSNOW_CLIENT;
+	const char *scope     = CA_PSNOW_SCOPE;
+	const char *redirect  = CA_PSNOW_REDIR;
+	const char *ua        = CA_PSNOW_UA;
 
 	char body[768];
 	snprintf(body, sizeof(body),

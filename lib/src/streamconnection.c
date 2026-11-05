@@ -208,10 +208,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_run(ChiakiStreamConnectio
 	// Cloud Play and Remote Play should behave identically (except PSN wrapper)
 	takion_info.enable_crypt = true; // Both use encryption
 	takion_info.enable_dualsense = session->connect_info.enable_dualsense;
-	// Cloud streaming: PSNOW uses v9, PSCLOUD uses v12.
-	// Remote play: PS5 stream Takion uses v12, PS4 uses v9 (matches chiaki-ng streamconnection).
+	// Cloud streaming is protocol 9 for PS4 and PS5 (H.264). Remote play: PS5 v12, PS4 v9.
 	if(chiaki_service_type_is_cloud(session->service_type))
-		takion_info.protocol_version = (session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD) ? 12 : 9;
+		takion_info.protocol_version = 9;
 	else
 		takion_info.protocol_version = chiaki_target_is_ps5(session->target) ? 12 : 9;
 	takion_info.service_type = session->service_type;
