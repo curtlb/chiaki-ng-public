@@ -4,7 +4,9 @@
 // machine, run as a single blocking sequence on a worker thread.
 // step0 client_ids -> step7 config -> step8 start -> 8a/8b OAuth auth codes
 // -> step9 authorize -> step10 lock -> step11 datacenters (ping/forced) ->
-// step12 select -> step13 allocate(+wait). Produces the stream-ready result.
+// step12 select -> step13 allocate(+wait). PS5 (pscloud) stops after the auth
+// codes and allocates through cloud.asobiapp.com (prepare/lock/ping/connect).
+// Produces the stream-ready result.
 
 #include "cloudsession_internal.h"
 #include "cloudcatalog_internal.h"  // cc_json_* helpers
@@ -23,6 +25,9 @@
 #include <time.h>
 
 #define GK_BASE        "https://cc.prod.gaikai.com/v1"
+// PS5 worker allocator. prepare takes the PSN cookie plus the Gaikai auth codes,
+// lock returns senkusha hosts, connect returns the stream endpoint.
+#define GK_WORKER_BASE "https://cloud.asobiapp.com"
 #define GK_CONFIG_BASE "https://config.cc.prod.gaikai.com/v1"
 #define ACCOUNT_BASE   "https://ca.account.sony.com"
 #define GK_UA_PSNOW    CS_PSNOW_USER_AGENT  // shared (cloudsession_internal.h)
@@ -1307,6 +1312,359 @@ static ChiakiErrorCode gk_step13_allocate(GaikaiCtx *c, ChiakiCloudProvisionResu
 	}
 }
 
+// POST JSON to the PS5 worker allocator. @p body may be NULL (sends {}).
+// The body is not freed. curl_http redacts npsso and the auth codes when it traces.
+static ChiakiErrorCode gk_worker_post(GaikaiCtx *c, const char *path,
+	struct json_object *body, CCHttpResponse *resp)
+{
+	char url[768];
+	snprintf(url, sizeof(url), "%s%s", GK_WORKER_BASE, path);
+	const char *hdrs[] = { "Content-Type: application/json", "Accept: application/json" };
+	CCHttpRequest req = { 0 };
+	req.method = "POST";
+	req.url = url;
+	req.headers = hdrs;
+	req.header_count = 2;
+	req.body = body ? json_object_to_json_string(body) : "{}";
+	req.timeout_ms = 30000;
+	return cc_http_perform(c->log, &req, resp);
+}
+
+static void gk_worker_fail(GaikaiCtx *c, ChiakiCloudProvisionResult *out,
+	const char *step, CCHttpResponse *resp)
+{
+	CHIAKI_LOGE(c->log, "[WORKER] %s http %ld", step, resp ? resp->status_code : 0);
+	struct json_object *j = (resp && resp->data) ? json_tokener_parse(resp->data) : NULL;
+	const char *msg = j ? cc_json_str(j, "message") : "";
+	if(!msg || !*msg)
+		msg = j ? cc_json_str(j, "error") : "";
+	if(msg && *msg)
+	{
+		free(out->error_message);
+		out->error_message = strdup(msg);
+	}
+	else if(!out->error_message)
+	{
+		char m[96];
+		snprintf(m, sizeof(m), "Cloud allocate %s failed (HTTP %ld)", step, resp ? resp->status_code : 0);
+		out->error_message = strdup(m);
+	}
+	if(j) json_object_put(j);
+}
+
+static const char *gk_worker_pick(struct json_object *obj, struct json_object *fallback, const char *key)
+{
+	const char *v = obj ? cc_json_str(obj, key) : "";
+	if(v && *v) return v;
+	return fallback ? cc_json_str(fallback, key) : "";
+}
+
+// PS5 allocation: prepare -> lock -> one senkusha per datacenter -> connect.
+// Classic Gaikai /sessions/{id}/allocate rejects this client's senkusha (002.2014).
+static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_id,
+	ChiakiCloudProvisionResult *out)
+{
+	const char *npsso = c->cfg->npsso ? c->cfg->npsso : "";
+	if(!*npsso)
+	{
+		out->error_message = strdup("Sign in with PSN in Settings before starting a PS5 game.");
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	if(gk_cancelled(c)) return CHIAKI_ERR_CANCELED;
+
+	int res = c->cfg->resolution;
+	if(res != 720 && res != 1080 && res != 1440 && res != 2160) res = 1080;
+	char resolution[16];
+	snprintf(resolution, sizeof(resolution), "%dp", res);
+	int bitrate = c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
+	const char *lang = (c->cfg->game_language && *c->cfg->game_language) ? c->cfg->game_language : "en";
+	const char *country = (c->cfg->store_country && *c->cfg->store_country) ? c->cfg->store_country : "US";
+	const char *store_lang = (c->cfg->store_lang && *c->cfg->store_lang) ? c->cfg->store_lang : "en";
+	char launch_id[80];
+	if(c->gaikai_session_id && *c->gaikai_session_id)
+		snprintf(launch_id, sizeof(launch_id), "%s", c->gaikai_session_id);
+	else
+		snprintf(launch_id, sizeof(launch_id), "chiaki-%lld", (long long)time(NULL));
+
+	struct json_object *game = json_object_new_object();
+	json_object_object_add(game, "id", json_object_new_string(entitlement_id ? entitlement_id : ""));
+	json_object_object_add(game, "name", json_object_new_string(c->cfg->game_name ? c->cfg->game_name : ""));
+	struct json_object *settings = json_object_new_object();
+	json_object_object_add(settings, "resolution", json_object_new_string(resolution));
+	json_object_object_add(settings, "fps", json_object_new_int(60));
+	json_object_object_add(settings, "bitrateKbps", json_object_new_int(bitrate));
+	json_object_object_add(settings, "bitrateMode", json_object_new_string(c->cfg->bitrate_kbps > 0 ? "manual" : "auto"));
+	json_object_object_add(settings, "enableHDR", json_object_new_boolean(false));
+	json_object_object_add(settings, "language", json_object_new_string(lang));
+
+	struct json_object *prep = json_object_new_object();
+	json_object_object_add(prep, "serviceType", json_object_new_string("pscloud"));
+	json_object_object_add(prep, "npsso", json_object_new_string(npsso));
+	json_object_object_add(prep, "accessToken", json_object_new_string(""));
+	json_object_object_add(prep, "duid", json_object_new_string(c->duid));
+	json_object_object_add(prep, "game", game);
+	json_object_object_add(prep, "settings", settings);
+	json_object_object_add(prep, "entitlementId", json_object_new_string(entitlement_id ? entitlement_id : ""));
+	json_object_object_add(prep, "gkCloudAuthCode", json_object_new_string(c->gk_cloud_auth_code ? c->gk_cloud_auth_code : ""));
+	json_object_object_add(prep, "ps3AuthCode", json_object_new_string(c->ps3_auth_code ? c->ps3_auth_code : ""));
+	json_object_object_add(prep, "streamServerAuthCode", json_object_new_string(c->stream_server_auth_code ? c->stream_server_auth_code : ""));
+	json_object_object_add(prep, "kamajiCountry", json_object_new_string(country));
+	json_object_object_add(prep, "kamajiLanguage", json_object_new_string(store_lang));
+	json_object_object_add(prep, "launchId", json_object_new_string(launch_id));
+	json_object_object_add(prep, "launchAttempt", json_object_new_int(1));
+
+	gk_progress(c, "Preparing PS5 cloud session");
+	CHIAKI_LOGI(c->log, "[WORKER] prepare serviceType=pscloud resolution=%s fps=60 bitrateKbps=%d", resolution, bitrate);
+	CCHttpResponse resp = { 0 };
+	ChiakiErrorCode e = gk_worker_post(c, "/allocate/prepare", prep, &resp);
+	json_object_put(prep);
+	if(e != CHIAKI_ERR_SUCCESS) { cc_http_response_fini(&resp); return e; }
+	if(resp.status_code < 200 || resp.status_code >= 300)
+	{
+		gk_worker_fail(c, out, "prepare", &resp);
+		cc_http_response_fini(&resp);
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	struct json_object *pj = resp.data ? json_tokener_parse(resp.data) : NULL;
+	cc_http_response_fini(&resp);
+	const char *sid = pj ? cc_json_str(pj, "sessionId") : "";
+	if(!sid || !*sid)
+	{
+		if(pj) json_object_put(pj);
+		CHIAKI_LOGE(c->log, "[WORKER] prepare returned no sessionId");
+		out->error_message = strdup("Cloud prepare returned no session.");
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	char session_id[128];
+	snprintf(session_id, sizeof(session_id), "%s", sid);
+	json_object_put(pj);
+
+	// Lock. An empty body matches the client; poll until the lock (and its
+	// datacenter list) is ready.
+	char lock_path[192];
+	snprintf(lock_path, sizeof(lock_path), "/allocate/%s/lock", session_id);
+	struct json_object *dcs = NULL;
+	for(int attempt = 0; attempt < MAX_LOCK_RETRIES; attempt++)
+	{
+		if(gk_cancelled(c)) return CHIAKI_ERR_CANCELED;
+		gk_progress(c, "Locking PS5 cloud session");
+		memset(&resp, 0, sizeof(resp));
+		e = gk_worker_post(c, lock_path, NULL, &resp);
+		if(e != CHIAKI_ERR_SUCCESS)
+		{
+			cc_http_response_fini(&resp);
+			if(!gk_sleep_cancellable(c, GK_ALLOC_NET_RETRY_S)) return CHIAKI_ERR_CANCELED;
+			continue;
+		}
+		if(resp.status_code < 200 || resp.status_code >= 300)
+		{
+			gk_worker_fail(c, out, "lock", &resp);
+			cc_http_response_fini(&resp);
+			return CHIAKI_ERR_UNKNOWN;
+		}
+		struct json_object *lj = resp.data ? json_tokener_parse(resp.data) : NULL;
+		cc_http_response_fini(&resp);
+		struct json_object *list = lj ? cc_json_arr(lj, "datacenters") : NULL;
+		int poll = lj ? cc_json_int(lj, "pollFrequency") : 2;
+		if(poll <= 0) poll = 2;
+		if(poll > 30) poll = 30;
+		if(list && json_object_array_length(list) > 0)
+		{
+			dcs = json_object_get(list);
+			if(lj) json_object_put(lj);
+			break;
+		}
+		if(lj) json_object_put(lj);
+		CHIAKI_LOGI(c->log, "[WORKER] lock not acquired yet (attempt %d)", attempt + 1);
+		if(!gk_sleep_cancellable(c, poll)) return CHIAKI_ERR_CANCELED;
+	}
+	if(!dcs || json_object_get_type(dcs) != json_type_array || json_object_array_length(dcs) == 0)
+	{
+		if(dcs) json_object_put(dcs);
+		out->error_message = strdup("Cloud lock did not return datacenters.");
+		return CHIAKI_ERR_UNKNOWN;
+	}
+
+	const char *forced = c->cfg->forced_datacenter;
+	bool use_forced = forced && *forced && strcasecmp(forced, "Auto") != 0 && strcasecmp(forced, "auto") != 0;
+	const char *ping_key = session_id;
+	if(c->gaikai_session_id && *c->gaikai_session_id)
+		ping_key = c->gaikai_session_id;
+
+	struct json_object *pings = json_object_new_array();
+	struct json_object *fat = json_object_new_array();
+	int best_rtt = 0;
+	uint32_t best_mtu_in = 1454, best_mtu_out = 1254;
+	size_t n = json_object_array_length(dcs);
+	gk_progress(c, "Pinging PS5 datacenters");
+	for(size_t i = 0; i < n; i++)
+	{
+		if(gk_cancelled(c)) { json_object_put(dcs); json_object_put(pings); json_object_put(fat); return CHIAKI_ERR_CANCELED; }
+		struct json_object *dc = json_object_array_get_idx(dcs, i);
+		const char *id = cc_json_str(dc, "id");
+		if(!id || !*id) id = cc_json_str(dc, "dataCenter");
+		if(!id || !*id) continue;
+		if(use_forced && strcasecmp(id, forced) != 0) continue;
+		const char *host = cc_json_str(dc, "host");
+		char hostbuf[160];
+		if(!host || !*host)
+		{
+			snprintf(hostbuf, sizeof(hostbuf), "senkusha.%s.prod.playstation-cloud.com", id);
+			host = hostbuf;
+		}
+		int port = cc_json_int(dc, "port");
+		if(port <= 0) port = 40101;
+		int64_t rtt_us = -1;
+		uint32_t mtu_in = 0, mtu_out = 0;
+		CHIAKI_LOGI(c->log, "[WORKER] senkusha %s %s:%d", id, host, port);
+		cc_ping_datacenter(c->log, host, port, ping_key, "pscloud", &rtt_us, &mtu_in, &mtu_out, NULL);
+		if(rtt_us <= 0) { CHIAKI_LOGW(c->log, "[WORKER] senkusha %s failed", id); continue; }
+		int rtt_ms = (int)(rtt_us / 1000);
+		if(rtt_ms < 1) rtt_ms = 1;
+		if(mtu_in == 0) mtu_in = 1454;
+		if(mtu_out == 0) mtu_out = 1254;
+		struct json_object *row = json_object_new_object();
+		json_object_object_add(row, "dataCenter", json_object_new_string(id));
+		struct json_object *rtts = json_object_new_array();
+		json_object_array_add(rtts, json_object_new_int(rtt_ms));
+		json_object_object_add(row, "rtts", rtts);
+		json_object_object_add(row, "port", json_object_new_int(40101));
+		json_object_object_add(row, "mtu_in", json_object_new_int((int)mtu_in));
+		json_object_object_add(row, "mtu_out", json_object_new_int((int)mtu_out));
+		json_object_array_add(pings, row);
+		json_object_array_add(fat, gk_ping_obj(id, rtt_ms, mtu_in, mtu_out, port, host, bitrate, true));
+		if(best_rtt == 0 || rtt_ms < best_rtt)
+		{
+			best_rtt = rtt_ms;
+			best_mtu_in = mtu_in;
+			best_mtu_out = mtu_out;
+			snprintf(c->selected_datacenter, sizeof(c->selected_datacenter), "%s", id);
+			c->selected_dc_port = port;
+		}
+		CHIAKI_LOGI(c->log, "[WORKER] %s rtt=%dms mtu %u/%u", id, rtt_ms, mtu_in, mtu_out);
+	}
+	json_object_put(dcs);
+	if(json_object_array_length(pings) == 0)
+	{
+		json_object_put(pings);
+		json_object_put(fat);
+		out->error_message = strdup(use_forced ? "Selected datacenter did not respond." : "No PS5 datacenter responded.");
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	if(c->ping_results) json_object_put(c->ping_results);
+	c->ping_results = fat;
+	if(c->dc_picker) json_object_put(c->dc_picker);
+	c->dc_picker = json_object_get(fat);
+
+	struct json_object *connect = json_object_new_object();
+	json_object_object_add(connect, "pingResults", pings);
+	char connect_path[192];
+	snprintf(connect_path, sizeof(connect_path), "/allocate/%s/connect", session_id);
+
+	int elapsed = 0;
+	const int max_wait = DEFAULT_ALLOC_WAIT_S;
+	for(;;)
+	{
+		if(gk_cancelled(c)) { json_object_put(connect); return CHIAKI_ERR_CANCELED; }
+		gk_progress(c, "Connecting PS5 cloud session");
+		memset(&resp, 0, sizeof(resp));
+		e = gk_worker_post(c, connect_path, connect, &resp);
+		if(e != CHIAKI_ERR_SUCCESS)
+		{
+			cc_http_response_fini(&resp);
+			if(elapsed >= max_wait) { json_object_put(connect); return e; }
+			if(!gk_sleep_cancellable(c, GK_ALLOC_NET_RETRY_S)) { json_object_put(connect); return CHIAKI_ERR_CANCELED; }
+			elapsed += GK_ALLOC_NET_RETRY_S;
+			continue;
+		}
+		if(resp.status_code < 200 || resp.status_code >= 300)
+		{
+			gk_worker_fail(c, out, "connect", &resp);
+			cc_http_response_fini(&resp);
+			json_object_put(connect);
+			return CHIAKI_ERR_UNKNOWN;
+		}
+		struct json_object *cj = resp.data ? json_tokener_parse(resp.data) : NULL;
+		cc_http_response_fini(&resp);
+		if(!cj) { json_object_put(connect); return CHIAKI_ERR_UNKNOWN; }
+
+		struct json_object *alloc = cc_json_obj(cj, "allocation");
+		const char *endpoint = gk_worker_pick(alloc, cj, "cloudEndpoint");
+		if(!endpoint || !*endpoint) endpoint = gk_worker_pick(cj, alloc, "publicIp");
+		const char *status = cc_json_str(cj, "status");
+		bool ready = (endpoint && *endpoint) || cc_json_bool(cj, "allocated")
+			|| (status && strcmp(status, "allocated") == 0);
+		bool queued = cc_json_bool(cj, "queued") || (status && strcmp(status, "queued") == 0);
+		if(!ready && queued)
+		{
+			int poll = cc_json_int(cj, "pollFrequency");
+			if(poll <= 0) poll = 2;
+			if(poll > 30) poll = 30;
+			int est = cc_json_int(cj, "waitTimeEstimate");
+			char prog[128];
+			if(est > 0)
+				snprintf(prog, sizeof(prog), "Queued for a PS5 slot (about %ds)", est);
+			else
+				snprintf(prog, sizeof(prog), "Queued for a PS5 slot");
+			gk_progress(c, prog);
+			json_object_put(cj);
+			if(elapsed >= max_wait)
+			{
+				json_object_put(connect);
+				out->error_message = strdup("Timed out waiting for a streaming slot. Please try again.");
+				return CHIAKI_ERR_TIMEOUT;
+			}
+			if(!gk_sleep_cancellable(c, poll)) { json_object_put(connect); return CHIAKI_ERR_CANCELED; }
+			elapsed += poll;
+			continue;
+		}
+		if(!endpoint || !*endpoint)
+		{
+			json_object_put(cj);
+			json_object_put(connect);
+			out->error_message = strdup("Cloud connect returned no stream address.");
+			return CHIAKI_ERR_UNKNOWN;
+		}
+
+		char ip[128];
+		snprintf(ip, sizeof(ip), "%s", endpoint);
+		int port = alloc ? cc_json_int(alloc, "port") : 0;
+		if(port <= 0) port = cc_json_int(cj, "port");
+		char *colon = strrchr(ip, ':');
+		if(colon && strchr(ip, ':') == colon)
+		{
+			*colon = 0;
+			if(port <= 0) port = atoi(colon + 1);
+		}
+		snprintf(out->server_ip, sizeof(out->server_ip), "%s", ip);
+		out->server_port = port;
+		const char *spec = gk_worker_pick(alloc, cj, "launchSpecification");
+		const char *hs = gk_worker_pick(alloc, cj, "handshakeKey");
+		const char *priv = gk_worker_pick(alloc, cj, "privateIp");
+		const char *out_sid = gk_worker_pick(alloc, cj, "sessionId");
+		if(!out_sid || !*out_sid) out_sid = session_id;
+		out->launch_spec = strdup(spec ? spec : "");
+		out->handshake_key = strdup(hs ? hs : "");
+		out->session_id = strdup(out_sid);
+		out->mtu_in = best_mtu_in;
+		out->mtu_out = best_mtu_out;
+		out->rtt_us = (uint64_t)best_rtt * 1000;
+		out->psn_wrapper_type = 0x01;
+		const char *dot = priv ? strrchr(priv, '.') : NULL;
+		if(dot) { int oct = atoi(dot + 1); if(oct >= 0 && oct <= 255) out->psn_wrapper_type = (uint8_t)oct; }
+		json_object_put(cj);
+		json_object_put(connect);
+		if(!out->server_ip[0] || out->server_port <= 0 || !out->launch_spec || !*out->launch_spec || !out->handshake_key || !*out->handshake_key)
+		{
+			CHIAKI_LOGE(c->log, "[WORKER] connect missing endpoint, launch spec, or handshake");
+			out->error_message = strdup("Cloud connect response was incomplete.");
+			return CHIAKI_ERR_UNKNOWN;
+		}
+		CHIAKI_LOGI(c->log, "[WORKER] ALLOCATION OK %s:%d dc=%s", out->server_ip, out->server_port, c->selected_datacenter);
+		return CHIAKI_ERR_SUCCESS;
+	}
+}
+
 ChiakiErrorCode cc_gaikai_allocate(ChiakiLog *log,
 	const ChiakiCloudProvisionConfig *cfg, const char *duid,
 	const char *platform, const char *entitlement_id,
@@ -1346,12 +1704,31 @@ ChiakiErrorCode cc_gaikai_allocate(ChiakiLog *log,
 	if(e == CHIAKI_ERR_SUCCESS && gk_cancelled(&c)) e = CHIAKI_ERR_CANCELED;
 	if(e == CHIAKI_ERR_SUCCESS) e = gk_step8b_server_authcode(&c);
 	if(e == CHIAKI_ERR_SUCCESS && gk_cancelled(&c)) e = CHIAKI_ERR_CANCELED;
-	if(e == CHIAKI_ERR_SUCCESS) e = gk_step9_authorize(&c, out, &psplus_err);
-	if(e == CHIAKI_ERR_SUCCESS && gk_cancelled(&c)) e = CHIAKI_ERR_CANCELED;
-	if(e == CHIAKI_ERR_SUCCESS) e = gk_step10_lock(&c);
-	if(e == CHIAKI_ERR_SUCCESS) e = gk_step11_datacenters(&c);
-	if(e == CHIAKI_ERR_SUCCESS) e = gk_step12_select(&c);
-	if(e == CHIAKI_ERR_SUCCESS) e = gk_step13_allocate(&c, out);
+	if(c.pscloud)
+	{
+		// Gaikai /allocate keeps answering 002.2014 for this client. PS5 uses the
+		// worker allocator instead. A failed local handoff is non-fatal: prepare
+		// still has the PSN cookie, and missing auth codes go out empty.
+		if(e == CHIAKI_ERR_CANCELED)
+			;
+		else
+		{
+			if(e != CHIAKI_ERR_SUCCESS)
+				CHIAKI_LOGW(log, "[WORKER] Gaikai handoff did not finish; allocating with the saved PSN account");
+			free(out->error_message);
+			out->error_message = NULL;
+			e = gk_worker_allocate(&c, entitlement_id ? entitlement_id : "", out);
+		}
+	}
+	else
+	{
+		if(e == CHIAKI_ERR_SUCCESS) e = gk_step9_authorize(&c, out, &psplus_err);
+		if(e == CHIAKI_ERR_SUCCESS && gk_cancelled(&c)) e = CHIAKI_ERR_CANCELED;
+		if(e == CHIAKI_ERR_SUCCESS) e = gk_step10_lock(&c);
+		if(e == CHIAKI_ERR_SUCCESS) e = gk_step11_datacenters(&c);
+		if(e == CHIAKI_ERR_SUCCESS) e = gk_step12_select(&c);
+		if(e == CHIAKI_ERR_SUCCESS) e = gk_step13_allocate(&c, out);
+	}
 
 	// Return the full datacenter list (merged with prior stored RTTs) for the
 	// Settings picker -- the platform persists this verbatim, like the old code.

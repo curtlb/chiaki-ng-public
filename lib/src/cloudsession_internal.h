@@ -111,7 +111,8 @@ ChiakiErrorCode cc_kamaji_resolve(ChiakiLog *log,
 /**
  * Gaikai allocation flow (steps 0/7-13): client ids -> config -> start session
  * -> OAuth auth codes -> authorize -> lock -> datacenters -> ping/select ->
- * allocate slot. @p platform is the resolved "ps3"|"ps4"|"ps5"; @p entitlement_id
+ * allocate slot. PS5 (pscloud) uses the worker allocator after the auth codes
+ * instead of authorize/lock/select/allocate. @p platform is the resolved "ps3"|"ps4"|"ps5"; @p entitlement_id
  * is the entitlement to stream; @p duid the shared client device uid (Kamaji's).
  * cfg->service_type selects PSNOW vs PSCLOUD. On success fills out->{server_ip,
  * server_port,handshake_key,launch_spec,session_id,mtu_*,rtt_us,platform,
