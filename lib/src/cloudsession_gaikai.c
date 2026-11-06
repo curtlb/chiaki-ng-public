@@ -1132,28 +1132,52 @@ static ChiakiErrorCode gk_step13_allocate(GaikaiCtx *c, ChiakiCloudProvisionResu
 
 		struct json_object *extra = json_object_new_object();
 		json_object_object_add(extra, "dataCenter", json_object_new_string(c->selected_datacenter));
-		// PS5 follows Asobi's connect body: dataCenter, rtts, mtu_in, mtu_out,
-		// pingResults. That request has no bwKbpsSent. PS4 keeps the network object.
+		// PS5 allocate carries Asobi's senkusha results. Each pingResults entry is
+		// dataCenter, rtts (array of the pong samples), port 40101, mtu_in, mtu_out.
+		// A name-to-rtt map, or the select row's publicIp/maxBandwidth/measured,
+		// is what Gaikai rejects as malformed senkusha results. PS4 keeps network.
 		if(c->pscloud)
 		{
-			struct json_object *rtts = json_object_new_object();
+			struct json_object *results = json_object_new_array();
 			if(c->ping_results)
 			{
 				size_t rn = json_object_array_length(c->ping_results);
 				for(size_t i = 0; i < rn; i++)
 				{
 					struct json_object *row = json_object_array_get_idx(c->ping_results, i);
+					if(!cc_json_bool(row, "measured"))
+						continue;
 					const char *name = cc_json_str(row, "dataCenter");
-					int row_rtt = cc_json_int(row, "rtt");
-					if(name && *name)
-						json_object_object_add(rtts, name, json_object_new_int(row_rtt > 0 ? row_rtt : 0));
+					if(!name || !*name)
+						continue;
+					int row_mtu_in = cc_json_int(row, "mtu_in");
+					int row_mtu_out = cc_json_int(row, "mtu_out");
+					if(row_mtu_in <= 0) row_mtu_in = mtu_in;
+					if(row_mtu_out <= 0) row_mtu_out = mtu_out;
+					struct json_object *item = json_object_new_object();
+					json_object_object_add(item, "dataCenter", json_object_new_string(name));
+					struct json_object *rtts = json_object_new_array();
+					struct json_object *src = cc_json_arr(row, "rtts");
+					size_t sn = src ? json_object_array_length(src) : 0;
+					for(size_t s = 0; s < sn; s++)
+					{
+						struct json_object *sample = json_object_array_get_idx(src, s);
+						int sample_rtt = sample ? json_object_get_int(sample) : 0;
+						json_object_array_add(rtts, json_object_new_int(sample_rtt > 0 ? sample_rtt : 0));
+					}
+					if(sn == 0)
+					{
+						int row_rtt = cc_json_int(row, "rtt");
+						json_object_array_add(rtts, json_object_new_int(row_rtt > 0 ? row_rtt : 0));
+					}
+					json_object_object_add(item, "rtts", rtts);
+					json_object_object_add(item, "port", json_object_new_int(40101));
+					json_object_object_add(item, "mtu_in", json_object_new_int(row_mtu_in));
+					json_object_object_add(item, "mtu_out", json_object_new_int(row_mtu_out));
+					json_object_array_add(results, item);
 				}
 			}
-			json_object_object_add(extra, "rtts", rtts);
-			json_object_object_add(extra, "mtu_in", json_object_new_int(mtu_in));
-			json_object_object_add(extra, "mtu_out", json_object_new_int(mtu_out));
-			if(c->ping_results)
-				json_object_object_add(extra, "pingResults", json_object_get(c->ping_results));
+			json_object_object_add(extra, "pingResults", results);
 		}
 		else
 		{

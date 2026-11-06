@@ -36,10 +36,11 @@
 #define CONNECT_TIMEOUT_MS 30000
 
 #define SENKUSHA_PING_COUNT_DEFAULT 10
-#define SENKUSHA_PSCLOUD_PING_COUNT 6
+// Asobi's SenkushaPing records one pong per datacenter, then reports that
+// sample. Extra probes after the echo are not part of the result Gaikai checks.
+#define SENKUSHA_PSCLOUD_PING_COUNT 1
 #define SENKUSHA_PSCLOUD_PING_SIZE 547
 #define SENKUSHA_PSCLOUD_PING_INTERVAL_MS 200
-#define SENKUSHA_PSCLOUD_LINGER_MS 6000
 #define EXPECT_PONG_TIMEOUT_MS 1000
 
 // Assuming IPv4, sizeof(ip header) + sizeof(udp header)
@@ -299,20 +300,14 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 		}
 		if(session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
 		{
-			// Six audio probes prime the slot. The remote-play MTU exchange and
-			// "Client Disconnecting" leave allocate at 002.2008. Gaikai records the
-			// test only while this socket is still open, so the caller holds it
-			// through /allocate. Closing here makes the next allocate 002.2008.
+			// One pong, then the defaults Asobi reports when it does not run the
+			// remote-play MTU exchange. "Client Disconnecting" is not sent here.
+			// The socket stays open: Gaikai records the test while it is connected.
 			if(mtu_in)
 				*mtu_in = 1454;
 			if(mtu_out)
 				*mtu_out = 1254;
 			chiaki_mutex_unlock(&senkusha->state_mutex);
-#ifdef _WIN32
-			Sleep(SENKUSHA_PSCLOUD_LINGER_MS);
-#else
-			usleep(SENKUSHA_PSCLOUD_LINGER_MS * 1000);
-#endif
 			if(senkusha->keep_socket && !CHIAKI_SOCKET_IS_INVALID(senkusha->takion.sock))
 			{
 				senkusha->takion.close_socket = false;
