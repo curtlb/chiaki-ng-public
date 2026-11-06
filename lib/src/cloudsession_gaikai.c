@@ -892,7 +892,9 @@ static ChiakiErrorCode gk_step11_datacenters(GaikaiCtx *c)
 		gk_progress(c, "Pinging Datacenters - Step 8 of 10");
 		if(gk_cancelled(c)) { json_object_put(dcs); return CHIAKI_ERR_CANCELED; }
 
-		// Ping every datacenter in parallel (one thread each), then collect.
+		// PS5 follows Asobi: one senkusha test at a time. Overlapping tests on the
+		// same Gaikai session come back as invalidSenkushaResults. PS4 stays parallel.
+		bool sequential = c->cfg->service_type && strcmp(c->cfg->service_type, "pscloud") == 0;
 		GkPingJob **jobs = (GkPingJob **)calloc(n, sizeof(GkPingJob*));
 		ChiakiThread *threads = (ChiakiThread *)calloc(n, sizeof(ChiakiThread));
 		bool *threaded = (bool *)calloc(n, sizeof(bool)); // which slots actually started a thread
@@ -936,14 +938,14 @@ static ChiakiErrorCode gk_step11_datacenters(GaikaiCtx *c)
 			atomic_init(&j->done, 0);
 			atomic_init(&j->handoff, 0);
 			jobs[i] = j;
-			if(chiaki_thread_create(&threads[i], gk_ping_thread, j) == CHIAKI_ERR_SUCCESS)
-				threaded[i] = true;
-			else
+			if(sequential || chiaki_thread_create(&threads[i], gk_ping_thread, j) != CHIAKI_ERR_SUCCESS)
 			{
-				gk_ping_thread(j); // fall back to inline if a thread won't start
+				gk_ping_thread(j); // PS5, or a thread that would not start
 				// gk_ping_thread set done+handoff (exchange returned 0, so it did NOT
 				// free); the collect loop treats the slot as complete and frees it.
 			}
+			else
+				threaded[i] = true;
 		}
 		// Phase 1: portable deadline wait. Poll each job's done flag instead of a
 		// timed join: the timed-join primitive is compiled out on macOS/iOS

@@ -147,10 +147,9 @@ static inline bool chiaki_service_type_is_cloud(ChiakiServiceType service_type)
 
 /**
  * Fixed safety offset (in milliseconds) subtracted from the senkusha-measured RTT
- * for cloud sessions only. Our cloud datacenter ping reads consistently high, which
- * trips the client-side latency gate and inflates the RTT reported to Gaikai. The
- * offset is applied once at the measurement source (senkusha) and clamped so the
- * result never drops below CHIAKI_CLOUD_RTT_MIN_MS. Remote Play is unaffected.
+ * for PS4 cloud only. PS5 allocate checks the reported sample against the pong
+ * the senkusha server recorded, so that result is sent unchanged. Remote Play
+ * is unaffected. The value is clamped so it never drops below CHIAKI_CLOUD_RTT_MIN_MS.
  */
 #define CHIAKI_CLOUD_RTT_SAFETY_OFFSET_MS 20
 #define CHIAKI_CLOUD_RTT_MIN_MS 1
