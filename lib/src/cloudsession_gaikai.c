@@ -1364,6 +1364,105 @@ static const char *gk_worker_pick(struct json_object *obj, struct json_object *f
 	return fallback ? cc_json_str(fallback, key) : "";
 }
 
+// Remote Play client. Asobi's NPSSO exchange uses this id, scope, and redirect,
+// then posts the code to the v3 token endpoint with token_format=jwt.
+#define GK_RP_CLIENT_ID "ba495a24-818c-472b-b12d-ff231c1b5745"
+#define GK_RP_BASIC     "YmE0OTVhMjQtODE4Yy00NzJiLWIxMmQtZmYyMzFjMWI1NzQ1Om12YWlaa1JzQXNJMUlCa1k="
+#define GK_RP_REDIRECT  "https://remoteplay.dl.playstation.net/remoteplay/redirect"
+#define GK_RP_SCOPE     "psn:clientapp referenceDataService:countryConfig.read pushNotification:webSocket.desktop.connect sessionManager:remotePlaySession.system.update"
+
+static char *gk_form_escape(const char *s)
+{
+	static const char *hex = "0123456789ABCDEF";
+	size_t n = 0;
+	for(const char *p = s ? s : ""; *p; p++)
+		n += (*p == ' ' || *p == '%' || *p == '&' || *p == '+' || *p == '=' || *p == '?' || *p == '#' || *p == '/' || *p == ':') ? 3 : 1;
+	char *o = (char *)malloc(n + 1);
+	if(!o) return NULL;
+	char *w = o;
+	for(const char *p = s ? s : ""; *p; p++)
+	{
+		unsigned char c = (unsigned char)*p;
+		if(c == ' ' || c == '%' || c == '&' || c == '+' || c == '=' || c == '?' || c == '#' || c == '/' || c == ':')
+		{
+			*w++ = '%';
+			*w++ = hex[c >> 4];
+			*w++ = hex[c & 0xf];
+		}
+		else
+			*w++ = (char)c;
+	}
+	*w = 0;
+	return o;
+}
+
+// NPSSO -> authorization code -> JWT access token. The worker rejects a prepare
+// whose accessToken is empty, and reports the other fields missing with it.
+static ChiakiErrorCode gk_worker_access_token(GaikaiCtx *c, char **out_token)
+{
+	*out_token = NULL;
+	char *scope = gk_form_escape(GK_RP_SCOPE);
+	char *redir = gk_form_escape(GK_RP_REDIRECT);
+	if(!scope || !redir) { free(scope); free(redir); return CHIAKI_ERR_MEMORY; }
+	char url[1400];
+	snprintf(url, sizeof(url),
+		"https://ca.account.sony.com/api/authz/v3/oauth/authorize?access_type=offline&client_id=%s"
+		"&response_type=code&scope=%s&redirect_uri=%s&duid=%s&prompt=none",
+		GK_RP_CLIENT_ID, scope, redir, c->duid);
+	free(scope);
+	char *code = NULL;
+	ChiakiErrorCode e = gk_oauth_code(c, url, &code);
+	if(e != CHIAKI_ERR_SUCCESS || !code)
+	{
+		free(redir);
+		free(code);
+		CHIAKI_LOGE(c->log, "[WORKER] PSN authorize did not return a code");
+		return e != CHIAKI_ERR_SUCCESS ? e : CHIAKI_ERR_UNKNOWN;
+	}
+	char *code_esc = gk_form_escape(code);
+	free(code);
+	if(!code_esc) { free(redir); return CHIAKI_ERR_MEMORY; }
+	char body[1600];
+	snprintf(body, sizeof(body),
+		"grant_type=authorization_code&code=%s&redirect_uri=%s&token_format=jwt",
+		code_esc, redir);
+	free(code_esc);
+	free(redir);
+	const char *hdrs[] = {
+		"Content-Type: application/x-www-form-urlencoded",
+		"Authorization: Basic " GK_RP_BASIC,
+	};
+	CCHttpRequest req = { 0 };
+	req.method = "POST";
+	req.url = "https://ca.account.sony.com/api/authz/v3/oauth/token";
+	req.headers = hdrs;
+	req.header_count = 2;
+	req.body = body;
+	req.timeout_ms = 30000;
+	CCHttpResponse resp = { 0 };
+	e = cc_http_perform(c->log, &req, &resp);
+	if(e != CHIAKI_ERR_SUCCESS) { cc_http_response_fini(&resp); return e; }
+	if(resp.status_code < 200 || resp.status_code >= 300 || !resp.data)
+	{
+		CHIAKI_LOGE(c->log, "[WORKER] PSN token http %ld", resp.status_code);
+		cc_http_response_fini(&resp);
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	struct json_object *j = json_tokener_parse(resp.data);
+	cc_http_response_fini(&resp);
+	const char *tok = j ? cc_json_str(j, "access_token") : "";
+	if(tok && *tok)
+		*out_token = strdup(tok);
+	if(j) json_object_put(j);
+	if(!*out_token)
+	{
+		CHIAKI_LOGE(c->log, "[WORKER] PSN token response had no access_token");
+		return CHIAKI_ERR_UNKNOWN;
+	}
+	CHIAKI_LOGI(c->log, "[WORKER] PSN access token obtained (%zu chars)", strlen(*out_token));
+	return CHIAKI_ERR_SUCCESS;
+}
+
 // PS5 allocation: prepare -> lock -> one senkusha per datacenter -> connect.
 // Classic Gaikai /sessions/{id}/allocate rejects this client's senkusha (002.2014).
 static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_id,
@@ -1404,8 +1503,20 @@ static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_
 
 	struct json_object *prep = json_object_new_object();
 	json_object_object_add(prep, "serviceType", json_object_new_string("pscloud"));
+	char *access_token = NULL;
+	ChiakiErrorCode token_err = gk_worker_access_token(c, &access_token);
+	if(token_err != CHIAKI_ERR_SUCCESS || !access_token || !*access_token)
+	{
+		free(access_token);
+		json_object_put(prep);
+		json_object_put(game);
+		json_object_put(settings);
+		out->error_message = strdup("Could not get a PSN access token for the cloud session.");
+		return token_err != CHIAKI_ERR_SUCCESS ? token_err : CHIAKI_ERR_UNKNOWN;
+	}
 	json_object_object_add(prep, "npsso", json_object_new_string(npsso));
-	json_object_object_add(prep, "accessToken", json_object_new_string(""));
+	json_object_object_add(prep, "accessToken", json_object_new_string(access_token));
+	free(access_token);
 	json_object_object_add(prep, "duid", json_object_new_string(c->duid));
 	json_object_object_add(prep, "game", game);
 	json_object_object_add(prep, "settings", settings);
