@@ -87,9 +87,7 @@ ChiakiErrorCode cc_ping_datacenter(ChiakiLog *log, const char *public_ip, int po
 		return err;
 	}
 
-	senkusha.protocol_version = 9; // cloud ping always v9
-	// PS5 allocate records the senkusha test only while this UDP socket is open.
-	senkusha.keep_socket = out_socket && service_type && strcmp(service_type, "pscloud") == 0;
+	senkusha.protocol_version = 9; // Pylux's cloud ping sets this; the PS5 default of 12 is not used here.
 	// x-gaikai-session key -> BIG message launch_spec (senkusha owns nothing here;
 	// it reads the pointer during run, so a stack/heap copy that outlives run() is fine).
 	char *key_copy = NULL;

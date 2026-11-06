@@ -36,11 +36,6 @@
 #define CONNECT_TIMEOUT_MS 30000
 
 #define SENKUSHA_PING_COUNT_DEFAULT 10
-// Asobi's SenkushaPing records one pong per datacenter, then reports that
-// sample. Extra probes after the echo are not part of the result Gaikai checks.
-#define SENKUSHA_PSCLOUD_PING_COUNT 1
-#define SENKUSHA_PSCLOUD_PING_SIZE 547
-#define SENKUSHA_PSCLOUD_PING_INTERVAL_MS 200
 #define EXPECT_PONG_TIMEOUT_MS 1000
 
 // Assuming IPv4, sizeof(ip header) + sizeof(udp header)
@@ -290,31 +285,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
 			CHIAKI_LOGW(session->log, "Senkusha BIG echo timeout after 2s, proceeding anyway");
 		else
 			CHIAKI_LOGI(session->log, "Senkusha BIG echo complete, proceeding to RTT test");
-		uint16_t ping_count = session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD
-			? SENKUSHA_PSCLOUD_PING_COUNT : SENKUSHA_PING_COUNT_DEFAULT;
-		err = senkusha_run_rtt_test(senkusha, 0, ping_count, rtt_us);
+		err = senkusha_run_rtt_test(senkusha, 0, SENKUSHA_PING_COUNT_DEFAULT, rtt_us);
 		if(err != CHIAKI_ERR_SUCCESS)
 		{
 			CHIAKI_LOGE(senkusha->log, "Senkusha Ping Test failed");
 			goto disconnect;
-		}
-		if(session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
-		{
-			// One pong, then the defaults Asobi reports when it does not run the
-			// remote-play MTU exchange. "Client Disconnecting" is not sent here.
-			// The socket stays open: Gaikai records the test while it is connected.
-			if(mtu_in)
-				*mtu_in = 1454;
-			if(mtu_out)
-				*mtu_out = 1254;
-			chiaki_mutex_unlock(&senkusha->state_mutex);
-			if(senkusha->keep_socket && !CHIAKI_SOCKET_IS_INVALID(senkusha->takion.sock))
-			{
-				senkusha->takion.close_socket = false;
-				senkusha->kept_socket = senkusha->takion.sock;
-				CHIAKI_LOGI(session->log, "Senkusha leaving the datacenter socket open");
-			}
-			goto quit_takion;
 		}
 	}
 	else
@@ -414,61 +389,42 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 	{
 		CHIAKI_LOGI(senkusha->log, "Senkusha sending Ping %u of test index %u", (unsigned int)ping_index, (unsigned int)ping_test_index);
 
-		uint32_t tag = chiaki_random_32();
+		ChiakiTakionAVPacket av_packet = { 0 };
+		av_packet.codec = 0xff;
+		av_packet.is_video = false;
+		av_packet.frame_index = ping_test_index;
+		av_packet.unit_index = ping_index;
+		av_packet.units_in_frame_total = 0x800; // or 0
+
 		uint8_t data[0x224];
-		size_t probe_size = sizeof(data);
-		bool pscloud_probe = senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD;
-		if(pscloud_probe)
+		memset(data, 0, sizeof(data));
+
+		size_t header_size;
+		err = chiaki_takion_v7_av_packet_format_header(data, sizeof(data), &header_size, &av_packet);
+		if(err != CHIAKI_ERR_SUCCESS)
 		{
-			// Audio probe the PS5 senkusha counts. packet_index and frame_index stay 0.
-			// The sample number is the high byte of the 0x800 dword (0x800, 0x01000800, ...).
-			// Byte 18 stays 0; the microsecond clock is the first four payload bytes.
-			memset(data, 0, SENKUSHA_PSCLOUD_PING_SIZE);
-			data[0] = 0x03;
-			*((chiaki_unaligned_uint32_t *)(data + 5)) = htonl(((uint32_t)ping_index << 24) | 0x800);
-			data[9] = 0xff;
-			*((chiaki_unaligned_uint32_t *)(data + 19)) = htonl((uint32_t)chiaki_time_now_monotonic_us());
-			tag = 0;
-			probe_size = SENKUSHA_PSCLOUD_PING_SIZE;
+			CHIAKI_LOGE(senkusha->log, "Senkusha failed to format AV Header");
+			return err;
 		}
-		else
-		{
-			ChiakiTakionAVPacket av_packet = { 0 };
-			av_packet.codec = 0xff;
-			av_packet.is_video = false;
-			av_packet.frame_index = ping_test_index;
-			av_packet.unit_index = ping_index;
-			av_packet.units_in_frame_total = 0x800; // or 0
 
-			memset(data, 0, sizeof(data));
-
-			size_t header_size;
-			err = chiaki_takion_v7_av_packet_format_header(data, sizeof(data), &header_size, &av_packet);
-			if(err != CHIAKI_ERR_SUCCESS)
-			{
-				CHIAKI_LOGE(senkusha->log, "Senkusha failed to format AV Header");
-				return err;
-			}
-
-			*((chiaki_unaligned_uint32_t *)(data + header_size + 4)) = htonl(tag);
-		}
+		uint32_t tag = chiaki_random_32();
+		*((chiaki_unaligned_uint32_t *)(data + header_size + 4)) = htonl(tag);
 
 		senkusha->state = STATE_EXPECT_PONG;
 		senkusha->state_finished = false;
 		senkusha->state_failed = false;
 		senkusha->ping_test_index = ping_test_index;
-		// The server echoes only the first PS5 probe. Later probes must still match that echo.
-		senkusha->ping_index = pscloud_probe ? 0 : ping_index;
+		senkusha->ping_index = ping_index;
 		senkusha->ping_tag = tag;
 
 		uint64_t time_start_us = chiaki_time_now_monotonic_us();
 
 		CHIAKI_LOGV(senkusha->log, "[OUTGOING PING] Sending ping packet: tag=0x%x, size=%zu, ping_test_index=%u, ping_index=%u", 
-		            tag, probe_size, ping_test_index, ping_index);
+		            tag, sizeof(data), ping_test_index, ping_index);
 		
 		// For cloud mode, add PSN wrapper to ping packets (skip wrapper for PSCloud)
 		uint8_t *ping_data = data;
-		size_t ping_data_size = probe_size;
+		size_t ping_data_size = sizeof(data);
 		uint8_t wrapped_data[sizeof(data) + 4];
 		// PS4 cloud senkusha pings are wrapped. PS5 cloud senkusha is not (wrapper type 0).
 		bool should_add_wrapper = senkusha->takion.psn_wrapper_type > 0;
@@ -492,23 +448,6 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 			return err;
 		}
 
-		// PS5 senkusha echoes probe 0 only. Waiting out the timeout on the rest
-		// spaces the samples by a second, and the slot is never primed.
-		if(pscloud_probe && ping_index > 0)
-		{
-			if(ping_index + 1 < ping_count)
-			{
-				chiaki_mutex_unlock(&senkusha->state_mutex);
-#ifdef _WIN32
-				Sleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS);
-#else
-				usleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS * 1000);
-#endif
-				chiaki_mutex_lock(&senkusha->state_mutex);
-			}
-			continue;
-		}
-
 		err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_PONG_TIMEOUT_MS, state_finished_cond_check, senkusha);
 		assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
 
@@ -529,17 +468,6 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t 
 		rtt_us_acc += delta_us;
 		pings_successful += 1;
 		CHIAKI_LOGI(senkusha->log, "Senkusha received Pong, RTT = %.3f ms", (float)delta_us * 0.001f);
-	}
-
-	if(senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
-	{
-		chiaki_mutex_unlock(&senkusha->state_mutex);
-#ifdef _WIN32
-		Sleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS);
-#else
-		usleep(SENKUSHA_PSCLOUD_PING_INTERVAL_MS * 1000);
-#endif
-		chiaki_mutex_lock(&senkusha->state_mutex);
 	}
 
 	err = senkusha_send_echo_command(senkusha, false);
@@ -1011,11 +939,9 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 		
 		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 		{
-			// PS4 cloud echoes do not carry unit_index. PS5 probes do: it is the sample number.
+			// Cloud echoes often leave unit_index at 0. Match frame, video flag and size.
 			unit_index_fail = false;
-			if(senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
-				unit_index_fail = packet->unit_index != senkusha->ping_index;
-			validation_failed = is_video_fail || frame_index_fail || unit_index_fail || data_size_fail;
+			validation_failed = is_video_fail || frame_index_fail || data_size_fail;
 			
 			if(validation_failed)
 			{
@@ -1049,11 +975,8 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 		if(validation_failed)
 			goto beach;
 
-		// PS5 probes have no tag: those bytes are the microsecond clock, matched by unit_index above.
-		uint32_t tag = 0;
-		if(senkusha->session->service_type == CHIAKI_SERVICE_TYPE_PSCLOUD)
-			goto pong_accept;
 		// Tag location: Cloud streaming uses offset 3, Remote play uses offset 4
+		uint32_t tag;
 		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 		{
 			// Cloud play (v9): Tag is at offset 3 in data portion
@@ -1099,7 +1022,6 @@ static void senkusha_takion_av(ChiakiSenkusha *senkusha, ChiakiTakionAVPacket *p
 			goto beach;
 		}
 
-pong_accept:
 		if(chiaki_service_type_is_cloud(senkusha->session->service_type))
 		{
 			CHIAKI_LOGV(senkusha->log, "Senkusha [CLOUD] received valid Pong %u/%u, size: %#llx, tag: 0x%x",
