@@ -527,6 +527,7 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     if (gameLangStr.isEmpty())
         gameLangStr = settings->GetCloudStoreLocale();
     const QByteArray gameLang = gameLangStr.toUtf8();
+    const QByteArray gameName = last_game_name.toUtf8();
     const QByteArray forcedDc = (pscloud ? settings->GetCloudDatacenterPSCloud()
                                          : settings->GetCloudDatacenterPSNOW()).toUtf8();
     // Prior stored datacenters for this service -> merged with this run's pings by the lib
@@ -575,7 +576,7 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     pending_callbacks.insert(reqId, callback);
     QPointer<CloudStreamingBackend> self(this);
 
-    std::thread([self, reqId, svc, gameId, npsso, storeCountry, storeLang, gameLang,
+    std::thread([self, reqId, svc, gameId, gameName, npsso, storeCountry, storeLang, gameLang,
                  forcedDc, priorDc, resolution, bitrate, isForeign, attrPassed, ownedEnt, ownedPlat,
                  fromBillingLaunch]() mutable {
         // Verbose HTTP trace (all request/response headers + bodies) -> chiaki_cloud.log via cc_http_perform.
@@ -592,6 +593,7 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
         memset(&cfg, 0, sizeof(cfg));
         cfg.service_type = svc.constData();
         cfg.game_identifier = gameId.constData();
+        cfg.game_name = gameName.constData();
         cfg.npsso = npsso.constData();
         cfg.store_country = storeCountry.constData();
         cfg.store_lang = storeLang.constData();

@@ -1463,6 +1463,30 @@ static ChiakiErrorCode gk_worker_access_token(GaikaiCtx *c, char **out_token)
 	return CHIAKI_ERR_SUCCESS;
 }
 
+// settings.language is one of these codes. A locale such as "en-PL" is not in
+// the set, and the worker's next request then fails JSON deserialization.
+static const char *gk_worker_language(const char *locale)
+{
+	static const char *const codes[] = {
+		"ja", "fr", "es", "de", "it", "nl", "pt", "ru", "ko",
+		"pl", "sv", "da", "no", "fi", "tr", "ar", "cs", "hu",
+		"el", "ro", "th", "en", NULL
+	};
+	char code[16];
+	chiaki_cloud_gaikai_language(locale ? locale : "", code, sizeof(code));
+	if(strcmp(code, "zh") == 0)
+	{
+		const char *p = locale ? locale : "";
+		if(strstr(p, "Hant") || strstr(p, "hant") || strstr(p, "TW") || strstr(p, "HK") || strstr(p, "MO"))
+			return "zh-Hant";
+		return "zh-Hans";
+	}
+	for(size_t i = 0; codes[i]; i++)
+		if(strcmp(code, codes[i]) == 0)
+			return codes[i];
+	return "en";
+}
+
 // PS5 allocation: prepare -> lock -> one senkusha per datacenter -> connect.
 // Classic Gaikai /sessions/{id}/allocate rejects this client's senkusha (002.2014).
 static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_id,
@@ -1481,7 +1505,7 @@ static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_
 	char resolution[16];
 	snprintf(resolution, sizeof(resolution), "%dp", res);
 	int bitrate = c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
-	const char *lang = (c->cfg->game_language && *c->cfg->game_language) ? c->cfg->game_language : "en";
+	const char *lang = gk_worker_language(c->cfg->game_language);
 
 	struct json_object *game = json_object_new_object();
 	json_object_object_add(game, "id", json_object_new_string(entitlement_id ? entitlement_id : ""));
