@@ -411,12 +411,9 @@ static struct json_object *gk_build_spec(GaikaiCtx *c, const char *entitlement_i
 		// assigns the PS5 cronos stream server, and allocate then asks for a
 		// CRONOS access token the PS Now codes cannot produce.
 		S_STR("timeZone", "America/New_York");
-		// Same value as the cloud-streaming PS5 bitrate slider (BwKbpsSent).
-		{
-			int bw = c->cfg && c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
-			S_INT("maxBitrate", bw);
-			S_INT("minBitrate", bw);
-		}
+		// Asobi's session spec hardcodes these. The slider bitrate is not this field.
+		S_INT("maxBitrate", 256);
+		S_INT("minBitrate", 64);
 		struct json_object *one_res = json_object_new_object();
 		json_object_object_add(one_res, "resolution", json_object_new_string(res_set));
 		json_object_object_add(one_res, "width", json_object_new_int(cw));
@@ -1135,22 +1132,43 @@ static ChiakiErrorCode gk_step13_allocate(GaikaiCtx *c, ChiakiCloudProvisionResu
 
 		struct json_object *extra = json_object_new_object();
 		json_object_object_add(extra, "dataCenter", json_object_new_string(c->selected_datacenter));
-		struct json_object *net = json_object_new_object();
-		int bw = c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
-		json_object_object_add(net, "bwKbpsSent", json_object_new_int(bw));
-		json_object_object_add(net, "bwLoss", json_object_new_double(0.001));
-		json_object_object_add(net, "mtu", json_object_new_int(mtu_in));
-		json_object_object_add(net, "rtt", json_object_new_int(rtt));
-		json_object_object_add(net, "port", json_object_new_int(c->selected_dc_port));
-		// PS4 cloud still sends the Portal-shaped extras. A PS5 session rejects that
-		// shape: those keys are not in the PS Now client's allocate body.
-		if(!c->pscloud)
+		// PS5 follows Asobi's connect body: dataCenter, rtts, mtu_in, mtu_out,
+		// pingResults. That request has no bwKbpsSent. PS4 keeps the network object.
+		if(c->pscloud)
 		{
+			struct json_object *rtts = json_object_new_object();
+			if(c->ping_results)
+			{
+				size_t rn = json_object_array_length(c->ping_results);
+				for(size_t i = 0; i < rn; i++)
+				{
+					struct json_object *row = json_object_array_get_idx(c->ping_results, i);
+					const char *name = cc_json_str(row, "dataCenter");
+					int row_rtt = cc_json_int(row, "rtt");
+					if(name && *name)
+						json_object_object_add(rtts, name, json_object_new_int(row_rtt > 0 ? row_rtt : 0));
+				}
+			}
+			json_object_object_add(extra, "rtts", rtts);
+			json_object_object_add(extra, "mtu_in", json_object_new_int(mtu_in));
+			json_object_object_add(extra, "mtu_out", json_object_new_int(mtu_out));
+			if(c->ping_results)
+				json_object_object_add(extra, "pingResults", json_object_get(c->ping_results));
+		}
+		else
+		{
+			struct json_object *net = json_object_new_object();
+			int bw = c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 10000;
+			json_object_object_add(net, "bwKbpsSent", json_object_new_int(bw));
+			json_object_object_add(net, "bwLoss", json_object_new_double(0.001));
+			json_object_object_add(net, "mtu", json_object_new_int(mtu_in));
+			json_object_object_add(net, "rtt", json_object_new_int(rtt));
+			json_object_object_add(net, "port", json_object_new_int(c->selected_dc_port));
 			json_object_object_add(net, "bwKbpsReceived", json_object_new_int(c->cfg->bitrate_kbps));
 			json_object_object_add(net, "bwLossUpstream", json_object_new_int(0));
 			json_object_object_add(net, "mtuUpstream", json_object_new_int(mtu_out));
+			json_object_object_add(extra, "network", net);
 		}
-		json_object_object_add(extra, "network", net);
 		if(!c->pscloud)
 		{
 			json_object_object_add(extra, "stateExecutionTime", json_object_new_double(5974.7632));

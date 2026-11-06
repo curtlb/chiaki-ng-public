@@ -2415,7 +2415,8 @@ ChiakiConnectVideoProfile Settings::GetCloudVideoProfile(const QString &serviceT
 	}
 	profile.bitrate = cloud_bitrate;
 	profile.max_fps = 60;
-	profile.codec = CHIAKI_CODEC_H264;
+	// Asobi's live PS5 cloud stream is H.265. PS4 cloud stays H.264.
+	profile.codec = pscloud ? CHIAKI_CODEC_H265 : CHIAKI_CODEC_H264;
 	return profile;
 }
 
