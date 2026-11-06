@@ -1482,13 +1482,6 @@ static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_
 	snprintf(resolution, sizeof(resolution), "%dp", res);
 	int bitrate = c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
 	const char *lang = (c->cfg->game_language && *c->cfg->game_language) ? c->cfg->game_language : "en";
-	const char *country = (c->cfg->store_country && *c->cfg->store_country) ? c->cfg->store_country : "US";
-	const char *store_lang = (c->cfg->store_lang && *c->cfg->store_lang) ? c->cfg->store_lang : "en";
-	char launch_id[80];
-	if(c->gaikai_session_id && *c->gaikai_session_id)
-		snprintf(launch_id, sizeof(launch_id), "%s", c->gaikai_session_id);
-	else
-		snprintf(launch_id, sizeof(launch_id), "chiaki-%lld", (long long)time(NULL));
 
 	struct json_object *game = json_object_new_object();
 	json_object_object_add(game, "id", json_object_new_string(entitlement_id ? entitlement_id : ""));
@@ -1520,14 +1513,6 @@ static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_
 	json_object_object_add(prep, "duid", json_object_new_string(c->duid));
 	json_object_object_add(prep, "game", game);
 	json_object_object_add(prep, "settings", settings);
-	json_object_object_add(prep, "entitlementId", json_object_new_string(entitlement_id ? entitlement_id : ""));
-	json_object_object_add(prep, "gkCloudAuthCode", json_object_new_string(c->gk_cloud_auth_code ? c->gk_cloud_auth_code : ""));
-	json_object_object_add(prep, "ps3AuthCode", json_object_new_string(c->ps3_auth_code ? c->ps3_auth_code : ""));
-	json_object_object_add(prep, "streamServerAuthCode", json_object_new_string(c->stream_server_auth_code ? c->stream_server_auth_code : ""));
-	json_object_object_add(prep, "kamajiCountry", json_object_new_string(country));
-	json_object_object_add(prep, "kamajiLanguage", json_object_new_string(store_lang));
-	json_object_object_add(prep, "launchId", json_object_new_string(launch_id));
-	json_object_object_add(prep, "launchAttempt", json_object_new_int(1));
 
 	gk_progress(c, "Preparing PS5 cloud session");
 	CHIAKI_LOGI(c->log, "[WORKER] prepare serviceType=pscloud resolution=%s fps=60 bitrateKbps=%d", resolution, bitrate);
