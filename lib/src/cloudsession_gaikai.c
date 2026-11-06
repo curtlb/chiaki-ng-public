@@ -411,9 +411,12 @@ static struct json_object *gk_build_spec(GaikaiCtx *c, const char *entitlement_i
 		// assigns the PS5 cronos stream server, and allocate then asks for a
 		// CRONOS access token the PS Now codes cannot produce.
 		S_STR("timeZone", "America/New_York");
-		// allocate rejects BwKbpsSent above this (002.2015, "should be higher 4500").
-		S_INT("maxBitrate", 4500);
-		S_INT("minBitrate", 4500);
+		// Same value as the cloud-streaming PS5 bitrate slider (BwKbpsSent).
+		{
+			int bw = c->cfg && c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
+			S_INT("maxBitrate", bw);
+			S_INT("minBitrate", bw);
+		}
 		struct json_object *one_res = json_object_new_object();
 		json_object_object_add(one_res, "resolution", json_object_new_string(res_set));
 		json_object_object_add(one_res, "width", json_object_new_int(cw));
@@ -1133,10 +1136,7 @@ static ChiakiErrorCode gk_step13_allocate(GaikaiCtx *c, ChiakiCloudProvisionResu
 		struct json_object *extra = json_object_new_object();
 		json_object_object_add(extra, "dataCenter", json_object_new_string(c->selected_datacenter));
 		struct json_object *net = json_object_new_object();
-		int bw = c->cfg->bitrate_kbps;
-		// PS5 allocate returns 002.2015 for 25000: "Not valid BwKbpsSent:25000, should be higher 4500".
-		if(c->pscloud && bw > 4500)
-			bw = 4500;
+		int bw = c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
 		json_object_object_add(net, "bwKbpsSent", json_object_new_int(bw));
 		json_object_object_add(net, "bwLoss", json_object_new_double(0.001));
 		json_object_object_add(net, "mtu", json_object_new_int(mtu_in));

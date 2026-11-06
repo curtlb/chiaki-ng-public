@@ -553,7 +553,8 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
         }
     }
 
-    // Platform bitrate defaults: PS5 → 25 Mbit, PS3/PS4 → 10 Mbit.
+    // Bitrate comes from the cloud-streaming settings tab: PS5 games use the PS5
+    // slider, PS4 games use the PS4 slider. That value is what allocate sends as BwKbpsSent.
     QString platform = last_platform.trimmed().toLower();
     if (platform.isEmpty() && !ownedPlat.isEmpty())
         platform = QString::fromUtf8(ownedPlat).trimmed().toLower();
@@ -561,7 +562,10 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
         platform = pscloud ? QStringLiteral("ps5") : QStringLiteral("ps4");
     if (last_platform.isEmpty())
         last_platform = platform;
-    const int bitrate = (platform == QStringLiteral("ps5")) ? 25000 : 10000;
+    const bool ps5_game = platform == QStringLiteral("ps5");
+    const int bitrate = settings
+        ? static_cast<int>(ps5_game ? settings->GetCloudBitratePSCloud() : settings->GetCloudBitratePSNOW())
+        : (ps5_game ? 25000 : 10000);
     qInfo() << "Cloud bitrate for platform" << platform << ":" << bitrate << "kbps";
     Q_UNUSED(sharedDuid); // the C flow generates its own shared DUID for Kamaji+Gaikai
 
@@ -723,14 +727,6 @@ void CloudStreamingBackend::finishCloudSession(QString serviceType, QString serv
     connect_info.cloud_mtu_out = mtuOut;
     connect_info.cloud_rtt_us = rttUs;
     connect_info.video_profile = settings->GetCloudVideoProfile(serviceType);
-    {
-        QString platform = last_platform.trimmed().toLower();
-        if (platform.isEmpty())
-            platform = (serviceType == QStringLiteral("pscloud")) ? QStringLiteral("ps5")
-                                                                  : QStringLiteral("ps4");
-        connect_info.video_profile.bitrate =
-            (platform == QStringLiteral("ps5")) ? 25000u : 10000u;
-    }
 
     qInfo() << "Cloud streaming parameters set:";
     qInfo() << "  service_type:" << chiaki_service_type_string(connect_info.service_type);
