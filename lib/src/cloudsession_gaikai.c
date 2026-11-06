@@ -1502,8 +1502,10 @@ static ChiakiErrorCode gk_worker_allocate(GaikaiCtx *c, const char *entitlement_
 
 	int res = c->cfg->resolution;
 	if(res != 720 && res != 1080 && res != 1440 && res != 2160) res = 1080;
+	// The worker writes the height only ("1080"). The trailing "p" is stripped
+	// before it goes into JSON; leaving it makes step 9 emit invalid JSON.
 	char resolution[16];
-	snprintf(resolution, sizeof(resolution), "%dp", res);
+	snprintf(resolution, sizeof(resolution), "%d", res);
 	int bitrate = c->cfg->bitrate_kbps > 0 ? c->cfg->bitrate_kbps : 15000;
 	const char *lang = gk_worker_language(c->cfg->game_language);
 
