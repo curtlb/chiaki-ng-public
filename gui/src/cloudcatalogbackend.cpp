@@ -683,7 +683,9 @@ void CloudCatalogBackend::ensurePsNowSearchCatalog(const QJSValue &callback)
     const QString host = settings->GetCloudBillingHost();
     const quint16 port = settings->GetCloudBillingPort();
     const QString email = settings->GetFourCloudEmail();
-    const QString cachedNpsso = sessionCatalogNpsso_.trimmed();
+    QString cachedNpsso = sessionCatalogNpsso_.trimmed();
+    if (cachedNpsso.isEmpty() && settings)
+        cachedNpsso = settings->GetNpssoToken().trimmed();
     const QByteArray locale =
         (settings ? settings->GetCloudStoreLocale() : QStringLiteral("en-US")).toUtf8();
     const QByteArray cacheDir = searchCacheDir.toUtf8();
@@ -887,7 +889,8 @@ void CloudCatalogBackend::fetchUnifiedCatalog(const QJSValue &callback)
     // discards this fetch's result and restarts with the then-current inputs.
     const quint64 gen = catalogGeneration;
 
-    const bool billingCatalog = useBillingCatalogSource(settings);
+    const bool localPsn = settings && !settings->GetNpssoToken().trimmed().isEmpty();
+    const bool billingCatalog = useBillingCatalogSource(settings) && !localPsn;
     if (settings && settings->GetCloudBillingEnabled() && !billingCatalog) {
         CloudLogMessage(QStringLiteral("Catalog"),
             QStringLiteral("billing catalog skipped: set cloud_billing_host in settings"));

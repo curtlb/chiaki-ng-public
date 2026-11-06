@@ -211,6 +211,10 @@ Item {
         stack.push(psnTokenDialogComponent, {psnurl: psnurl, expired: expired});
     }
 
+    function showPsnAccountDialog() {
+        stack.push(psnAccountDialogComponent);
+    }
+
     function showControllerMappingDialog() {
         stack.push(controllerMappingDialogComponent)
     }
@@ -507,6 +511,11 @@ Item {
     Component {
         id: psnTokenDialogComponent
         PSNTokenDialog { }
+    }
+
+    Component {
+        id: psnAccountDialogComponent
+        PsnAccountDialog { }
     }
 
     Component {

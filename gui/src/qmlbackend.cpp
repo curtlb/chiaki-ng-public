@@ -34,6 +34,8 @@
 #include <QImageReader>
 #include <QProcessEnvironment>
 #include <QDesktopServices>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTimer>
 #include <QtConcurrent>
 #include <QFutureWatcher>
@@ -3281,6 +3283,32 @@ QString QmlBackend::openPsnLink()
 void QmlBackend::openNpssoPage()
 {
     QDesktopServices::openUrl(QUrl(QStringLiteral("https://ca.account.sony.com/api/v1/ssocookie")));
+}
+
+bool QmlBackend::savePsnCloudNpsso(const QString &pageText)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(pageText.trimmed().toUtf8());
+    if(!doc.isObject())
+        return false;
+    const QJsonObject obj = doc.object();
+    const QString npsso = obj.value(QStringLiteral("npsso")).toString().trimmed();
+    if(npsso.size() < 16 || npsso.size() > 256)
+        return false;
+    for(const QChar &c : npsso)
+    {
+        if(!(c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char('-')))
+            return false;
+    }
+    const QString online = obj.value(QStringLiteral("onlineId")).toString().trimmed();
+    settings_qml->setPsnCloudAccount(npsso, online);
+    qCInfo(chiakiGui) << "PSN account saved for cloud (npsso len" << npsso.size() << ")";
+    return true;
+}
+
+void QmlBackend::clearPsnCloudAccount()
+{
+    settings_qml->clearPsnCloudAccount();
+    qCInfo(chiakiGui) << "PSN cloud account cleared";
 }
 
 QString QmlBackend::openPlaceboOptionsLink()

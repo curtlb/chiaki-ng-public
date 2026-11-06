@@ -426,6 +426,14 @@ void CloudStreamingBackend::startCompleteCloudSession(QString serviceType, QStri
     last_game_name = gameName;
     last_platform = platform;
 
+    const QString savedNpsso = settings ? settings->GetNpssoToken().trimmed() : QString();
+    if (!savedNpsso.isEmpty()) {
+        CloudLogMessage(QStringLiteral("Session"),
+            QStringLiteral("using the PSN account saved in settings"));
+        continueCloudSessionAfterAuth(serviceType, gameIdentifier, callback, savedNpsso, QString());
+        return;
+    }
+
     const bool billing_server = settings
         && settings->GetCloudBillingEnabled()
         && !settings->GetCloudBillingHost().trimmed().isEmpty();
@@ -939,9 +947,11 @@ void CloudStreamingBackend::reconnectCurrentSession()
         return;
     }
 
-    const QString npsso = billing_npsso;
+    QString npsso = billing_npsso;
+    if (npsso.isEmpty() && settings)
+        npsso = settings->GetNpssoToken().trimmed();
     if (npsso.isEmpty()) {
-        qWarning() << "reconnectCurrentSession: no in-memory billing NPSSO — cannot reconnect without re-start";
+        qWarning() << "reconnectCurrentSession: no NPSSO — cannot reconnect without re-start";
         return;
     }
     CloudLogMessage(QStringLiteral("Session"),

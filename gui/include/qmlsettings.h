@@ -78,6 +78,9 @@ class QmlSettings : public QObject
     Q_PROPERTY(QString psnAuthTokenExpiry READ psnAuthTokenExpiry WRITE setPsnAuthTokenExpiry NOTIFY psnAuthTokenExpiryChanged)
     Q_PROPERTY(QString psnAccountId READ psnAccountId WRITE setPsnAccountId NOTIFY psnAccountIdChanged)
     Q_PROPERTY(QString psnNpssoToken READ psnNpssoToken WRITE setPsnNpssoToken NOTIFY psnNpssoTokenChanged)
+    Q_PROPERTY(bool psnCloudSignedIn READ psnCloudSignedIn NOTIFY psnCloudAccountChanged)
+    Q_PROPERTY(QString psnCloudOnlineId READ psnCloudOnlineId NOTIFY psnCloudAccountChanged)
+    Q_PROPERTY(QString psnCloudUpdatedAt READ psnCloudUpdatedAt NOTIFY psnCloudAccountChanged)
     Q_PROPERTY(QString psnNpssoTokenSecondary READ psnNpssoTokenSecondary WRITE setPsnNpssoTokenSecondary NOTIFY psnNpssoTokenSecondaryChanged)
     Q_PROPERTY(bool cloudBillingEnabled READ cloudBillingEnabled WRITE setCloudBillingEnabled NOTIFY cloudBillingEnabledChanged)
     Q_PROPERTY(QString cloudBillingHost READ cloudBillingHost WRITE setCloudBillingHost NOTIFY cloudBillingHostChanged)
@@ -520,6 +523,11 @@ public:
 
     QString psnNpssoToken() const;
     void setPsnNpssoToken(const QString &npsso_token);
+    bool psnCloudSignedIn() const;
+    QString psnCloudOnlineId() const;
+    QString psnCloudUpdatedAt() const;
+    void setPsnCloudAccount(const QString &npsso, const QString &online_id);
+    void clearPsnCloudAccount();
     QString psnNpssoTokenSecondary() const;
     void setPsnNpssoTokenSecondary(const QString &npsso_token);
 
@@ -700,6 +708,7 @@ signals:
     void psnAuthTokenExpiryChanged();
     void psnAccountIdChanged();
     void psnNpssoTokenChanged();
+    void psnCloudAccountChanged();
     void psnNpssoTokenSecondaryChanged();
     void cloudBillingEnabledChanged();
     void cloudBillingHostChanged();

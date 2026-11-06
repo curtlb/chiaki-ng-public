@@ -2670,6 +2670,30 @@ DialogView {
                         Material.roundedScale: Material.SmallScale
                     }
 
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: Chiaki.settings.psnCloudSignedIn
+                              ? qsTr("PSN account saved")
+                                + (Chiaki.settings.psnCloudOnlineId.length
+                                   ? (": " + Chiaki.settings.psnCloudOnlineId) : "")
+                              : qsTr("No PSN account saved. Catalog and cloud launch use this sign-in.")
+                    }
+
+                    C.Button {
+                        text: qsTr("Sign in with PSN")
+                        onClicked: root.showPsnAccountDialog()
+                        Material.roundedScale: Material.SmallScale
+                        visible: !Chiaki.settings.psnCloudSignedIn
+                    }
+
+                    C.Button {
+                        text: qsTr("Sign out of PSN")
+                        onClicked: Chiaki.clearPsnCloudAccount()
+                        Material.roundedScale: Material.SmallScale
+                        visible: Chiaki.settings.psnCloudSignedIn
+                    }
+
                     C.Button {
                         id: openPsnLogin
                         text: qsTr("Login to PSN")

@@ -7,6 +7,7 @@
 #include <QUrl>
 #include <QKeySequence>
 #include <QCoreApplication>
+#include <QDateTime>
 
 #include <chiaki/config.h>
 
@@ -2441,18 +2442,52 @@ void Settings::SetCloudDatacentersJsonPSNOW(const QString &json)
 
 QString Settings::GetNpssoToken() const
 {
-	// NPSSO is never persisted on the client — only issued by billing for a launch.
-	return QString();
+	return settings.value(QStringLiteral("settings/psn_cloud_npsso")).toString().trimmed();
 }
 
 void Settings::SetNpssoToken(QString npsso_token)
 {
-	Q_UNUSED(npsso_token);
-	if(settings.contains(QStringLiteral("settings/psn_npsso_token")))
-	{
-		settings.remove(QStringLiteral("settings/psn_npsso_token"));
-		emit NpssoTokenChanged();
-	}
+	const QString v = npsso_token.trimmed();
+	if(v.isEmpty())
+		ClearPsnCloudAccount();
+	else
+		SetPsnCloudAccount(v, GetPsnCloudOnlineId());
+}
+
+QString Settings::GetPsnCloudOnlineId() const
+{
+	return settings.value(QStringLiteral("settings/psn_cloud_online_id")).toString().trimmed();
+}
+
+QString Settings::GetPsnCloudUpdatedAt() const
+{
+	return settings.value(QStringLiteral("settings/psn_cloud_npsso_updated_at")).toString();
+}
+
+bool Settings::GetPsnCloudSignedIn() const
+{
+	return !GetNpssoToken().isEmpty();
+}
+
+void Settings::SetPsnCloudAccount(const QString &npsso, const QString &online_id)
+{
+	const QString token = npsso.trimmed();
+	const QString online = online_id.trimmed();
+	settings.setValue(QStringLiteral("settings/psn_cloud_npsso"), token);
+	settings.setValue(QStringLiteral("settings/psn_cloud_online_id"), online);
+	settings.setValue(QStringLiteral("settings/psn_cloud_npsso_updated_at"),
+		QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+	emit NpssoTokenChanged();
+	emit PsnCloudAccountChanged();
+}
+
+void Settings::ClearPsnCloudAccount()
+{
+	settings.remove(QStringLiteral("settings/psn_cloud_npsso"));
+	settings.remove(QStringLiteral("settings/psn_cloud_online_id"));
+	settings.remove(QStringLiteral("settings/psn_cloud_npsso_updated_at"));
+	emit NpssoTokenChanged();
+	emit PsnCloudAccountChanged();
 }
 
 QString Settings::GetNpssoTokenSecondary() const
@@ -2472,7 +2507,7 @@ void Settings::SetNpssoTokenSecondary(QString npsso_token)
 
 QString Settings::GetNpssoTokenForCloudProvision() const
 {
-	return QString();
+	return GetNpssoToken();
 }
 
 void Settings::ClearPersistedNpssoTokens()

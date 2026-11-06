@@ -387,14 +387,21 @@ class Settings : public QObject
 	QString GetPsnAuthTokenExpiry() const;
 	void SetPsnAuthTokenExpiry(QString expiry_date);
 
-	// NPSSO cookie token (required for PS Plus cloud streaming)
+	// NPSSO cookie of the PSN account signed in from Settings. Catalog and cloud
+	// launch use this the way the PS Now client does: the cookie is what Sony
+	// session calls redeem, not a separate password.
 	QString GetNpssoToken() const;
 	void SetNpssoToken(QString npsso_token);
+	QString GetPsnCloudOnlineId() const;
+	QString GetPsnCloudUpdatedAt() const;
+	bool GetPsnCloudSignedIn() const;
+	void SetPsnCloudAccount(const QString &npsso, const QString &online_id);
+	void ClearPsnCloudAccount();
 	/** Optional second NPSSO used only at cloud game provision (catalog keeps primary). */
 	QString GetNpssoTokenSecondary() const;
 	void SetNpssoTokenSecondary(QString npsso_token);
 	QString GetNpssoTokenForCloudProvision() const;
-	/** Drop any legacy NPSSO keys from QSettings (tokens must not live on disk). */
+	/** Drop legacy NPSSO keys. The Settings sign-in account is kept. */
 	void ClearPersistedNpssoTokens();
 
 	// 4cloud.pro account (hourly cloud gaming billing)
@@ -797,6 +804,7 @@ class Settings : public QObject
 		void PlaceboSettingsUpdated();
 		void NpssoTokenChanged();
 		void NpssoTokenSecondaryChanged();
+		void PsnCloudAccountChanged();
 		void CloudDatacentersJsonPSCloudChanged();
 		void CloudDatacentersJsonPSNOWChanged();
 };

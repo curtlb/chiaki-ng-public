@@ -650,6 +650,36 @@ void QmlSettings::setPsnNpssoToken(const QString &npsso_token)
 {
     settings->SetNpssoToken(npsso_token);
     emit psnNpssoTokenChanged();
+    emit psnCloudAccountChanged();
+}
+
+bool QmlSettings::psnCloudSignedIn() const
+{
+    return settings->GetPsnCloudSignedIn();
+}
+
+QString QmlSettings::psnCloudOnlineId() const
+{
+    return settings->GetPsnCloudOnlineId();
+}
+
+QString QmlSettings::psnCloudUpdatedAt() const
+{
+    return settings->GetPsnCloudUpdatedAt();
+}
+
+void QmlSettings::setPsnCloudAccount(const QString &npsso, const QString &online_id)
+{
+    settings->SetPsnCloudAccount(npsso, online_id);
+    emit psnNpssoTokenChanged();
+    emit psnCloudAccountChanged();
+}
+
+void QmlSettings::clearPsnCloudAccount()
+{
+    settings->ClearPsnCloudAccount();
+    emit psnNpssoTokenChanged();
+    emit psnCloudAccountChanged();
 }
 
 QString QmlSettings::psnNpssoTokenSecondary() const

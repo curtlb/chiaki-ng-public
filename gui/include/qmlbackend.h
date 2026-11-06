@@ -243,6 +243,8 @@ public:
     Q_INVOKABLE void setConsolePin(int index, QString console_pin);
     Q_INVOKABLE QString openPsnLink();
     Q_INVOKABLE void openNpssoPage();
+    Q_INVOKABLE bool savePsnCloudNpsso(const QString &pageText);
+    Q_INVOKABLE void clearPsnCloudAccount();
     Q_INVOKABLE QString openPlaceboOptionsLink();
     Q_INVOKABLE void initPsnAuth(const QUrl &url, const QJSValue &callback);
     Q_INVOKABLE void psnCancel(bool stop_thread);
