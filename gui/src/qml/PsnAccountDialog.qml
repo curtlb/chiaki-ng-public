@@ -22,12 +22,6 @@ DialogView {
         return false;
     }
 
-    Timer {
-        id: closeTimer
-        interval: 900
-        onTriggered: dialog.close()
-    }
-
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 16
@@ -72,6 +66,12 @@ DialogView {
                 } catch (error) {
                     statusLabel.text = qsTr("The embedded browser is unavailable. Open the Sony page, copy the JSON, and paste it below.");
                 }
+            }
+
+            Timer {
+                id: closeTimer
+                interval: 900
+                onTriggered: dialog.close()
             }
         }
 
