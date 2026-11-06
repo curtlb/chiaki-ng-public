@@ -22,6 +22,13 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QRegularExpression>
+#include <QSet>
+#include <QTimer>
+#include <QUrl>
 #include <QUrlQuery>
 #include <QMetaObject>
 #include <functional>
@@ -513,11 +520,14 @@ void CloudStreamingBackend::continueCloudSessionAfterAuth(QString serviceType, Q
     }
     const QByteArray storeCountry = cc.toUtf8();
     const QByteArray storeLang = cl.toUtf8();
-    // Streaming language: manual picker, else fall back to the auto-detected catalog
-    // store locale so non-English regions don't silently get "en".
-    QString gameLangStr = settings->GetCloudGameLanguage();
+    // Voice language chosen in the pre-launch picker. Empty falls back to the
+    // saved cloud language, then the store locale.
+    QString gameLangStr = launch_language.trimmed();
+    if (gameLangStr.isEmpty())
+        gameLangStr = settings->GetCloudGameLanguage();
     if (gameLangStr.isEmpty())
         gameLangStr = settings->GetCloudStoreLocale();
+    qInfo() << "Cloud launch language:" << gameLangStr;
     const QByteArray gameLang = gameLangStr.toUtf8();
     const QByteArray gameName = last_game_name.toUtf8();
     const QByteArray forcedDc = (pscloud ? settings->GetCloudDatacenterPSCloud()
@@ -916,6 +926,340 @@ void CloudStreamingBackend::setGameImageUrl(const QString &url)
         game_image_url = url;
         emit gameImageUrlChanged();
     }
+}
+
+static const struct {
+    const char *code;
+    const char *label;
+} kVoiceLanguages[] = {
+    {"ru", "Русский"},
+    {"en", "Английский"},
+    {"ja", "Японский"},
+    {"de", "Немецкий"},
+    {"fr", "Французский"},
+    {"es", "Испанский"},
+    {"it", "Итальянский"},
+    {"pt", "Португальский"},
+    {"pl", "Польский"},
+    {"ko", "Корейский"},
+    {"zh-Hans", "Китайский (упрощённый)"},
+    {"zh-Hant", "Китайский (традиционный)"},
+    {"ar", "Арабский"},
+    {"nl", "Нидерландский"},
+    {"tr", "Турецкий"},
+    {"sv", "Шведский"},
+    {"da", "Датский"},
+    {"no", "Норвежский"},
+    {"fi", "Финский"},
+    {"cs", "Чешский"},
+    {"hu", "Венгерский"},
+    {"el", "Греческий"},
+    {"ro", "Румынский"},
+    {"th", "Тайский"},
+};
+
+static QString normalizeVoiceCode(const QString &raw)
+{
+    const QString trimmed = raw.trimmed();
+    if (trimmed.isEmpty())
+        return QString();
+    if (trimmed.compare(QStringLiteral("zh-Hant"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("zh-Hant");
+    if (trimmed.compare(QStringLiteral("zh-Hans"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("zh-Hans");
+
+    const int dash = trimmed.indexOf(QLatin1Char('-'));
+    const int under = trimmed.indexOf(QLatin1Char('_'));
+    int cut = -1;
+    if (dash >= 0 && under >= 0)
+        cut = qMin(dash, under);
+    else
+        cut = qMax(dash, under);
+    QString base = (cut > 0 ? trimmed.left(cut) : trimmed).toLower();
+    if (base == QLatin1String("jp"))
+        base = QStringLiteral("ja");
+    if (base == QLatin1String("zh") || base == QLatin1String("ch")) {
+        if (trimmed.contains(QStringLiteral("Hant"), Qt::CaseInsensitive)
+            || trimmed.contains(QStringLiteral("TW"), Qt::CaseInsensitive)
+            || trimmed.contains(QStringLiteral("HK"), Qt::CaseInsensitive))
+            return QStringLiteral("zh-Hant");
+        return QStringLiteral("zh-Hans");
+    }
+    for (const auto &lang : kVoiceLanguages) {
+        if (base == QLatin1String(lang.code))
+            return base;
+    }
+    return QString();
+}
+
+static void collectVoiceCodesFromValue(const QJsonValue &value, QSet<QString> *out)
+{
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array)
+            collectVoiceCodesFromValue(item, out);
+        return;
+    }
+    if (!value.isObject())
+        return;
+    const QJsonObject object = value.toObject();
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        if (it.key() == QLatin1String("voiceLanguageCode") || it.key() == QLatin1String("voice_language_codes")) {
+            const QJsonArray codes = it.value().toArray();
+            for (const QJsonValue &code : codes) {
+                if (code.isString())
+                    out->insert(code.toString());
+            }
+        } else {
+            collectVoiceCodesFromValue(it.value(), out);
+        }
+    }
+}
+
+static QSet<QString> voiceCodesFromContainer(const QByteArray &body, const QString &productId)
+{
+    QSet<QString> matched;
+    QSet<QString> all;
+    const QJsonDocument doc = QJsonDocument::fromJson(body);
+    if (!doc.isObject())
+        return all;
+    const QJsonObject root = doc.object();
+
+    auto takeEntitlement = [&](const QJsonObject &entitlement) {
+        QSet<QString> codes;
+        collectVoiceCodesFromValue(entitlement, &codes);
+        if (codes.isEmpty())
+            return;
+        all.unite(codes);
+        if (!productId.isEmpty() && entitlement.value(QStringLiteral("id")).toString() == productId)
+            matched.unite(codes);
+    };
+    auto takeSku = [&](const QJsonObject &sku) {
+        const QJsonArray entitlements = sku.value(QStringLiteral("entitlements")).toArray();
+        for (const QJsonValue &entitlement : entitlements) {
+            if (entitlement.isObject())
+                takeEntitlement(entitlement.toObject());
+        }
+    };
+
+    const QJsonObject defaultSku = root.value(QStringLiteral("default_sku")).toObject();
+    if (!defaultSku.isEmpty())
+        takeSku(defaultSku);
+    const QJsonArray skus = root.value(QStringLiteral("skus")).toArray();
+    for (const QJsonValue &sku : skus) {
+        if (sku.isObject())
+            takeSku(sku.toObject());
+    }
+    if (matched.isEmpty() && all.isEmpty())
+        collectVoiceCodesFromValue(root, &all);
+    return matched.isEmpty() ? all : matched;
+}
+
+static QSet<QString> voiceCodesFromStoreHtml(const QByteArray &body, const QString &platformKey)
+{
+    const QString html = QString::fromUtf8(body);
+    QSet<QString> codes;
+    const QRegularExpression platformRe(
+        QStringLiteral("\"platform\"\\s*:\\s*\"%1\"\\s*,\\s*\"spokenLanguages\"\\s*:\\s*\\[([^\\]]*)\\]").arg(platformKey));
+    const QRegularExpressionMatch platformMatch = platformRe.match(html);
+    QString list;
+    if (platformMatch.hasMatch())
+        list = platformMatch.captured(1);
+    else {
+        const QRegularExpression topRe(QStringLiteral("\"spokenLanguages\"\\s*:\\s*\\[([^\\]]*)\\]"));
+        const QRegularExpressionMatch topMatch = topRe.match(html);
+        if (topMatch.hasMatch())
+            list = topMatch.captured(1);
+    }
+    const QRegularExpression codeRe(QStringLiteral("\"([^\"]+)\""));
+    auto it = codeRe.globalMatch(list);
+    while (it.hasNext())
+        codes.insert(it.next().captured(1));
+    return codes;
+}
+
+static QString voiceLanguageJson(const QSet<QString> &rawCodes)
+{
+    QSet<QString> normalized;
+    for (const QString &raw : rawCodes) {
+        const QString code = normalizeVoiceCode(raw);
+        if (!code.isEmpty())
+            normalized.insert(code);
+    }
+    QJsonArray out;
+    for (const auto &lang : kVoiceLanguages) {
+        const QString code = QString::fromLatin1(lang.code);
+        if (!normalized.contains(code))
+            continue;
+        QJsonObject row;
+        row.insert(QStringLiteral("code"), code);
+        row.insert(QStringLiteral("label"), QString::fromUtf8(lang.label));
+        out.append(row);
+    }
+    return QString::fromUtf8(QJsonDocument(out).toJson(QJsonDocument::Compact));
+}
+
+struct VoiceLanguageFetch {
+    QPointer<CloudStreamingBackend> self;
+    quint64 generation = 0;
+    QStringList urls;
+    QStringList kinds;
+    int index = 0;
+    QString platformKey;
+    QString productId;
+    QJSValue callback;
+    QNetworkAccessManager *nam = nullptr;
+    QNetworkReply *reply = nullptr;
+    QTimer *timer = nullptr;
+};
+
+static void voiceLanguageDeliver(const VoiceLanguageFetch &fetch, const QString &json)
+{
+    if (!fetch.self || fetch.generation != fetch.self->voiceFetchGeneration())
+        return;
+    if (fetch.callback.isCallable())
+        fetch.callback.call({json});
+}
+
+static void voiceLanguageStep(VoiceLanguageFetch *fetch);
+
+static void voiceLanguageDiscard(VoiceLanguageFetch *fetch)
+{
+    if (fetch->reply)
+        fetch->reply->deleteLater();
+    if (fetch->timer)
+        fetch->timer->deleteLater();
+    delete fetch;
+}
+
+static void voiceLanguageFinishReply(VoiceLanguageFetch *fetch)
+{
+    if (!fetch->self || fetch->generation != fetch->self->voiceFetchGeneration()) {
+        voiceLanguageDiscard(fetch);
+        return;
+    }
+    QByteArray body;
+    int status = 0;
+    if (fetch->reply) {
+        status = fetch->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (fetch->reply->error() == QNetworkReply::NoError)
+            body = fetch->reply->readAll();
+        fetch->reply->deleteLater();
+        fetch->reply = nullptr;
+    }
+    if (fetch->timer) {
+        fetch->timer->stop();
+        fetch->timer->deleteLater();
+        fetch->timer = nullptr;
+    }
+
+    const bool storePage = fetch->index < fetch->kinds.size() && fetch->kinds.at(fetch->index) == QLatin1String("store");
+    QSet<QString> found;
+    if (status == 200 && !body.isEmpty())
+        found = storePage ? voiceCodesFromStoreHtml(body, fetch->platformKey)
+                           : voiceCodesFromContainer(body, fetch->productId);
+    if (!found.isEmpty()) {
+        const QString json = voiceLanguageJson(found);
+        qInfo() << "Cloud voice languages:" << json;
+        voiceLanguageDeliver(*fetch, json);
+        delete fetch;
+        return;
+    }
+
+    fetch->index++;
+    voiceLanguageStep(fetch);
+}
+
+static void voiceLanguageStep(VoiceLanguageFetch *fetch)
+{
+    if (!fetch->self || fetch->generation != fetch->self->voiceFetchGeneration()) {
+        voiceLanguageDiscard(fetch);
+        return;
+    }
+    if (fetch->index >= fetch->urls.size()) {
+        qInfo() << "Cloud voice languages: none published for" << fetch->productId;
+        voiceLanguageDeliver(*fetch, QStringLiteral("[]"));
+        delete fetch;
+        return;
+    }
+
+    QNetworkRequest request{QUrl(fetch->urls.at(fetch->index))};
+    request.setHeader(QNetworkRequest::UserAgentHeader,
+        QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
+    request.setRawHeader("Accept", fetch->kinds.at(fetch->index) == QLatin1String("store")
+        ? "text/html" : "application/json");
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    fetch->reply = fetch->nam->get(request);
+    fetch->timer = new QTimer(fetch->self);
+    fetch->timer->setSingleShot(true);
+    QObject::connect(fetch->timer, &QTimer::timeout, fetch->self, [fetch]() {
+        if (fetch->reply)
+            fetch->reply->abort();
+    });
+    QObject::connect(fetch->reply, &QNetworkReply::finished, fetch->self, [fetch]() {
+        voiceLanguageFinishReply(fetch);
+    });
+    fetch->timer->start(12000);
+}
+
+void CloudStreamingBackend::setLaunchLanguage(QString language)
+{
+    launch_language = language.trimmed();
+    qInfo() << "Cloud voice language selected:"
+            << (launch_language.isEmpty() ? QStringLiteral("(catalog default)") : launch_language);
+}
+
+void CloudStreamingBackend::fetchGameVoiceLanguages(QString productId, QString streamId, QString platform, const QJSValue &callback)
+{
+    productId = productId.trimmed();
+    streamId = streamId.trimmed();
+    const QString platformNorm = platform.trimmed().toLower();
+    QString platformKey = QStringLiteral("PS5");
+    if (platformNorm == QLatin1String("ps4"))
+        platformKey = QStringLiteral("PS4");
+    else if (platformNorm == QLatin1String("ps3"))
+        platformKey = QStringLiteral("PS3");
+
+    QStringList ids;
+    if (!productId.isEmpty())
+        ids.append(productId);
+    if (!streamId.isEmpty() && streamId != productId)
+        ids.append(streamId);
+    if (ids.isEmpty()) {
+        if (callback.isCallable())
+            callback.call({QStringLiteral("[]")});
+        return;
+    }
+
+    if (!voice_nam)
+        voice_nam = new QNetworkAccessManager(this);
+    const quint64 generation = ++voice_fetch_generation;
+
+    auto *fetch = new VoiceLanguageFetch;
+    fetch->self = this;
+    fetch->generation = generation;
+    fetch->platformKey = platformKey;
+    fetch->productId = ids.first();
+    fetch->callback = callback;
+    fetch->nam = voice_nam;
+    for (const QString &id : ids) {
+        const QString enc = QString::fromUtf8(QUrl::toPercentEncoding(id));
+        for (const char *country : {"GB", "US"}) {
+            fetch->urls.append(QStringLiteral(
+                "https://psnow.playstation.com/store/api/pcnow/00_09_000/container/%1/en/19/%2?useOffers=true&gkb=1&gkb2=1")
+                .arg(QLatin1String(country), enc));
+            fetch->kinds.append(QStringLiteral("container"));
+        }
+    }
+    for (const QString &id : ids) {
+        const QString enc = QString::fromUtf8(QUrl::toPercentEncoding(id));
+        for (const char *locale : {"en-us", "en-gb"}) {
+            fetch->urls.append(QStringLiteral("https://store.playstation.com/%1/product/%2")
+                .arg(QLatin1String(locale), enc));
+            fetch->kinds.append(QStringLiteral("store"));
+        }
+    }
+    voiceLanguageStep(fetch);
 }
 
 void CloudStreamingBackend::finishProvisionRun(bool schedule_pending_reconnect)

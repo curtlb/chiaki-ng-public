@@ -67,6 +67,16 @@ public:
     Q_INVOKABLE void fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, const QJSValue &callback);
     Q_INVOKABLE void fetchBillingQuote(QString serviceType, QString gameIdentifier, QString gameName, quint64 accountId, const QJSValue &callback);
 
+    /** Voice languages available for this product. Callback receives a JSON array
+     *  of {code, label}. An empty array means the lookup failed and the launch
+     *  should keep the existing language fallback. */
+    Q_INVOKABLE void fetchGameVoiceLanguages(QString productId, QString streamId, QString platform, const QJSValue &callback);
+
+    /** Language code for the next cloud launch ("ru", "en", "ja", ...). Empty uses the store locale. */
+    Q_INVOKABLE void setLaunchLanguage(QString language);
+
+    quint64 voiceFetchGeneration() const { return voice_fetch_generation; }
+
     /** Re-run Gaikai allocation for the last-started cloud game (e.g. after bitrate change). */
     Q_INVOKABLE void reconnectCurrentSession();
 
@@ -134,6 +144,9 @@ private:
     QString last_game_identifier;
     QString last_game_name;
     QString last_platform;
+    QString launch_language;
+    quint64 voice_fetch_generation = 0;
+    class QNetworkAccessManager *voice_nam = nullptr;
     QString billing_session_token;
     QString billing_npsso;
     QString billing_game_identifier;

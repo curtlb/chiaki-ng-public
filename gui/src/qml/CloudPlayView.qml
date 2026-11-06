@@ -275,6 +275,43 @@ Pane {
             });
         }
 
+        function withVoiceLanguage(next) {
+            let productId = streamingId;
+            if (modelData && (modelData.productId || modelData.storeProductId))
+                productId = modelData.productId || modelData.storeProductId;
+            if (languageChoiceDialog.opened) {
+                languageChoiceDialog.acceptedPick = false;
+                languageChoiceDialog.close();
+            }
+            languageChoiceDialog.requestToken = (languageChoiceDialog.requestToken || 0) + 1;
+            let token = languageChoiceDialog.requestToken;
+            Chiaki.cloudStreaming.fetchGameVoiceLanguages(productId || "", streamingId || "", platform || "", function(codesJson) {
+                if (languageChoiceDialog.requestToken !== token)
+                    return;
+                let codes = [];
+                try {
+                    codes = JSON.parse(codesJson || "[]");
+                } catch (e) {
+                    codes = [];
+                }
+                if (!codes || codes.length < 2) {
+                    Chiaki.cloudStreaming.setLaunchLanguage((codes && codes.length === 1) ? (codes[0].code || "") : "");
+                    next();
+                    return;
+                }
+                languageChoiceDialog.acceptedPick = false;
+                languageChoiceDialog.languages = codes;
+                languageChoiceDialog.promptText = qsTr("Выберите язык озвучки. Игра запустится на нём.");
+                languageChoiceDialog.onPicked = function(code) {
+                    if (languageChoiceDialog.requestToken !== token)
+                        return;
+                    Chiaki.cloudStreaming.setLaunchLanguage(code || "");
+                    next();
+                };
+                languageChoiceDialog.open();
+            });
+        }
+
         function confirmAndLaunch(accountId) {
             Chiaki.cloudStreaming.fetchBillingQuote(
                 serviceType,
@@ -322,7 +359,7 @@ Pane {
             return;
         }
         if (!useBilling) {
-            launchCloudStream(0);
+            withVoiceLanguage(() => launchCloudStream(0));
             return;
         }
         Chiaki.cloudStreaming.fetchBillingQuote(
@@ -340,25 +377,27 @@ Pane {
                         || qsTr("Игра куплена на нескольких аккаунтах. Выберите аккаунт:");
                     accountChoiceDialog.accounts = choices;
                     accountChoiceDialog.onPicked = function(accountId) {
-                        confirmAndLaunch(accountId);
+                        withVoiceLanguage(() => confirmAndLaunch(accountId));
                     };
                     accountChoiceDialog.open();
                     return;
                 }
                 let accountId = (choices.length === 1) ? (choices[0].account_id || 0) : 0;
-                let title = resumeSession ? qsTr("Продолжить игру") : qsTr("Оплата за час игры");
-                let priceLine = (!resumeSession && hourlyPrice > 0)
-                    ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
-                    : "";
-                let actionLine = resumeSession
-                    ? qsTr("\n\nНажмите «Да» — стрим продолжится без списания.")
-                    : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
-                let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
-                if (showConfirmDialogFunc) {
-                    showConfirmDialogFunc(title, confirmText, () => launchCloudStream(accountId));
-                } else {
-                    launchCloudStream(accountId);
-                }
+                withVoiceLanguage(function() {
+                    let title = resumeSession ? qsTr("Продолжить игру") : qsTr("Оплата за час игры");
+                    let priceLine = (!resumeSession && hourlyPrice > 0)
+                        ? qsTr("\n\nСумма: %1 ₽ за 1 час.").arg(Math.round(hourlyPrice))
+                        : "";
+                    let actionLine = resumeSession
+                        ? qsTr("\n\nНажмите «Да» — стрим продолжится без списания.")
+                        : qsTr("\n\nНажмите «Да» — произойдёт списание с привязанной карты и запуск стрима.");
+                    let confirmText = (message || qsTr("Списать оплату за 1 час игры?")) + priceLine + actionLine;
+                    if (showConfirmDialogFunc) {
+                        showConfirmDialogFunc(title, confirmText, () => launchCloudStream(accountId));
+                    } else {
+                        launchCloudStream(accountId);
+                    }
+                });
             }
         );
     }
@@ -1804,6 +1843,99 @@ Pane {
                 text: qsTr("Отмена")
                 flat: true
                 onClicked: accountChoiceDialog.reject()
+            }
+        }
+    }
+
+    Dialog {
+        id: languageChoiceDialog
+        property string promptText: ""
+        property var languages: []
+        property var onPicked: null
+        property int requestToken: 0
+        property bool acceptedPick: false
+        parent: Overlay.overlay
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        width: 440
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        title: qsTr("Язык озвучки")
+        Material.roundedScale: Material.MediumScale
+
+        Component.onCompleted: {
+            header.horizontalAlignment = Text.AlignHCenter;
+            header.background = null;
+        }
+
+        background: Rectangle {
+            color: Qt.rgba(7/255, 9/255, 13/255, 0.98)
+            radius: 12
+            border.color: "#2ec4b6"
+            border.width: 2
+        }
+
+        onClosed: {
+            if (!acceptedPick)
+                requestToken++;
+            acceptedPick = false;
+            onPicked = null;
+            languages = [];
+            if (gamesGrid)
+                gamesGrid.forceActiveFocus(Qt.TabFocusReason);
+        }
+
+        ColumnLayout {
+            spacing: 12
+
+            Label {
+                Layout.preferredWidth: 400
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: "#e8eef2"
+                text: languageChoiceDialog.promptText
+            }
+
+            Flickable {
+                Layout.preferredWidth: 400
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(langColumn.implicitHeight, 420)
+                contentHeight: langColumn.implicitHeight
+                clip: true
+                visible: languageChoiceDialog.languages.length > 0
+
+                Column {
+                    id: langColumn
+                    width: parent.width
+                    spacing: 8
+
+                    Repeater {
+                        model: languageChoiceDialog.languages
+                        delegate: Button {
+                            width: langColumn.width
+                            flat: true
+                            Material.background: Material.accent
+                            Material.roundedScale: Material.SmallScale
+                            text: modelData.label || modelData.code
+                            onClicked: {
+                                let cb = languageChoiceDialog.onPicked;
+                                let code = modelData.code || "";
+                                languageChoiceDialog.acceptedPick = true;
+                                languageChoiceDialog.close();
+                                if (cb)
+                                    cb(code);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Button {
+                Layout.alignment: Qt.AlignHCenter
+                text: qsTr("Отмена")
+                flat: true
+                onClicked: languageChoiceDialog.reject()
             }
         }
     }
