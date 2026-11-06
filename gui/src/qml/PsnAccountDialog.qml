@@ -85,14 +85,14 @@ DialogView {
             TextField {
                 id: pasteField
                 Layout.fillWidth: true
-                placeholderText: qsTr("Paste the ssocookie JSON")
+                placeholderText: qsTr("Paste the NPSSO token")
                 echoMode: TextInput.Password
             }
             C.Button {
                 text: qsTr("Save")
                 onClicked: {
                     if (!dialog.tryCapture(pasteField.text))
-                        statusLabel.text = qsTr("That page does not contain an NPSSO cookie yet. Finish sign-in and try again.");
+                        statusLabel.text = qsTr("That is not an NPSSO token. Paste the token itself, or the JSON from the Sony page.");
                 }
                 Material.roundedScale: Material.SmallScale
             }

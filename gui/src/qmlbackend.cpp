@@ -36,6 +36,7 @@
 #include <QDesktopServices>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QtConcurrent>
 #include <QFutureWatcher>
@@ -3285,21 +3286,51 @@ void QmlBackend::openNpssoPage()
     QDesktopServices::openUrl(QUrl(QStringLiteral("https://ca.account.sony.com/api/v1/ssocookie")));
 }
 
-bool QmlBackend::savePsnCloudNpsso(const QString &pageText)
+static bool psnCloudNpssoTokenOk(const QString &npsso)
 {
-    const QJsonDocument doc = QJsonDocument::fromJson(pageText.trimmed().toUtf8());
-    if(!doc.isObject())
-        return false;
-    const QJsonObject obj = doc.object();
-    const QString npsso = obj.value(QStringLiteral("npsso")).toString().trimmed();
-    if(npsso.size() < 16 || npsso.size() > 256)
+    if(npsso.size() < 32 || npsso.size() > 256)
         return false;
     for(const QChar &c : npsso)
     {
         if(!(c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char('-')))
             return false;
     }
-    const QString online = obj.value(QStringLiteral("onlineId")).toString().trimmed();
+    return true;
+}
+
+bool QmlBackend::savePsnCloudNpsso(const QString &pageText)
+{
+    QString text = pageText.trimmed();
+    if(text.startsWith(QChar(0xfeff)))
+        text = text.mid(1).trimmed();
+
+    QString npsso;
+    QString online;
+    const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8());
+    if(doc.isObject())
+    {
+        npsso = doc.object().value(QStringLiteral("npsso")).toString().trimmed();
+        online = doc.object().value(QStringLiteral("onlineId")).toString().trimmed();
+    }
+    else
+    {
+        // A cookie line, or the token copied on its own. The Sony page is JSON,
+        // but the value people paste is usually the bare NPSSO.
+        static const QRegularExpression cookieRe(
+            QStringLiteral("npsso\\s*[=:]\\s*\"?([A-Za-z0-9_-]{32,256})\"?"));
+        const QRegularExpressionMatch cookie = cookieRe.match(text);
+        if(cookie.hasMatch())
+            npsso = cookie.captured(1);
+        else
+        {
+            if((text.startsWith(QLatin1Char('"')) && text.endsWith(QLatin1Char('"')))
+                || (text.startsWith(QLatin1Char('\'')) && text.endsWith(QLatin1Char('\''))))
+                text = text.mid(1, text.size() - 2).trimmed();
+            npsso = text;
+        }
+    }
+    if(!psnCloudNpssoTokenOk(npsso))
+        return false;
     settings_qml->setPsnCloudAccount(npsso, online);
     qCInfo(chiakiGui) << "PSN account saved for cloud (npsso len" << npsso.size() << ")";
     return true;
