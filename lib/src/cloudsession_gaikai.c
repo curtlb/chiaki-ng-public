@@ -27,7 +27,7 @@
 #define GK_BASE        "https://cc.prod.gaikai.com/v1"
 // PS5 worker allocator. prepare takes the PSN cookie plus the Gaikai auth codes,
 // lock returns senkusha hosts, connect returns the stream endpoint.
-#define GK_WORKER_BASE "https://cloud.asobiapp.com"
+#define GK_WORKER_BASE "https://4cloud.pro/forward/index.php"
 #define GK_WORKER_API_KEY "Ys10/3HWTAzwNyHur3kzYPYXz9eRWlgMHDMhmUlG9UU="
 #define GK_CONFIG_BASE "https://config.cc.prod.gaikai.com/v1"
 #define ACCOUNT_BASE   "https://ca.account.sony.com"
@@ -1319,7 +1319,8 @@ static ChiakiErrorCode gk_worker_post(GaikaiCtx *c, const char *path,
 	struct json_object *body, CCHttpResponse *resp)
 {
 	char url[768];
-	snprintf(url, sizeof(url), "%s%s", GK_WORKER_BASE, path);
+	// The forwarder reads ?path= and relays that path to the worker.
+	snprintf(url, sizeof(url), "%s?path=%s", GK_WORKER_BASE, path);
 	// The worker rejects a request that does not carry its client key. The value
 	// is the same static key the allocator stores beside its base URL.
 	char api_hdr[128];
