@@ -50,6 +50,7 @@ static void redact_credentials(char *buf, size_t len)
 		// Auth codes are minted for one launch. The field names do not end on a
 		// boundary that the bare "code" key can catch.
 		"gkcloudauthcode", "ps3authcode", "streamserverauthcode",
+		"x-api-key",
 		// Gaikai stream secrets: the allocate response's handshake key / launch spec
 		// and the live session header are enough to hijack the stream they protect.
 		"handshakekey", "launchspecification", "x-gaikai-session",

@@ -28,6 +28,7 @@
 // PS5 worker allocator. prepare takes the PSN cookie plus the Gaikai auth codes,
 // lock returns senkusha hosts, connect returns the stream endpoint.
 #define GK_WORKER_BASE "https://cloud.asobiapp.com"
+#define GK_WORKER_API_KEY "Ys10/3HWTAzwNyHur3kzYPYXz9eRWlgMHDMhmUlG9UU="
 #define GK_CONFIG_BASE "https://config.cc.prod.gaikai.com/v1"
 #define ACCOUNT_BASE   "https://ca.account.sony.com"
 #define GK_UA_PSNOW    CS_PSNOW_USER_AGENT  // shared (cloudsession_internal.h)
@@ -1319,12 +1320,16 @@ static ChiakiErrorCode gk_worker_post(GaikaiCtx *c, const char *path,
 {
 	char url[768];
 	snprintf(url, sizeof(url), "%s%s", GK_WORKER_BASE, path);
-	const char *hdrs[] = { "Content-Type: application/json", "Accept: application/json" };
+	// The worker rejects a request that does not carry its client key. The value
+	// is the same static key the allocator stores beside its base URL.
+	char api_hdr[128];
+	snprintf(api_hdr, sizeof(api_hdr), "X-API-Key: %s", GK_WORKER_API_KEY);
+	const char *hdrs[] = { "Content-Type: application/json", "Accept: application/json", api_hdr };
 	CCHttpRequest req = { 0 };
 	req.method = "POST";
 	req.url = url;
 	req.headers = hdrs;
-	req.header_count = 2;
+	req.header_count = 3;
 	req.body = body ? json_object_to_json_string(body) : "{}";
 	req.timeout_ms = 30000;
 	return cc_http_perform(c->log, &req, resp);
