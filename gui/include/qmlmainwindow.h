@@ -19,6 +19,7 @@ extern "C" {
 #include <libplacebo/options.h>
 #include <libplacebo/vulkan.h>
 #include <libplacebo/renderer.h>
+#include <libplacebo/dispatch.h>
 #include <libplacebo/log.h>
 #include <libplacebo/cache.h>
 }
@@ -147,6 +148,11 @@ private:
     void beginFrame();
     void endFrame();
     void render();
+    bool ensureFrameGen(QSize size);
+    bool blitFrameGen(const pl_frame &src, pl_tex dst);
+    bool prepareFrameGen();
+    bool drawFrameGen(float t, pl_frame *target);
+    void releaseFrameGen();
     VkPresentModeKHR desiredPresentMode() const;
     void notePresentedFrame(bool generated);
     void clearGenerated();
@@ -196,6 +202,13 @@ private:
     AVFrame *screenshot_frame = {};  // Сохраненный фрейм для скриншотов
     pl_frame current_frame = {};
     pl_frame previous_frame = {};
+    pl_dispatch fg_dispatch = {};
+    pl_tex fg_prev = {};
+    pl_tex fg_curr = {};
+    pl_tex fg_motion = {};
+    pl_tex fg_out = {};
+    QSize fg_size;
+    bool fg_broken = false;
     std::atomic<bool> render_scheduled = {false};
 
     QVulkanInstance *qt_vk_inst = {};

@@ -8,7 +8,7 @@
 
 #define PL_LIBAV_IMPLEMENTATION 0
 #include <libplacebo/utils/libav.h>
-#include <libplacebo/filters.h>
+#include <libplacebo/shaders/custom.h>
 
 extern "C" {
 #include <libswscale/swscale.h>
@@ -163,6 +163,7 @@ QmlMainWindow::~QmlMainWindow()
         fclose(file);
     }
     pl_cache_destroy(&placebo_cache);
+    releaseFrameGen();
     pl_renderer_destroy(&placebo_renderer);
     pl_vulkan_destroy(&placebo_vulkan);
     pl_vk_inst_destroy(&placebo_vk_inst);
@@ -994,9 +995,9 @@ bool build_luma8(const AVFrame *f, int dw, int dh, std::vector<uint8_t> *out)
         return false;
     out->resize((size_t)dw * dh);
     for (int y = 0; y < dh; y++) {
-        const int sy = y * f->height / dh;
+        const int sy = (y * f->height + f->height / 2) / dh;
         for (int x = 0; x < dw; x++) {
-            const int v = sample_luma(f, x * f->width / dw, sy);
+            const int v = sample_luma(f, (x * f->width + f->width / 2) / dw, sy);
             if (v < 0)
                 return false;
             (*out)[(size_t)y * dw + x] = (uint8_t)v;
@@ -1231,25 +1232,36 @@ void QmlMainWindow::clearGenerated()
 bool QmlMainWindow::isRepeatFrame(const AVFrame *frame)
 {
     std::vector<uint8_t> now;
-    if (!build_luma8(frame, 48, 27, &now))
+    if (!build_luma8(frame, 80, 45, &now))
         return false;
-    bool repeat = false;
-    if (frame_thumb.size() == now.size()) {
-        int sum = 0;
-        int big = 0;
-        for (size_t i = 0; i < now.size(); i++) {
-            const int d = std::abs(int(now[i]) - int(frame_thumb[i]));
-            sum += d;
-            if (d > 12)
-                big++;
-        }
-        // A 30 fps game inside a 60 fps stream repeats the same picture.
-        // Those copies are not new frames and must not be counted or displayed as generated.
-        // Re-encoded copies of a 30 fps frame are close, but not bit-identical.
-        repeat = sum <= 8 * (int)now.size() && big * 20 < (int)now.size();
-    }
-    if (!repeat)
+    // How different a real new picture usually is. Encoder copies of the same
+    // game frame stay well below that, so a 30 fps game inside a 60 fps stream
+    // counts as 30.
+    static double change_ema = 0.0;
+    if (frame_thumb.size() != now.size()) {
         frame_thumb.swap(now);
+        change_ema = 0.0;
+        return false;
+    }
+    int sum = 0;
+    int big = 0;
+    for (size_t i = 0; i < now.size(); i++) {
+        const int d = std::abs(int(now[i]) - int(frame_thumb[i]));
+        sum += d;
+        if (d > 16)
+            big++;
+    }
+    const int n = (int)now.size();
+    const double mean = double(sum) / double(n);
+    bool repeat;
+    if (change_ema >= 5.0)
+        repeat = mean < change_ema * 0.55 && big * 24 < n;
+    else
+        repeat = mean <= 2.0 && big * 48 < n;
+    if (!repeat) {
+        frame_thumb.swap(now);
+        change_ema = change_ema <= 0.0 ? mean : change_ema * 0.7 + mean * 0.3;
+    }
     return repeat;
 }
 
@@ -1279,6 +1291,226 @@ void QmlMainWindow::buildGenerated(const AVFrame *prev, const AVFrame *next, int
         }
         gen_count++;
     }
+}
+
+void QmlMainWindow::releaseFrameGen()
+{
+    fg_broken = false;
+    fg_size = {};
+    if (!placebo_vulkan || !placebo_vulkan->gpu)
+        return;
+    pl_tex_destroy(placebo_vulkan->gpu, &fg_prev);
+    pl_tex_destroy(placebo_vulkan->gpu, &fg_curr);
+    pl_tex_destroy(placebo_vulkan->gpu, &fg_motion);
+    pl_tex_destroy(placebo_vulkan->gpu, &fg_out);
+    if (fg_dispatch)
+        pl_dispatch_destroy(&fg_dispatch);
+}
+
+bool QmlMainWindow::ensureFrameGen(QSize size)
+{
+    if (size.width() < 16 || size.height() < 16)
+        return false;
+    if (fg_prev && fg_curr && fg_out && fg_motion && fg_size == size)
+        return true;
+    pl_gpu gpu = placebo_vulkan->gpu;
+    if (!fg_dispatch)
+        fg_dispatch = pl_dispatch_create(placebo_log, gpu);
+    if (!fg_dispatch)
+        return false;
+    const enum pl_fmt_caps caps = (enum pl_fmt_caps)(PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_LINEAR);
+    pl_fmt rgba = pl_find_fmt(gpu, PL_FMT_UNORM, 4, 8, 0, caps);
+    pl_fmt motion = pl_find_fmt(gpu, PL_FMT_FLOAT, 4, 16, 0, caps);
+    if (!rgba || !motion)
+        return false;
+    struct pl_tex_params color = {
+        .w = size.width(),
+        .h = size.height(),
+        .format = rgba,
+        .sampleable = true,
+        .renderable = true,
+    };
+    struct pl_tex_params field = {
+        .w = 160,
+        .h = 90,
+        .format = motion,
+        .sampleable = true,
+        .renderable = true,
+    };
+    if (!pl_tex_recreate(gpu, &fg_prev, &color) || !pl_tex_recreate(gpu, &fg_curr, &color)
+            || !pl_tex_recreate(gpu, &fg_out, &color) || !pl_tex_recreate(gpu, &fg_motion, &field))
+        return false;
+    fg_size = size;
+    return true;
+}
+
+bool QmlMainWindow::blitFrameGen(const pl_frame &src, pl_tex dst)
+{
+    struct pl_frame target = {};
+    target.num_planes = 1;
+    target.planes[0].texture = dst;
+    target.planes[0].components = 4;
+    target.planes[0].component_mapping[0] = 0;
+    target.planes[0].component_mapping[1] = 1;
+    target.planes[0].component_mapping[2] = 2;
+    target.planes[0].component_mapping[3] = 3;
+    target.repr = pl_color_repr_rgb;
+    target.color = pl_color_space_srgb;
+    target.crop = {0.f, 0.f, (float)dst->params.w, (float)dst->params.h};
+    if (src.num_planes) {
+        pl_rect2df crop = src.crop;
+        switch (video_mode) {
+        case VideoMode::Normal:
+            pl_rect2df_aspect_copy(&target.crop, &crop, 0.0);
+            break;
+        case VideoMode::Stretch:
+            break;
+        case VideoMode::Zoom:
+            if (zoom_factor == -1)
+                pl_rect2df_aspect_copy(&target.crop, &crop, 1.0);
+            else {
+                const float z = powf(2.0f, zoom_factor);
+                const float sx = z * fabsf(pl_rect_w(crop)) / pl_rect_w(target.crop);
+                const float sy = z * fabsf(pl_rect_h(crop)) / pl_rect_h(target.crop);
+                pl_rect2df_stretch(&target.crop, sx, sy);
+            }
+            break;
+        }
+    }
+    return pl_render_image(placebo_renderer, &src, &target, &pl_render_fast_params);
+}
+
+static pl_shader_desc fg_sampler(const char *name, int binding, pl_tex tex)
+{
+    pl_shader_desc desc = {};
+    desc.desc.name = name;
+    desc.desc.type = PL_DESC_SAMPLED_TEX;
+    desc.desc.binding = binding;
+    desc.binding.object = tex;
+    desc.binding.sample_mode = PL_TEX_SAMPLE_LINEAR;
+    desc.binding.address_mode = PL_TEX_ADDRESS_CLAMP;
+    return desc;
+}
+
+static bool dispatch_framegen(pl_dispatch dp, pl_tex target, const struct pl_custom_shader *custom)
+{
+    pl_shader sh = pl_dispatch_begin(dp);
+    if (!sh || !pl_shader_custom(sh, custom)) {
+        if (sh)
+            pl_dispatch_abort(dp, &sh);
+        return false;
+    }
+    struct pl_dispatch_params params = {};
+    params.shader = &sh;
+    params.target = target;
+    return pl_dispatch_finish(dp, &params);
+}
+
+bool QmlMainWindow::prepareFrameGen()
+{
+    if (fg_broken || !placebo_vulkan || !current_frame.num_planes || !previous_frame.num_planes)
+        return false;
+    if (!ensureFrameGen(swapchain_size))
+        return false;
+    if (!blitFrameGen(previous_frame, fg_prev) || !blitFrameGen(current_frame, fg_curr))
+        return false;
+
+    pl_dispatch_reset_frame(fg_dispatch);
+    pl_shader_desc desc[2] = {
+        fg_sampler("prev_tex", 0, fg_prev),
+        fg_sampler("curr_tex", 1, fg_curr),
+    };
+    float grid[2] = {160.f, 90.f};
+    struct pl_shader_var var = {};
+    var.var = pl_var_vec2("grid");
+    var.data = grid;
+    var.dynamic = true;
+    static const char *body =
+        "vec2 uv = gl_FragCoord.xy / grid;\n"
+        "vec2 tex = vec2(textureSize(prev_tex, 0));\n"
+        "vec2 px = max(vec2(4.0), tex / vec2(180.0)) / tex;\n"
+        "float best = 1e6;\n"
+        "vec2 found = vec2(0.0);\n"
+        "for (int y = -5; y <= 5; y++) {\n"
+        "  for (int x = -5; x <= 5; x++) {\n"
+        "    vec2 duv = vec2(float(x), float(y)) * px;\n"
+        "    float sad = 0.0;\n"
+        "    for (int oy = -1; oy <= 1; oy++) {\n"
+        "      for (int ox = -1; ox <= 1; ox++) {\n"
+        "        vec2 o = vec2(float(ox), float(oy)) * px;\n"
+        "        float a = dot(texture(prev_tex, clamp(uv + duv + o, vec2(0.0), vec2(1.0))).rgb, vec3(0.2126, 0.7152, 0.0722));\n"
+        "        float b = dot(texture(curr_tex, clamp(uv + o, vec2(0.0), vec2(1.0))).rgb, vec3(0.2126, 0.7152, 0.0722));\n"
+        "        sad += abs(a - b);\n"
+        "      }\n"
+        "    }\n"
+        "    if (sad < best) { best = sad; found = duv; }\n"
+        "  }\n"
+        "}\n"
+        "color = vec4(found, 0.0, 1.0);\n";
+    struct pl_custom_shader custom = {};
+    custom.description = "framegen motion";
+    custom.body = body;
+    custom.input = PL_SHADER_SIG_NONE;
+    custom.output = PL_SHADER_SIG_COLOR;
+    custom.descriptors = desc;
+    custom.num_descriptors = 2;
+    custom.variables = &var;
+    custom.num_variables = 1;
+    return dispatch_framegen(fg_dispatch, fg_motion, &custom);
+}
+
+bool QmlMainWindow::drawFrameGen(float t, pl_frame *target)
+{
+    if (fg_broken || !fg_dispatch || !fg_out)
+        return false;
+    pl_shader_desc desc[3] = {
+        fg_sampler("prev_tex", 0, fg_prev),
+        fg_sampler("curr_tex", 1, fg_curr),
+        fg_sampler("motion_tex", 2, fg_motion),
+    };
+    struct pl_shader_var var = {};
+    var.var = pl_var_float("mix_t");
+    var.data = &t;
+    var.dynamic = true;
+    static const char *body =
+        "vec2 uv = gl_FragCoord.xy / vec2(textureSize(prev_tex, 0));\n"
+        "vec2 mv = texture(motion_tex, uv).xy;\n"
+        "vec3 prev_w = texture(prev_tex, clamp(uv + mv * mix_t, vec2(0.0), vec2(1.0))).rgb;\n"
+        "vec3 curr_w = texture(curr_tex, clamp(uv - mv * (1.0 - mix_t), vec2(0.0), vec2(1.0))).rgb;\n"
+        "vec3 prev_h = texture(prev_tex, uv).rgb;\n"
+        "vec3 curr_h = texture(curr_tex, uv).rgb;\n"
+        "float err = distance(prev_w, curr_w);\n"
+        "float conf = 1.0 - smoothstep(0.04, 0.22, err);\n"
+        "vec3 warped = mix(prev_w, curr_w, mix_t);\n"
+        "vec3 held = mix_t < 0.5 ? prev_h : curr_h;\n"
+        "color = vec4(mix(held, warped, conf), 1.0);\n";
+    struct pl_custom_shader custom = {};
+    custom.description = "framegen warp";
+    custom.body = body;
+    custom.input = PL_SHADER_SIG_NONE;
+    custom.output = PL_SHADER_SIG_COLOR;
+    custom.descriptors = desc;
+    custom.num_descriptors = 3;
+    custom.variables = &var;
+    custom.num_variables = 1;
+    if (!dispatch_framegen(fg_dispatch, fg_out, &custom))
+        return false;
+
+    struct pl_frame src = {};
+    src.num_planes = 1;
+    src.planes[0].texture = fg_out;
+    src.planes[0].components = 4;
+    src.planes[0].component_mapping[0] = 0;
+    src.planes[0].component_mapping[1] = 1;
+    src.planes[0].component_mapping[2] = 2;
+    src.planes[0].component_mapping[3] = 3;
+    src.repr = pl_color_repr_rgb;
+    src.color = pl_color_space_srgb;
+    const float w = (float)fg_out->params.w;
+    const float h = (float)fg_out->params.h;
+    src.crop = {0.f, 0.f, w, h};
+    target->crop = src.crop;
+    return pl_render_image(placebo_renderer, &src, target, &pl_render_fast_params);
 }
 
 void QmlMainWindow::render()
@@ -1315,9 +1547,11 @@ void QmlMainWindow::render()
         av_frame_free(&held_sw);
         frame_thumb.clear();
     }
-    // A repeated picture only skips the extra GPU pass. The decoded frame
-    // itself is always shown, including when generation is off.
-    const bool repeat = frame && settings && settings->GetDlssFrameGen() >= 2 && isRepeatFrame(frame);
+    // A repeated picture is the same game frame sent again by a faster stream.
+    // It is still shown, but it is not a new input frame and it is not interpolated.
+    const bool repeat = frame && isRepeatFrame(frame);
+    if (settings && settings->GetDlssFrameGen() < 2)
+        fg_broken = false;
     if (frame) {
         unique_frame = true;
         if (session)
@@ -1344,15 +1578,17 @@ void QmlMainWindow::render()
         }
         av_frame_free(&held_sw);
         av_frame_free(&frame);
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (last_decoded_ms > 0) {
-            const double dt = double(now - last_decoded_ms);
-            if (dt >= 5.0 && dt <= 100.0) {
-                const double instant = 1000.0 / dt;
-                decoded_fps_ema = decoded_fps_ema <= 0.0 ? instant : decoded_fps_ema * 0.85 + instant * 0.15;
+        if (!repeat) {
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (last_decoded_ms > 0) {
+                const double dt = double(now - last_decoded_ms);
+                if (dt >= 5.0 && dt <= 100.0) {
+                    const double instant = 1000.0 / dt;
+                    decoded_fps_ema = decoded_fps_ema <= 0.0 ? instant : decoded_fps_ema * 0.85 + instant * 0.15;
+                }
             }
+            last_decoded_ms = now;
         }
-        last_decoded_ms = now;
 
         const int requested = settings ? settings->GetDlssFrameGen() : 1;
         if (!repeat && requested >= 2 && current_frame.num_planes && previous_frame.num_planes) {
@@ -1368,8 +1604,14 @@ void QmlMainWindow::render()
             int gap = std::min(requested, fit) - 1;
             if (gap > 3)
                 gap = 3;
-            if (gap > 0)
-                gen_count = gap;
+            if (gap > 0 && !fg_broken) {
+                if (prepareFrameGen())
+                    gen_count = gap;
+                else {
+                    fg_broken = true;
+                    qCWarning(chiakiGui) << "GPU frame generation failed, showing decoded frames only";
+                }
+            }
         }
     }
 
@@ -1545,44 +1787,28 @@ void QmlMainWindow::render()
         }
     }
 
-    const bool generated_pass = pass < gen_count && unique_frame && previous_frame.num_planes && current_frame.num_planes;
+    const bool generated_pass = pass < gen_count && unique_frame && !fg_broken;
     bool drew = false;
-    static uint64_t mix_epoch = 1;
     if (generated_pass) {
-        // Sample between the previous and current GPU frames. The oversample
-        // mixer holds each picture and only blends across the boundary, which
-        // is the same class of GPU interpolation mpv uses on a fast card.
         const float u = float(pass + 1) / float(gen_count + 1);
-        const struct pl_frame *frames[2] = { &previous_frame, &current_frame };
-        const uint64_t sigs[2] = { mix_epoch, mix_epoch + 1 };
-        const float timestamps[2] = { -u, 1.f - u };
-        struct pl_frame_mix mix = {
-            .num_frames = 2,
-            .frames = frames,
-            .signatures = sigs,
-            .timestamps = timestamps,
-            .vsync_duration = 1.f / float(gen_count + 1),
-        };
-        struct pl_render_params mix_params = *render_params;
-        mix_params.frame_mixer = &pl_filter_oversample;
-        drew = pl_render_image_mix(placebo_renderer, &mix, &target_frame, &mix_params);
-        if (!drew)
-            qCWarning(chiakiGui) << "GPU frame interpolation failed, showing the decoded frame";
+        drew = drawFrameGen(u, &target_frame);
+        if (!drew) {
+            fg_broken = true;
+            qCWarning(chiakiGui) << "GPU frame warp failed, showing the decoded frame";
+        }
     }
     if (!drew) {
         const struct pl_frame *source = current_frame.num_planes ? &current_frame : nullptr;
         if (!pl_render_image(placebo_renderer, source, &target_frame, render_params))
             qCWarning(chiakiGui) << "Failed to render Placebo frame!";
     }
-    if (generated_pass && pass + 1 == gen_count)
-        mix_epoch += 2;
 
     const bool submitted = pl_swapchain_submit_frame(placebo_swapchain);
     if (!submitted)
         qCWarning(chiakiGui) << "Failed to submit Placebo frame!";
 
     pl_swapchain_swap_buffers(placebo_swapchain);
-    if (submitted && unique_frame)
+    if (submitted && unique_frame && (drew || !repeat))
         notePresentedFrame(generated_pass && drew);
     }
 }
