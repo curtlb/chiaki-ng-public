@@ -1315,11 +1315,9 @@ void QmlMainWindow::render()
         av_frame_free(&held_sw);
         frame_thumb.clear();
     }
-    if (frame && isRepeatFrame(frame)) {
-        // Same picture sent again inside a faster stream. Keep the last real
-        // pair so the GPU interpolates across the game's own frames.
-        av_frame_free(&frame);
-    }
+    // A repeated picture only skips the extra GPU pass. The decoded frame
+    // itself is always shown, including when generation is off.
+    const bool repeat = frame && settings && settings->GetDlssFrameGen() >= 2 && isRepeatFrame(frame);
     if (frame) {
         unique_frame = true;
         if (session)
@@ -1357,7 +1355,7 @@ void QmlMainWindow::render()
         last_decoded_ms = now;
 
         const int requested = settings ? settings->GetDlssFrameGen() : 1;
-        if (requested >= 2 && current_frame.num_planes && previous_frame.num_planes) {
+        if (!repeat && requested >= 2 && current_frame.num_planes && previous_frame.num_planes) {
             double base = decoded_fps_ema;
             if (base < 1.0)
                 base = 60.0;
