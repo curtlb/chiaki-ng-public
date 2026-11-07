@@ -8,6 +8,7 @@
 #include <QMutex>
 #include <QWindow>
 #include <atomic>
+#include <vector>
 #include <QQuickWindow>
 #include <QLoggingCategory>
 #include <QImage>
@@ -148,6 +149,9 @@ private:
     void render();
     VkPresentModeKHR desiredPresentMode() const;
     void notePresentedFrame(bool generated);
+    void clearGenerated();
+    bool isRepeatFrame(const AVFrame *frame);
+    void buildGenerated(const AVFrame *prev, const AVFrame *next, int slots);
     bool handleShortcut(QKeyEvent *event);
     bool event(QEvent *event) override;
     QObject *focusObject() const override;
@@ -240,6 +244,11 @@ private:
     int frame_stat_native = 0;
     int frame_stat_generated = 0;
     QString frame_gen_readout;
+    AVFrame *held_sw = nullptr;
+    AVFrame *gen_av[3] = {};
+    pl_frame gen_pl[3] = {};
+    int gen_count = 0;
+    std::vector<uint8_t> frame_thumb;
 
     friend class QmlBackend;
 };

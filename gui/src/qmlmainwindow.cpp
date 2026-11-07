@@ -29,6 +29,8 @@ extern "C" {
 #include <QScreen>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <vector>
 #if defined(Q_OS_MACOS)
 #include <objc/message.h>
 #endif
@@ -142,6 +144,11 @@ QmlMainWindow::~QmlMainWindow()
 
     pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
     pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
+    for (int i = 0; i < 3; i++) {
+        pl_unmap_avframe(placebo_vulkan->gpu, &gen_pl[i]);
+        av_frame_free(&gen_av[i]);
+    }
+    av_frame_free(&held_sw);
 
     pl_tex_destroy(placebo_vulkan->gpu, &quick_tex);
     pl_vulkan_sem_destroy(placebo_vulkan->gpu, &quick_sem);
@@ -929,6 +936,212 @@ void QmlMainWindow::endFrame()
     pl_vulkan_release_ex(placebo_vulkan->gpu, &release_params);
 }
 
+namespace {
+
+struct FrameFmt {
+    int luma_bpp;
+    int chroma_div;
+    int chroma_bpp;
+    bool interleaved_uv;
+    bool planar_uv;
+};
+
+bool frame_fmt(int fmt, FrameFmt *out)
+{
+    switch (fmt) {
+    case AV_PIX_FMT_NV12:
+        *out = { 1, 2, 2, true, false };
+        return true;
+    case AV_PIX_FMT_YUV420P:
+        *out = { 1, 2, 1, false, true };
+        return true;
+    case AV_PIX_FMT_P010LE:
+        *out = { 2, 2, 4, true, false };
+        return true;
+    default:
+        return false;
+    }
+}
+
+int sample_luma(const AVFrame *f, int x, int y)
+{
+    if (!f || !f->data[0] || f->width <= 0 || f->height <= 0)
+        return -1;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x >= f->width) x = f->width - 1;
+    if (y >= f->height) y = f->height - 1;
+    const uint8_t *row = f->data[0] + y * f->linesize[0];
+    switch (f->format) {
+    case AV_PIX_FMT_NV12:
+    case AV_PIX_FMT_YUV420P:
+        return row[x];
+    case AV_PIX_FMT_P010LE:
+        return ((const uint16_t *)row)[x] >> 8;
+    default:
+        return -1;
+    }
+}
+
+bool build_luma8(const AVFrame *f, int dw, int dh, std::vector<uint8_t> *out)
+{
+    if (dw < 8 || dh < 8)
+        return false;
+    out->resize((size_t)dw * dh);
+    for (int y = 0; y < dh; y++) {
+        const int sy = y * f->height / dh;
+        for (int x = 0; x < dw; x++) {
+            const int v = sample_luma(f, x * f->width / dw, sy);
+            if (v < 0)
+                return false;
+            (*out)[(size_t)y * dw + x] = (uint8_t)v;
+        }
+    }
+    return true;
+}
+
+void blit_block(uint8_t *dst, int dst_stride, int dx, int dy,
+                const uint8_t *src, int src_stride, int sx, int sy,
+                int bw, int bh, int bpp, int src_w, int src_h)
+{
+    if (sx < 0) { bw += sx; dx -= sx; sx = 0; }
+    if (sy < 0) { bh += sy; dy -= sy; sy = 0; }
+    if (sx + bw > src_w) bw = src_w - sx;
+    if (sy + bh > src_h) bh = src_h - sy;
+    if (bw <= 0 || bh <= 0 || dx < 0 || dy < 0)
+        return;
+    for (int y = 0; y < bh; y++) {
+        memcpy(dst + (dy + y) * dst_stride + dx * bpp,
+               src + (sy + y) * src_stride + sx * bpp,
+               (size_t)bw * bpp);
+    }
+}
+
+void paint_moved_blocks(AVFrame *dst, const AVFrame *src, int plane, int bpp,
+                        int plane_w, int plane_h, int bxn, int byn,
+                        const int8_t *mvx, const int8_t *mvy, const uint8_t *good,
+                        float t, int dw, int dh)
+{
+    if (!dst->data[plane] || !src->data[plane] || plane_w <= 0 || plane_h <= 0)
+        return;
+    for (int by = 0; by < byn; by++) {
+        for (int bx = 0; bx < bxn; bx++) {
+            const int i = by * bxn + bx;
+            if (!good[i])
+                continue;
+            const int x = bx * plane_w / bxn;
+            const int y = by * plane_h / byn;
+            const int w = (bx + 1) * plane_w / bxn - x;
+            const int h = (by + 1) * plane_h / byn - y;
+            const int dx = (int)std::lround(mvx[i] * (plane_w / (double)dw) * t);
+            const int dy = (int)std::lround(mvy[i] * (plane_h / (double)dh) * t);
+            blit_block(dst->data[plane], dst->linesize[plane], x, y,
+                       src->data[plane], src->linesize[plane], x + dx, y + dy,
+                       w, h, bpp, plane_w, plane_h);
+        }
+    }
+}
+
+// One whole picture between two different decoded frames. Blocks that have a
+// confident motion match are taken from the previous frame, shifted. The rest
+// stay on the nearer original, so the two pictures are never drawn on top of
+// each other.
+AVFrame *synthesize_frame(const AVFrame *prev, const AVFrame *next, float t)
+{
+    FrameFmt fmt;
+    if (!frame_fmt(prev->format, &fmt) || prev->format != next->format
+            || prev->width != next->width || prev->height != next->height
+            || prev->width < 64 || prev->height < 64)
+        return nullptr;
+
+    const int dw = std::max(32, prev->width / (prev->width >= 2560 ? 8 : 4));
+    const int dh = std::max(32, prev->height / (prev->height >= 2560 ? 8 : 4));
+    std::vector<uint8_t> prev_luma, next_luma;
+    if (!build_luma8(prev, dw, dh, &prev_luma) || !build_luma8(next, dw, dh, &next_luma))
+        return nullptr;
+
+    const int block = 4;
+    const int bxn = dw / block;
+    const int byn = dh / block;
+    const int radius = 4;
+    std::vector<int8_t> mvx((size_t)bxn * byn), mvy((size_t)bxn * byn);
+    std::vector<uint8_t> good((size_t)bxn * byn);
+    for (int by = 0; by < byn; by++) {
+        for (int bx = 0; bx < bxn; bx++) {
+            const int x0 = bx * block;
+            const int y0 = by * block;
+            int best = 0;
+            int bdx = 0, bdy = 0;
+            bool have = false;
+            auto sad_at = [&](int dx, int dy) {
+                int sad = 0;
+                for (int y = 0; y < block; y++) {
+                    const uint8_t *a = prev_luma.data() + (size_t)(y0 + dy + y) * dw + (x0 + dx);
+                    const uint8_t *b = next_luma.data() + (size_t)(y0 + y) * dw + x0;
+                    for (int x = 0; x < block; x++)
+                        sad += std::abs(int(a[x]) - int(b[x]));
+                }
+                return sad;
+            };
+            if (x0 + block <= dw && y0 + block <= dh) {
+                best = sad_at(0, 0);
+                have = true;
+            }
+            if (!have || best > block * block * 3) {
+                for (int dy = -radius; dy <= radius; dy++) {
+                    if (y0 + dy < 0 || y0 + dy + block > dh)
+                        continue;
+                    for (int dx = -radius; dx <= radius; dx++) {
+                        if (x0 + dx < 0 || x0 + dx + block > dw)
+                            continue;
+                        const int sad = sad_at(dx, dy);
+                        if (!have || sad < best) {
+                            best = sad;
+                            bdx = dx;
+                            bdy = dy;
+                            have = true;
+                        }
+                    }
+                }
+            }
+            const size_t i = (size_t)by * bxn + bx;
+            mvx[i] = (int8_t)bdx;
+            mvy[i] = (int8_t)bdy;
+            good[i] = have && best <= block * block * 10;
+        }
+    }
+
+    AVFrame *out = av_frame_alloc();
+    if (!out)
+        return nullptr;
+    out->format = next->format;
+    out->width = next->width;
+    out->height = next->height;
+    const AVFrame *base = t < 0.5f ? prev : next;
+    if (av_frame_get_buffer(out, 32) < 0 || av_frame_copy(out, base) < 0) {
+        av_frame_free(&out);
+        return nullptr;
+    }
+    av_frame_copy_props(out, next);
+
+    paint_moved_blocks(out, prev, 0, fmt.luma_bpp, out->width, out->height, bxn, byn,
+                       mvx.data(), mvy.data(), good.data(), t, dw, dh);
+    const int cw = out->width / fmt.chroma_div;
+    const int ch = out->height / fmt.chroma_div;
+    if (fmt.interleaved_uv) {
+        paint_moved_blocks(out, prev, 1, fmt.chroma_bpp, cw, ch, bxn, byn,
+                           mvx.data(), mvy.data(), good.data(), t, dw, dh);
+    } else if (fmt.planar_uv) {
+        paint_moved_blocks(out, prev, 1, fmt.chroma_bpp, cw, ch, bxn, byn,
+                           mvx.data(), mvy.data(), good.data(), t, dw, dh);
+        paint_moved_blocks(out, prev, 2, fmt.chroma_bpp, cw, ch, bxn, byn,
+                           mvx.data(), mvy.data(), good.data(), t, dw, dh);
+    }
+    return out;
+}
+
+} // namespace
+
 VkPresentModeKHR QmlMainWindow::desiredPresentMode() const
 {
     // Frame generation has to scan out every inserted frame, so it stays on FIFO.
@@ -984,6 +1197,66 @@ void QmlMainWindow::notePresentedFrame(bool generated)
     }, Qt::QueuedConnection);
 }
 
+void QmlMainWindow::clearGenerated()
+{
+    for (int i = 0; i < 3; i++) {
+        if (placebo_vulkan && gen_pl[i].num_planes)
+            pl_unmap_avframe(placebo_vulkan->gpu, &gen_pl[i]);
+        gen_pl[i] = {};
+        av_frame_free(&gen_av[i]);
+    }
+    gen_count = 0;
+}
+
+bool QmlMainWindow::isRepeatFrame(const AVFrame *frame)
+{
+    std::vector<uint8_t> now;
+    if (!build_luma8(frame, 48, 27, &now))
+        return false;
+    bool repeat = false;
+    if (frame_thumb.size() == now.size()) {
+        int sum = 0;
+        int big = 0;
+        for (size_t i = 0; i < now.size(); i++) {
+            const int d = std::abs(int(now[i]) - int(frame_thumb[i]));
+            sum += d;
+            if (d > 12)
+                big++;
+        }
+        // A 30 fps game inside a 60 fps stream repeats the same picture.
+        // Those copies are not new frames and must not be counted or displayed as generated.
+        repeat = sum <= 4 * (int)now.size() && big * 50 < (int)now.size();
+    }
+    if (!repeat)
+        frame_thumb.swap(now);
+    return repeat;
+}
+
+void QmlMainWindow::buildGenerated(const AVFrame *prev, const AVFrame *next, int slots)
+{
+    clearGenerated();
+    if (!prev || !next || slots < 1)
+        return;
+    if (slots > 3)
+        slots = 3;
+    for (int i = 0; i < slots; i++) {
+        const float t = float(i + 1) / float(slots + 1);
+        gen_av[i] = synthesize_frame(prev, next, t);
+        if (!gen_av[i])
+            break;
+        struct pl_avframe_params avparams = {
+            .frame = gen_av[i],
+            .tex = &placebo_tex[1 + i],
+        };
+        if (!pl_map_avframe_ex(placebo_vulkan->gpu, &gen_pl[i], &avparams)) {
+            av_frame_free(&gen_av[i]);
+            gen_pl[i] = {};
+            break;
+        }
+        gen_count++;
+    }
+}
+
 void QmlMainWindow::render()
 {
     Q_ASSERT(QThread::currentThread() == render_thread);
@@ -1002,49 +1275,73 @@ void QmlMainWindow::render()
     pl_tex *tex = &placebo_tex[0];
 
     frame_mutex.lock();
-    if (av_frame || (!has_video && !keep_video)) {
-        const bool incoming = av_frame != nullptr;
-        const bool broken = incoming && av_frame->decode_error_flags;
-        const bool keep_previous = incoming && !broken && current_frame.num_planes
-                && settings && settings->GetDlssFrameGen() >= 2;
-        if (keep_previous) {
-            pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
-            previous_frame = current_frame;
-            current_frame = {};
-            if (previous_frame.num_planes && previous_frame.planes[0].texture == *tex)
-                tex = &placebo_tex[4];
-        } else {
-            pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
-            if (broken) {
-                std::swap(previous_frame, current_frame);
-                if (previous_frame.num_planes && previous_frame.planes[0].texture == *tex)
-                    tex = &placebo_tex[4];
-            }
-            pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
-        }
+    if (av_frame || (!has_video && !keep_video))
         std::swap(frame, av_frame);
-    }
     frame_mutex.unlock();
 
-    bool new_decoded = false;
+    const int requested = settings ? settings->GetDlssFrameGen() : 1;
+    bool unique_frame = false;
+    if (frame && requested >= 2 && isRepeatFrame(frame)) {
+        av_frame_free(&frame);
+        if (current_frame.num_planes)
+            return;
+    }
+    if (!frame && !has_video && !keep_video) {
+        pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
+        pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
+        clearGenerated();
+        av_frame_free(&held_sw);
+        frame_thumb.clear();
+    }
     if (frame) {
-        new_decoded = true;
-        if(session)
+        unique_frame = true;
+        if (session)
             session->ApplyDisplayCrop(frame);
+        if (current_frame.num_planes && current_frame.planes[0].texture == *tex)
+            tex = &placebo_tex[4];
+
+        int slots = 0;
+        if (requested >= 2 && held_sw) {
+            const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
+            double base = decoded_fps_ema;
+            if (last_decoded_ms > 0) {
+                const double dt = double(now_ms - last_decoded_ms);
+                if (dt >= 5.0 && dt <= 100.0)
+                    base = 1000.0 / dt;
+            }
+            if (base < 1.0)
+                base = 60.0;
+            float hz = display_hz.load(std::memory_order_relaxed);
+            if (hz < 30.f)
+                hz = 60.f;
+            int fit = (int)std::floor(hz / base + 1e-3);
+            if (fit < 1)
+                fit = 1;
+            slots = std::min(requested, fit) - 1;
+        }
+        if (slots > 0)
+            buildGenerated(held_sw, frame, slots);
+        else
+            clearGenerated();
 
         struct pl_avframe_params avparams = {
             .frame = frame,
             .tex = tex,
         };
-        if (!pl_map_avframe_ex(placebo_vulkan->gpu, &current_frame, &avparams))
-        {
+        pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
+        previous_frame = current_frame;
+        current_frame = {};
+        if (!pl_map_avframe_ex(placebo_vulkan->gpu, &current_frame, &avparams)) {
             qCWarning(chiakiGui) << "Failed to map AVFrame to Placebo frame!";
-            if(backend && backend->zeroCopy())
-            {
+            current_frame = previous_frame;
+            previous_frame = {};
+            if (backend && backend->zeroCopy()) {
                 qCInfo(chiakiGui) << "Mapping frame failed, trying without zero copy!";
                 backend->disableZeroCopy();
             }
         }
+        av_frame_free(&held_sw);
+        held_sw = av_frame_clone(frame);
         av_frame_free(&frame);
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (last_decoded_ms > 0) {
@@ -1057,18 +1354,7 @@ void QmlMainWindow::render()
         last_decoded_ms = now;
     }
 
-    int passes = 1;
-    const int requested = settings ? settings->GetDlssFrameGen() : 1;
-    if (new_decoded && requested >= 2 && current_frame.num_planes && previous_frame.num_planes) {
-        float hz = display_hz.load(std::memory_order_relaxed);
-        if (hz < 30.f)
-            hz = 60.f;
-        const double base = decoded_fps_ema > 1.0 ? decoded_fps_ema : 60.0;
-        int fit = (int)std::floor(hz / base + 1e-3);
-        if (fit < 1)
-            fit = 1;
-        passes = std::min(requested, fit);
-    }
+    const int passes = (unique_frame && gen_count > 0) ? gen_count + 1 : 1;
 
     for (int pass = 0; pass < passes; pass++) {
     struct pl_swapchain_frame sw_frame = {};
@@ -1240,11 +1526,9 @@ void QmlMainWindow::render()
         }
     }
 
-    // One source per present. Mixing the two decoded frames on top of each
-    // other is what drew the double image.
-    const bool generated_pass = passes > 1 && pass + 1 < passes;
+    const bool generated_pass = pass < gen_count && unique_frame;
     const struct pl_frame *source = generated_pass
-            ? &previous_frame
+            ? &gen_pl[pass]
             : (current_frame.num_planes ? &current_frame : nullptr);
     if (!pl_render_image(placebo_renderer, source, &target_frame, render_params))
         qCWarning(chiakiGui) << "Failed to render Placebo frame!";
@@ -1254,7 +1538,7 @@ void QmlMainWindow::render()
         qCWarning(chiakiGui) << "Failed to submit Placebo frame!";
 
     pl_swapchain_swap_buffers(placebo_swapchain);
-    if (submitted && new_decoded)
+    if (submitted && unique_frame)
         notePresentedFrame(generated_pass);
     }
 }

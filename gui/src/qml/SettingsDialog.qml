@@ -679,7 +679,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "(60(+180DLSS) по реально показанным кадрам)"
+                        text: "(30(+30DLSS): разные кадры и построенные между ними)"
                     }
 
                     Label {
