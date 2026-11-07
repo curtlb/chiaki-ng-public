@@ -248,6 +248,25 @@ class Settings : public QObject
 		bool GetShowStreamStats() const            { return settings.value("settings/show_stream_stats", false).toBool(); }
 		void SetShowStreamStats(bool enabled)      { settings.setValue("settings/show_stream_stats", enabled); }
 
+		bool GetNvidiaReflex() const               { return settings.value("settings/nvidia_reflex", false).toBool(); }
+		void SetNvidiaReflex(bool enabled)         { settings.setValue("settings/nvidia_reflex", enabled); }
+
+		// 1 = off, 2/3/4 = present that many frames per decoded frame.
+		int GetDlssFrameGen() const
+		{
+			const int v = settings.value("settings/dlss_frame_gen", 1).toInt();
+			return (v == 2 || v == 3 || v == 4) ? v : 1;
+		}
+		void SetDlssFrameGen(int multiplier)
+		{
+			if(multiplier != 2 && multiplier != 3 && multiplier != 4)
+				multiplier = 1;
+			settings.setValue("settings/dlss_frame_gen", multiplier);
+		}
+
+		bool GetShowFrameGenFps() const            { return settings.value("settings/show_frame_gen_fps", false).toBool(); }
+		void SetShowFrameGenFps(bool enabled)      { settings.setValue("settings/show_frame_gen_fps", enabled); }
+
 		bool GetStreamerMode() const		{ return settings.value("settings/streamer_mode", false).toBool(); }
 		void SetStreamerMode(bool enabled)	{ settings.setValue("settings/streamer_mode", enabled); }
 

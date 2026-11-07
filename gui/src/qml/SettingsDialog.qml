@@ -637,6 +637,53 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
+                        text: "NVIDIA Reflex:"
+                    }
+
+                    C.CheckBox {
+                        checked: Chiaki.settings.nvidiaReflex
+                        onToggled: Chiaki.settings.nvidiaReflex = checked
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "(один кадр в очереди, без ожидания vsync)"
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "Генератор кадров DLSS:"
+                    }
+
+                    C.ComboBox {
+                        Layout.preferredWidth: 400
+                        model: ["Выкл", "X2", "X3", "X4"]
+                        currentIndex: Math.max(0, Chiaki.settings.dlssFrameGen - 1)
+                        onActivated: (index) => Chiaki.settings.dlssFrameGen = index + 1
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "(X2 / X3 / X4, если монитор успевает)"
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "Отображать FPS:"
+                    }
+
+                    C.CheckBox {
+                        checked: Chiaki.settings.showFrameGenFps
+                        onToggled: Chiaki.settings.showFrameGenFps = checked
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "(60(+180DLSS) по реально показанным кадрам)"
+                    }
+
+                    Label {
+                        Layout.alignment: Qt.AlignRight
                         text: "Тип окна:"
                     }
 

@@ -194,6 +194,26 @@ Item {
     }
 
     Label {
+        id: frameGenReadout
+        anchors {
+            top: parent.top
+            right: parent.right
+            margins: 12
+        }
+        z: 50
+        padding: 8
+        visible: text.length > 0 && !sessionError && !sessionLoading
+        color: "#e8eef4"
+        font.pixelSize: 18
+        font.weight: Font.DemiBold
+        text: Chiaki.window.frameGenReadout
+        background: Rectangle {
+            color: "#88000000"
+            radius: 8
+        }
+    }
+
+    Label {
         id: cloudBillingOverlay
         anchors {
             top: parent.top

@@ -26,6 +26,9 @@ extern "C" {
 #include <QQuickRenderControl>
 #include <QQuickGraphicsDevice>
 #include <QDateTime>
+#include <QScreen>
+#include <algorithm>
+#include <cmath>
 #if defined(Q_OS_MACOS)
 #include <objc/message.h>
 #endif
@@ -339,6 +342,11 @@ void QmlMainWindow::presentFrame(AVFrame *frame, int32_t frames_lost)
             setCursor(Qt::BlankCursor);
         emit hasVideoChanged();
     }
+    if (QScreen *scr = screen()) {
+        const float hz = scr->refreshRate();
+        if (hz >= 30.f)
+            display_hz.store(hz, std::memory_order_relaxed);
+    }
 
     update();
 }
@@ -479,6 +487,7 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
     GET_PROC(vkDestroySurfaceKHR)
     GET_PROC(vkGetPhysicalDeviceQueueFamilyProperties)
     GET_PROC(vkGetPhysicalDeviceProperties)
+    GET_PROC(vkGetPhysicalDeviceSurfacePresentModesKHR)
 #undef GET_PROC
 
     const char *opt_dev_extensions[] = {
@@ -577,6 +586,10 @@ void QmlMainWindow::init(Settings *settings, bool exit_app_on_stream_exit)
             has_video = false;
             setCursor(Qt::ArrowCursor);
             emit hasVideoChanged();
+        }
+        if (!frame_gen_readout.isEmpty()) {
+            frame_gen_readout.clear();
+            emit frameGenReadoutChanged();
         }
         if(session && exit_app_on_stream_exit)
         {
@@ -798,9 +811,10 @@ void QmlMainWindow::createSwapchain()
     if (err != VK_SUCCESS)
         qFatal("Failed to create VkSurfaceKHR");
 
+    present_mode = desiredPresentMode();
     struct pl_vulkan_swapchain_params swapchain_params = {
         .surface = surface,
-        .present_mode = VK_PRESENT_MODE_FIFO_KHR,
+        .present_mode = present_mode,
         .swapchain_depth = 1,
     };
     placebo_swapchain = pl_vulkan_create_swapchain(placebo_vulkan, &swapchain_params);
@@ -915,11 +929,71 @@ void QmlMainWindow::endFrame()
     pl_vulkan_release_ex(placebo_vulkan->gpu, &release_params);
 }
 
+VkPresentModeKHR QmlMainWindow::desiredPresentMode() const
+{
+    // Frame generation has to scan out every inserted frame, so it stays on FIFO.
+    // Reflex alone switches to mailbox: the latest frame is shown without waiting
+    // out a full vsync queue. Depth stays 1 either way.
+    if (!settings || !settings->GetNvidiaReflex() || settings->GetDlssFrameGen() >= 2)
+        return VK_PRESENT_MODE_FIFO_KHR;
+    if (!placebo_vulkan || surface == VK_NULL_HANDLE || !vk_funcs.vkGetPhysicalDeviceSurfacePresentModesKHR)
+        return VK_PRESENT_MODE_FIFO_KHR;
+
+    uint32_t count = 0;
+    if (vk_funcs.vkGetPhysicalDeviceSurfacePresentModesKHR(placebo_vulkan->phys_device, surface, &count, nullptr) != VK_SUCCESS || count == 0)
+        return VK_PRESENT_MODE_FIFO_KHR;
+    std::vector<VkPresentModeKHR> modes(count);
+    if (vk_funcs.vkGetPhysicalDeviceSurfacePresentModesKHR(placebo_vulkan->phys_device, surface, &count, modes.data()) != VK_SUCCESS)
+        return VK_PRESENT_MODE_FIFO_KHR;
+    if (std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end())
+        return VK_PRESENT_MODE_MAILBOX_KHR;
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+void QmlMainWindow::notePresentedFrame(bool generated)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (frame_stat_window_start == 0)
+        frame_stat_window_start = now;
+    if (generated)
+        frame_stat_generated++;
+    else
+        frame_stat_native++;
+    if (now - frame_stat_window_start < 500)
+        return;
+
+    const double seconds = (now - frame_stat_window_start) / 1000.0;
+    const int native = seconds > 0.0 ? qRound(frame_stat_native / seconds) : 0;
+    const int generated_fps = seconds > 0.0 ? qRound(frame_stat_generated / seconds) : 0;
+    frame_stat_native = 0;
+    frame_stat_generated = 0;
+    frame_stat_window_start = now;
+
+    QString text;
+    if (settings && settings->GetShowFrameGenFps()) {
+        if (settings->GetDlssFrameGen() >= 2)
+            text = QStringLiteral("%1(+%2DLSS)").arg(native).arg(generated_fps);
+        else
+            text = QString::number(native);
+    }
+    QMetaObject::invokeMethod(this, [this, text]() {
+        if (frame_gen_readout == text)
+            return;
+        frame_gen_readout = text;
+        emit frameGenReadoutChanged();
+    }, Qt::QueuedConnection);
+}
+
 void QmlMainWindow::render()
 {
     Q_ASSERT(QThread::currentThread() == render_thread);
 
     render_scheduled = false;
+
+    if (placebo_swapchain && desiredPresentMode() != present_mode) {
+        destroySwapchain();
+        resizeSwapchain();
+    }
 
     if (!placebo_swapchain)
         return;
@@ -929,18 +1003,32 @@ void QmlMainWindow::render()
 
     frame_mutex.lock();
     if (av_frame || (!has_video && !keep_video)) {
-        pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
-        if (av_frame && av_frame->decode_error_flags) {
-            std::swap(previous_frame, current_frame);
-            if (previous_frame.planes[0].texture == *tex)
+        const bool incoming = av_frame != nullptr;
+        const bool broken = incoming && av_frame->decode_error_flags;
+        const bool keep_previous = incoming && !broken && current_frame.num_planes
+                && settings && settings->GetDlssFrameGen() >= 2;
+        if (keep_previous) {
+            pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
+            previous_frame = current_frame;
+            current_frame = {};
+            if (previous_frame.num_planes && previous_frame.planes[0].texture == *tex)
                 tex = &placebo_tex[4];
+        } else {
+            pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
+            if (broken) {
+                std::swap(previous_frame, current_frame);
+                if (previous_frame.num_planes && previous_frame.planes[0].texture == *tex)
+                    tex = &placebo_tex[4];
+            }
+            pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
         }
-        pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
         std::swap(frame, av_frame);
     }
     frame_mutex.unlock();
 
+    bool new_decoded = false;
     if (frame) {
+        new_decoded = true;
         if(session)
             session->ApplyDisplayCrop(frame);
 
@@ -958,8 +1046,31 @@ void QmlMainWindow::render()
             }
         }
         av_frame_free(&frame);
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (last_decoded_ms > 0) {
+            const double dt = double(now - last_decoded_ms);
+            if (dt >= 5.0 && dt <= 100.0) {
+                const double instant = 1000.0 / dt;
+                decoded_fps_ema = decoded_fps_ema <= 0.0 ? instant : decoded_fps_ema * 0.85 + instant * 0.15;
+            }
+        }
+        last_decoded_ms = now;
     }
 
+    int passes = 1;
+    const int requested = settings ? settings->GetDlssFrameGen() : 1;
+    if (new_decoded && requested >= 2 && current_frame.num_planes && previous_frame.num_planes) {
+        float hz = display_hz.load(std::memory_order_relaxed);
+        if (hz < 30.f)
+            hz = 60.f;
+        const double base = decoded_fps_ema > 1.0 ? decoded_fps_ema : 60.0;
+        int fit = (int)std::floor(hz / base + 1e-3);
+        if (fit < 1)
+            fit = 1;
+        passes = std::min(requested, fit);
+    }
+
+    for (int pass = 0; pass < passes; pass++) {
     struct pl_swapchain_frame sw_frame = {};
     if (!pl_swapchain_start_frame(placebo_swapchain, &sw_frame)) {
         qCWarning(chiakiGui) << "Failed to start Placebo frame!";
@@ -1048,12 +1159,14 @@ void QmlMainWindow::render()
                 break;
         }
     }
-    if (quick_need_render) {
-        quick_need_render = false;
-        beginFrame();
-        quick_render->render();
+    if (pass == 0) {
+        if (quick_need_render) {
+            quick_need_render = false;
+            beginFrame();
+            quick_render->render();
+        }
+        endFrame();
     }
-    endFrame();
 
     struct pl_overlay_part overlay_part = {
         .src = {0, 0, static_cast<float>(swapchain_size.width()), static_cast<float>(swapchain_size.height())},
@@ -1127,7 +1240,24 @@ void QmlMainWindow::render()
         }
     }
 
-    if (current_frame.num_planes && previous_frame.num_planes) {
+    const bool generated_pass = passes > 1 && pass + 1 < passes;
+    if (generated_pass) {
+        const float toward_current = float(pass + 1) / float(passes);
+        const struct pl_frame *frames[] = { &previous_frame, &current_frame, };
+        const uint64_t signatures[] = { 1, 2 };
+        const float timestamps[] = { -toward_current, 1.f - toward_current };
+        struct pl_frame_mix frame_mix = {
+            .num_frames = 2,
+            .frames = frames,
+            .signatures = signatures,
+            .timestamps = timestamps,
+            .vsync_duration = 1.0,
+        };
+        struct pl_render_params params = *render_params;
+        params.frame_mixer = pl_find_filter_config("linear", PL_FILTER_FRAME_MIXING);
+        if (!pl_render_image_mix(placebo_renderer, &frame_mix, &target_frame, &params))
+            qCWarning(chiakiGui) << "Failed to render generated frame!";
+    } else if (passes == 1 && current_frame.num_planes && previous_frame.num_planes) {
         const struct pl_frame *frames[] = { &previous_frame, &current_frame, };
         const uint64_t sig = QDateTime::currentMSecsSinceEpoch();
         const uint64_t signatures[] = { sig, sig + 1 };
@@ -1148,10 +1278,14 @@ void QmlMainWindow::render()
             qCWarning(chiakiGui) << "Failed to render Placebo frame!";
     }
 
-    if (!pl_swapchain_submit_frame(placebo_swapchain))
+    const bool submitted = pl_swapchain_submit_frame(placebo_swapchain);
+    if (!submitted)
         qCWarning(chiakiGui) << "Failed to submit Placebo frame!";
 
     pl_swapchain_swap_buffers(placebo_swapchain);
+    if (submitted && new_decoded)
+        notePresentedFrame(generated_pass);
+    }
 }
 
 bool QmlMainWindow::handleShortcut(QKeyEvent *event)

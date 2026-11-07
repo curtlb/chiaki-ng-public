@@ -7,6 +7,7 @@
 
 #include <QMutex>
 #include <QWindow>
+#include <atomic>
 #include <QQuickWindow>
 #include <QLoggingCategory>
 #include <QImage>
@@ -48,6 +49,7 @@ class QmlMainWindow : public QWindow
     Q_PROPERTY(float ZoomFactor READ zoomFactor WRITE setZoomFactor NOTIFY zoomFactorChanged)
     Q_PROPERTY(VideoPreset videoPreset READ videoPreset WRITE setVideoPreset NOTIFY videoPresetChanged)
     Q_PROPERTY(bool directStream READ directStream NOTIFY directStreamChanged)
+    Q_PROPERTY(QString frameGenReadout READ frameGenReadout NOTIFY frameGenReadoutChanged)
     Q_PROPERTY(TextOverlay* textOverlay READ getTextOverlay CONSTANT)
 
 public:
@@ -101,6 +103,7 @@ public:
     void setVideoPreset(VideoPreset mode);
 
     TextOverlay* getTextOverlay() const { return text_overlay; }
+    QString frameGenReadout() const { return frame_gen_readout; }
 
     Q_INVOKABLE void grabInput();
     Q_INVOKABLE void releaseInput();
@@ -125,6 +128,7 @@ signals:
     void videoPresetChanged();
     void menuRequested();
     void directStreamChanged();
+    void frameGenReadoutChanged();
 
 private slots:
     void onRecognitionFinished(bool success);
@@ -142,6 +146,8 @@ private:
     void beginFrame();
     void endFrame();
     void render();
+    VkPresentModeKHR desiredPresentMode() const;
+    void notePresentedFrame(bool generated);
     bool handleShortcut(QKeyEvent *event);
     bool event(QEvent *event) override;
     QObject *focusObject() const override;
@@ -223,7 +229,17 @@ private:
         PFN_vkWaitSemaphores vkWaitSemaphores;
         PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties;
         PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties;
+        PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR;
     } vk_funcs;
+
+    VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    std::atomic<float> display_hz { 60.f };
+    double decoded_fps_ema = 0.0;
+    qint64 last_decoded_ms = 0;
+    qint64 frame_stat_window_start = 0;
+    int frame_stat_native = 0;
+    int frame_stat_generated = 0;
+    QString frame_gen_readout;
 
     friend class QmlBackend;
 };

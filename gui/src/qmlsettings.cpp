@@ -75,6 +75,39 @@ void QmlSettings::setShowStreamStats(bool enabled)
     emit showStreamStatsChanged();
 }
 
+bool QmlSettings::nvidiaReflex() const
+{
+    return settings->GetNvidiaReflex();
+}
+
+void QmlSettings::setNvidiaReflex(bool enabled)
+{
+    settings->SetNvidiaReflex(enabled);
+    emit nvidiaReflexChanged();
+}
+
+int QmlSettings::dlssFrameGen() const
+{
+    return settings->GetDlssFrameGen();
+}
+
+void QmlSettings::setDlssFrameGen(int multiplier)
+{
+    settings->SetDlssFrameGen(multiplier);
+    emit dlssFrameGenChanged();
+}
+
+bool QmlSettings::showFrameGenFps() const
+{
+    return settings->GetShowFrameGenFps();
+}
+
+void QmlSettings::setShowFrameGenFps(bool enabled)
+{
+    settings->SetShowFrameGenFps(enabled);
+    emit showFrameGenFpsChanged();
+}
+
 bool QmlSettings::streamerMode() const
 {
     return settings->GetStreamerMode();
@@ -1999,6 +2032,9 @@ void QmlSettings::refreshAllKeys()
     emit allowJoystickBackgroundEventsChanged();
     emit startMicUnmutedChanged();
     emit showStreamStatsChanged();
+    emit nvidiaReflexChanged();
+    emit dlssFrameGenChanged();
+    emit showFrameGenFpsChanged();
     emit streamerModeChanged();
 #ifdef CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
     emit verticalDeckChanged();
