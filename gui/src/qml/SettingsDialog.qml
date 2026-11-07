@@ -632,7 +632,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "(d3d11va)"
+                        text: "(d3d11va или d3d12va)"
                     }
 
                     Label {
@@ -652,7 +652,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "Генератор кадров DLSS:"
+                        text: "Генератор кадров:"
                     }
 
                     C.ComboBox {
@@ -664,7 +664,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "(X2 / X3 / X4, если монитор успевает)"
+                        text: "(на видеокарте; X2, X3, X4, если монитор быстрее стрима)"
                     }
 
                     Label {
@@ -679,7 +679,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "(реальная частота картинки; DLSS не строит кадры из готового видео)"
+                        text: "(30(+30): настоящие и построенные на видеокарте кадры)"
                     }
 
                     Label {

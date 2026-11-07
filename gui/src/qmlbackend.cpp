@@ -1206,9 +1206,24 @@ void QmlBackend::createSession(const StreamSessionConnectInfo &connect_info)
     try {
         session = new StreamSession(session_info, this);
     } catch (const Exception &e) {
-        CrashReporter::SendExceptionReport("Exception", e.what());
-        emit error(tr("Stream failed"), tr("Failed to initialize Stream Session: %1").arg(e.what()));
-        return;
+#if defined(Q_OS_WIN)
+        if (session_info.hw_decoder == "d3d12va") {
+            qCInfo(chiakiGui) << "d3d12va decoder failed, falling back to d3d11va";
+            session_info.hw_decoder = "d3d11va";
+            try {
+                session = new StreamSession(session_info, this);
+            } catch (const Exception &e2) {
+                CrashReporter::SendExceptionReport("Exception", e2.what());
+                emit error(tr("Stream failed"), tr("Failed to initialize Stream Session: %1").arg(e2.what()));
+                return;
+            }
+        } else
+#endif
+        {
+            CrashReporter::SendExceptionReport("Exception", e.what());
+            emit error(tr("Stream failed"), tr("Failed to initialize Stream Session: %1").arg(e.what()));
+            return;
+        }
     }
 
     connect(session, &StreamSession::FfmpegFrameAvailable, frame_thread->parent(), [this]() {

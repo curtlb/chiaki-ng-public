@@ -749,6 +749,7 @@ void CloudStreamingBackend::finishCloudSession(QString serviceType, QString serv
             "videotoolbox",
 #elif defined(Q_OS_WIN)
             "d3d11va",
+            "d3d12va",
 #endif
         };
         enum AVHWDeviceType hw_dev = AV_HWDEVICE_TYPE_NONE;
@@ -787,8 +788,46 @@ void CloudStreamingBackend::finishCloudSession(QString serviceType, QString serv
     }
 
     qInfo() << "=== Creating StreamSession ===";
+    StreamSession *session = nullptr;
     try {
-        StreamSession *session = new StreamSession(connect_info, parent());
+        session = new StreamSession(connect_info, parent());
+    } catch (const Exception &e) {
+#if defined(Q_OS_WIN)
+        if (connect_info.hw_decoder == "d3d12va") {
+            qWarning() << "d3d12va decoder failed, falling back to d3d11va";
+            connect_info.hw_decoder = "d3d11va";
+            try {
+                session = new StreamSession(connect_info, parent());
+            } catch (const Exception &e2) {
+                qWarning() << "Failed to start cloud streaming session:" << e2.what();
+                setGameImageUrl(QString());
+                if (QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent())) {
+                    qmlBackend->setCloudSessionReconnecting(false);
+                    emit qmlBackend->sessionError(tr("Cloud Streaming Failed"),
+                        QString("Failed to start session: %1").arg(e2.what()));
+                }
+                if (callback.isCallable()) {
+                    callback.call({false, QString("Failed to start session: %1").arg(e2.what())});
+                }
+                return;
+            }
+        } else
+#endif
+        {
+            qWarning() << "Failed to start cloud streaming session:" << e.what();
+            setGameImageUrl(QString());
+            if (QmlBackend *qmlBackend = qobject_cast<QmlBackend*>(parent())) {
+                qmlBackend->setCloudSessionReconnecting(false);
+                emit qmlBackend->sessionError(tr("Cloud Streaming Failed"),
+                    QString("Failed to start session: %1").arg(e.what()));
+            }
+            if (callback.isCallable()) {
+                callback.call({false, QString("Failed to start session: %1").arg(e.what())});
+            }
+            return;
+        }
+    }
+    try {
         emit sessionCreated(session);
 
         setAllocationProgress("");

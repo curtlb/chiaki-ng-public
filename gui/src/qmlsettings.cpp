@@ -1831,6 +1831,7 @@ QStringList QmlSettings::availableDecoders() const
         "videotoolbox",
 #elif defined(Q_OS_WIN)
         "d3d11va",
+        "d3d12va",
 #endif
     };
     QStringList out = {"none"};

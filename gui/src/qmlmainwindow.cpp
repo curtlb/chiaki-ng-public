@@ -8,6 +8,7 @@
 
 #define PL_LIBAV_IMPLEMENTATION 0
 #include <libplacebo/utils/libav.h>
+#include <libplacebo/filters.h>
 
 extern "C" {
 #include <libswscale/swscale.h>
@@ -1204,7 +1205,7 @@ void QmlMainWindow::notePresentedFrame(bool generated)
     QString text;
     if (settings && settings->GetShowFrameGenFps()) {
         if (settings->GetDlssFrameGen() >= 2 && generated_fps > 0)
-            text = QStringLiteral("%1(+%2DLSS)").arg(native).arg(generated_fps);
+            text = QStringLiteral("%1(+%2)").arg(native).arg(generated_fps);
         else
             text = QString::number(native);
     }
@@ -1302,18 +1303,22 @@ void QmlMainWindow::render()
         std::swap(frame, av_frame);
     frame_mutex.unlock();
 
-    // DLSS Frame Generation needs the game's depth and motion vectors, tagged on a
-    // swapchain that Streamline owns. A cloud stream is already encoded video and has
-    // neither, and NVIDIA turns frame generation off for video. The old path copied
-    // whole frames on this thread and then waited on vsync once per copy, which
-    // stalled the present and took the process down. Show the decoded frame only.
+    // Interpolation runs on the Vulkan device that already presents the stream.
+    // Extra pictures are drawn only when the monitor refreshes faster than the
+    // stream, and each one is a single GPU pass. No CPU copies.
     bool unique_frame = false;
+    gen_count = 0;
     if (!frame && !has_video && !keep_video) {
         pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
         pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
         clearGenerated();
         av_frame_free(&held_sw);
         frame_thumb.clear();
+    }
+    if (frame && isRepeatFrame(frame)) {
+        // Same picture sent again inside a faster stream. Keep the last real
+        // pair so the GPU interpolates across the game's own frames.
+        av_frame_free(&frame);
     }
     if (frame) {
         unique_frame = true;
@@ -1350,9 +1355,27 @@ void QmlMainWindow::render()
             }
         }
         last_decoded_ms = now;
+
+        const int requested = settings ? settings->GetDlssFrameGen() : 1;
+        if (requested >= 2 && current_frame.num_planes && previous_frame.num_planes) {
+            double base = decoded_fps_ema;
+            if (base < 1.0)
+                base = 60.0;
+            float hz = display_hz.load(std::memory_order_relaxed);
+            if (hz < 30.f)
+                hz = 60.f;
+            int fit = (int)std::floor(hz / base + 1e-3);
+            if (fit < 1)
+                fit = 1;
+            int gap = std::min(requested, fit) - 1;
+            if (gap > 3)
+                gap = 3;
+            if (gap > 0)
+                gen_count = gap;
+        }
     }
 
-    const int passes = 1;
+    const int passes = (unique_frame && gen_count > 0) ? gen_count + 1 : 1;
 
     for (int pass = 0; pass < passes; pass++) {
     struct pl_swapchain_frame sw_frame = {};
@@ -1524,12 +1547,37 @@ void QmlMainWindow::render()
         }
     }
 
-    const bool generated_pass = pass < gen_count && unique_frame;
-    const struct pl_frame *source = generated_pass
-            ? &gen_pl[pass]
-            : (current_frame.num_planes ? &current_frame : nullptr);
-    if (!pl_render_image(placebo_renderer, source, &target_frame, render_params))
-        qCWarning(chiakiGui) << "Failed to render Placebo frame!";
+    const bool generated_pass = pass < gen_count && unique_frame && previous_frame.num_planes && current_frame.num_planes;
+    bool drew = false;
+    static uint64_t mix_epoch = 1;
+    if (generated_pass) {
+        // Sample between the previous and current GPU frames. The oversample
+        // mixer holds each picture and only blends across the boundary, which
+        // is the same class of GPU interpolation mpv uses on a fast card.
+        const float u = float(pass + 1) / float(gen_count + 1);
+        const struct pl_frame *frames[2] = { &previous_frame, &current_frame };
+        const uint64_t sigs[2] = { mix_epoch, mix_epoch + 1 };
+        const float timestamps[2] = { -u, 1.f - u };
+        struct pl_frame_mix mix = {
+            .num_frames = 2,
+            .frames = frames,
+            .signatures = sigs,
+            .timestamps = timestamps,
+            .vsync_duration = 1.f / float(gen_count + 1),
+        };
+        struct pl_render_params mix_params = *render_params;
+        mix_params.frame_mixer = &pl_filter_oversample;
+        drew = pl_render_image_mix(placebo_renderer, &mix, &target_frame, &mix_params);
+        if (!drew)
+            qCWarning(chiakiGui) << "GPU frame interpolation failed, showing the decoded frame";
+    }
+    if (!drew) {
+        const struct pl_frame *source = current_frame.num_planes ? &current_frame : nullptr;
+        if (!pl_render_image(placebo_renderer, source, &target_frame, render_params))
+            qCWarning(chiakiGui) << "Failed to render Placebo frame!";
+    }
+    if (generated_pass && pass + 1 == gen_count)
+        mix_epoch += 2;
 
     const bool submitted = pl_swapchain_submit_frame(placebo_swapchain);
     if (!submitted)
@@ -1537,7 +1585,7 @@ void QmlMainWindow::render()
 
     pl_swapchain_swap_buffers(placebo_swapchain);
     if (submitted && unique_frame)
-        notePresentedFrame(generated_pass);
+        notePresentedFrame(generated_pass && drew);
     }
 }
 
