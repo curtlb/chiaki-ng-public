@@ -1616,29 +1616,9 @@ void QmlMainWindow::render()
             last_decoded_ms = now;
         }
 
-        const int requested = settings ? settings->GetDlssFrameGen() : 1;
-        if (!repeat && requested >= 2 && current_frame.num_planes && previous_frame.num_planes) {
-            double base = decoded_fps_ema;
-            if (base < 1.0)
-                base = 60.0;
-            float hz = display_hz.load(std::memory_order_relaxed);
-            if (hz < 30.f)
-                hz = 60.f;
-            int fit = (int)std::floor(hz / base + 1e-3);
-            if (fit < 1)
-                fit = 1;
-            int gap = std::min(requested, fit) - 1;
-            if (gap > 3)
-                gap = 3;
-            if (gap > 0 && !fg_broken) {
-                if (prepareFrameGen())
-                    gen_count = gap;
-                else {
-                    fg_broken = true;
-                    qCWarning(chiakiGui) << "GPU frame generation failed, showing decoded frames only";
-                }
-            }
-        }
+        // Each inserted frame was a new block warp. On a lit surface the blocks
+        // do not agree, so the cloth and the shoji flicker, and a higher
+        // multiplier only shows that flicker more often. Leave the game frame.
     }
 
     const int passes = (unique_frame && gen_count > 0) ? gen_count + 1 : 1;

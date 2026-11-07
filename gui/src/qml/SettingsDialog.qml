@@ -664,7 +664,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "(на видеокарте; X2, X3, X4, если монитор быстрее стрима)"
+                        text: "(вставка выключена: она рвала светлые края)"
                     }
 
                     Label {
@@ -679,7 +679,7 @@ DialogView {
 
                     Label {
                         Layout.alignment: Qt.AlignRight
-                        text: "(30(+90): кадры игры, не частота стрима, и кадры видеокарты)"
+                        text: "(частота смены картинки в игре, не частота стрима)"
                     }
 
                     Label {
