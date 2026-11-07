@@ -958,6 +958,9 @@ bool frame_fmt(int fmt, FrameFmt *out)
     case AV_PIX_FMT_P010LE:
         *out = { 2, 2, 4, true, false };
         return true;
+    case AV_PIX_FMT_YUV420P10LE:
+        *out = { 2, 2, 2, false, true };
+        return true;
     default:
         return false;
     }
@@ -977,6 +980,7 @@ int sample_luma(const AVFrame *f, int x, int y)
     case AV_PIX_FMT_YUV420P:
         return row[x];
     case AV_PIX_FMT_P010LE:
+    case AV_PIX_FMT_YUV420P10LE:
         return ((const uint16_t *)row)[x] >> 8;
     default:
         return -1;
@@ -1042,75 +1046,90 @@ void paint_moved_blocks(AVFrame *dst, const AVFrame *src, int plane, int bpp,
     }
 }
 
-// One whole picture between two different decoded frames. Blocks that have a
-// confident motion match are taken from the previous frame, shifted. The rest
-// stay on the nearer original, so the two pictures are never drawn on top of
-// each other.
-AVFrame *synthesize_frame(const AVFrame *prev, const AVFrame *next, float t)
-{
+// Motion is measured once per pair. X3 and X4 reuse it instead of searching again
+// for every in-between picture.
+struct MotionField {
     FrameFmt fmt;
-    if (!frame_fmt(prev->format, &fmt) || prev->format != next->format
+    int dw = 0;
+    int dh = 0;
+    int bxn = 0;
+    int byn = 0;
+    std::vector<int8_t> mvx;
+    std::vector<int8_t> mvy;
+    std::vector<uint8_t> good;
+    bool ok = false;
+};
+
+MotionField estimate_motion(const AVFrame *prev, const AVFrame *next)
+{
+    MotionField field;
+    if (!frame_fmt(prev->format, &field.fmt) || prev->format != next->format
             || prev->width != next->width || prev->height != next->height
             || prev->width < 64 || prev->height < 64)
-        return nullptr;
+        return field;
 
-    const int dw = std::max(32, prev->width / (prev->width >= 2560 ? 8 : 4));
-    const int dh = std::max(32, prev->height / (prev->height >= 2560 ? 8 : 4));
+    field.dw = std::max(64, prev->width / 8);
+    field.dh = std::max(64, prev->height / 8);
     std::vector<uint8_t> prev_luma, next_luma;
-    if (!build_luma8(prev, dw, dh, &prev_luma) || !build_luma8(next, dw, dh, &next_luma))
-        return nullptr;
+    if (!build_luma8(prev, field.dw, field.dh, &prev_luma) || !build_luma8(next, field.dw, field.dh, &next_luma))
+        return field;
 
     const int block = 4;
-    const int bxn = dw / block;
-    const int byn = dh / block;
-    const int radius = 4;
-    std::vector<int8_t> mvx((size_t)bxn * byn), mvy((size_t)bxn * byn);
-    std::vector<uint8_t> good((size_t)bxn * byn);
-    for (int by = 0; by < byn; by++) {
-        for (int bx = 0; bx < bxn; bx++) {
+    field.bxn = field.dw / block;
+    field.byn = field.dh / block;
+    const int radius = 3;
+    field.mvx.assign((size_t)field.bxn * field.byn, 0);
+    field.mvy.assign((size_t)field.bxn * field.byn, 0);
+    field.good.assign((size_t)field.bxn * field.byn, 0);
+    for (int by = 0; by < field.byn; by++) {
+        for (int bx = 0; bx < field.bxn; bx++) {
             const int x0 = bx * block;
             const int y0 = by * block;
             int best = 0;
             int bdx = 0, bdy = 0;
-            bool have = false;
             auto sad_at = [&](int dx, int dy) {
                 int sad = 0;
                 for (int y = 0; y < block; y++) {
-                    const uint8_t *a = prev_luma.data() + (size_t)(y0 + dy + y) * dw + (x0 + dx);
-                    const uint8_t *b = next_luma.data() + (size_t)(y0 + y) * dw + x0;
+                    const uint8_t *a = prev_luma.data() + (size_t)(y0 + dy + y) * field.dw + (x0 + dx);
+                    const uint8_t *b = next_luma.data() + (size_t)(y0 + y) * field.dw + x0;
                     for (int x = 0; x < block; x++)
                         sad += std::abs(int(a[x]) - int(b[x]));
                 }
                 return sad;
             };
-            if (x0 + block <= dw && y0 + block <= dh) {
-                best = sad_at(0, 0);
-                have = true;
-            }
-            if (!have || best > block * block * 3) {
+            best = sad_at(0, 0);
+            if (best > block * block * 3) {
                 for (int dy = -radius; dy <= radius; dy++) {
-                    if (y0 + dy < 0 || y0 + dy + block > dh)
+                    if (y0 + dy < 0 || y0 + dy + block > field.dh)
                         continue;
                     for (int dx = -radius; dx <= radius; dx++) {
-                        if (x0 + dx < 0 || x0 + dx + block > dw)
+                        if (x0 + dx < 0 || x0 + dx + block > field.dw)
                             continue;
                         const int sad = sad_at(dx, dy);
-                        if (!have || sad < best) {
+                        if (sad < best) {
                             best = sad;
                             bdx = dx;
                             bdy = dy;
-                            have = true;
                         }
                     }
                 }
             }
-            const size_t i = (size_t)by * bxn + bx;
-            mvx[i] = (int8_t)bdx;
-            mvy[i] = (int8_t)bdy;
-            good[i] = have && best <= block * block * 10;
+            const size_t i = (size_t)by * field.bxn + bx;
+            field.mvx[i] = (int8_t)bdx;
+            field.mvy[i] = (int8_t)bdy;
+            field.good[i] = best <= block * block * 10;
         }
     }
+    field.ok = true;
+    return field;
+}
 
+// Blocks with a confident match are taken from the previous frame, shifted.
+// The rest stay on the nearer original, so the two pictures are never blended.
+AVFrame *warp_frame(const AVFrame *prev, const AVFrame *next, const MotionField &field, float t)
+{
+    if (!field.ok)
+        return nullptr;
     AVFrame *out = av_frame_alloc();
     if (!out)
         return nullptr;
@@ -1123,19 +1142,19 @@ AVFrame *synthesize_frame(const AVFrame *prev, const AVFrame *next, float t)
         return nullptr;
     }
     av_frame_copy_props(out, next);
-
-    paint_moved_blocks(out, prev, 0, fmt.luma_bpp, out->width, out->height, bxn, byn,
-                       mvx.data(), mvy.data(), good.data(), t, dw, dh);
+    const FrameFmt &fmt = field.fmt;
+    paint_moved_blocks(out, prev, 0, fmt.luma_bpp, out->width, out->height, field.bxn, field.byn,
+                       field.mvx.data(), field.mvy.data(), field.good.data(), t, field.dw, field.dh);
     const int cw = out->width / fmt.chroma_div;
     const int ch = out->height / fmt.chroma_div;
     if (fmt.interleaved_uv) {
-        paint_moved_blocks(out, prev, 1, fmt.chroma_bpp, cw, ch, bxn, byn,
-                           mvx.data(), mvy.data(), good.data(), t, dw, dh);
+        paint_moved_blocks(out, prev, 1, fmt.chroma_bpp, cw, ch, field.bxn, field.byn,
+                           field.mvx.data(), field.mvy.data(), field.good.data(), t, field.dw, field.dh);
     } else if (fmt.planar_uv) {
-        paint_moved_blocks(out, prev, 1, fmt.chroma_bpp, cw, ch, bxn, byn,
-                           mvx.data(), mvy.data(), good.data(), t, dw, dh);
-        paint_moved_blocks(out, prev, 2, fmt.chroma_bpp, cw, ch, bxn, byn,
-                           mvx.data(), mvy.data(), good.data(), t, dw, dh);
+        paint_moved_blocks(out, prev, 1, fmt.chroma_bpp, cw, ch, field.bxn, field.byn,
+                           field.mvx.data(), field.mvy.data(), field.good.data(), t, field.dw, field.dh);
+        paint_moved_blocks(out, prev, 2, fmt.chroma_bpp, cw, ch, field.bxn, field.byn,
+                           field.mvx.data(), field.mvy.data(), field.good.data(), t, field.dw, field.dh);
     }
     return out;
 }
@@ -1225,7 +1244,8 @@ bool QmlMainWindow::isRepeatFrame(const AVFrame *frame)
         }
         // A 30 fps game inside a 60 fps stream repeats the same picture.
         // Those copies are not new frames and must not be counted or displayed as generated.
-        repeat = sum <= 4 * (int)now.size() && big * 50 < (int)now.size();
+        // Re-encoded copies of a 30 fps frame are close, but not bit-identical.
+        repeat = sum <= 8 * (int)now.size() && big * 20 < (int)now.size();
     }
     if (!repeat)
         frame_thumb.swap(now);
@@ -1239,9 +1259,12 @@ void QmlMainWindow::buildGenerated(const AVFrame *prev, const AVFrame *next, int
         return;
     if (gap_count > 3)
         gap_count = 3;
+    const MotionField motion = estimate_motion(prev, next);
+    if (!motion.ok)
+        return;
     for (int i = 0; i < gap_count; i++) {
         const float t = float(i + 1) / float(gap_count + 1);
-        gen_av[i] = synthesize_frame(prev, next, t);
+        gen_av[i] = warp_frame(prev, next, motion, t);
         if (!gen_av[i])
             break;
         struct pl_avframe_params avparams = {
