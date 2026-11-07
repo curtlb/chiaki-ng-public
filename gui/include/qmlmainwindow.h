@@ -151,7 +151,7 @@ private:
     void notePresentedFrame(bool generated);
     void clearGenerated();
     bool isRepeatFrame(const AVFrame *frame);
-    void buildGenerated(const AVFrame *prev, const AVFrame *next, int slots);
+    void buildGenerated(const AVFrame *prev, const AVFrame *next, int gap_count);
     bool handleShortcut(QKeyEvent *event);
     bool event(QEvent *event) override;
     QObject *focusObject() const override;

@@ -1232,15 +1232,15 @@ bool QmlMainWindow::isRepeatFrame(const AVFrame *frame)
     return repeat;
 }
 
-void QmlMainWindow::buildGenerated(const AVFrame *prev, const AVFrame *next, int slots)
+void QmlMainWindow::buildGenerated(const AVFrame *prev, const AVFrame *next, int gap_count)
 {
     clearGenerated();
-    if (!prev || !next || slots < 1)
+    if (!prev || !next || gap_count < 1)
         return;
-    if (slots > 3)
-        slots = 3;
-    for (int i = 0; i < slots; i++) {
-        const float t = float(i + 1) / float(slots + 1);
+    if (gap_count > 3)
+        gap_count = 3;
+    for (int i = 0; i < gap_count; i++) {
+        const float t = float(i + 1) / float(gap_count + 1);
         gen_av[i] = synthesize_frame(prev, next, t);
         if (!gen_av[i])
             break;
@@ -1300,7 +1300,7 @@ void QmlMainWindow::render()
         if (current_frame.num_planes && current_frame.planes[0].texture == *tex)
             tex = &placebo_tex[4];
 
-        int slots = 0;
+        int gap_count = 0;
         if (requested >= 2 && held_sw) {
             const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
             double base = decoded_fps_ema;
@@ -1317,10 +1317,10 @@ void QmlMainWindow::render()
             int fit = (int)std::floor(hz / base + 1e-3);
             if (fit < 1)
                 fit = 1;
-            slots = std::min(requested, fit) - 1;
+            gap_count = std::min(requested, fit) - 1;
         }
-        if (slots > 0)
-            buildGenerated(held_sw, frame, slots);
+        if (gap_count > 0)
+            buildGenerated(held_sw, frame, gap_count);
         else
             clearGenerated();
 
