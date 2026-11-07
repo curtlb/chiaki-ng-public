@@ -1203,7 +1203,7 @@ void QmlMainWindow::notePresentedFrame(bool generated)
 
     QString text;
     if (settings && settings->GetShowFrameGenFps()) {
-        if (settings->GetDlssFrameGen() >= 2)
+        if (settings->GetDlssFrameGen() >= 2 && generated_fps > 0)
             text = QStringLiteral("%1(+%2DLSS)").arg(native).arg(generated_fps);
         else
             text = QString::number(native);
@@ -1302,13 +1302,12 @@ void QmlMainWindow::render()
         std::swap(frame, av_frame);
     frame_mutex.unlock();
 
-    const int requested = settings ? settings->GetDlssFrameGen() : 1;
+    // DLSS Frame Generation needs the game's depth and motion vectors, tagged on a
+    // swapchain that Streamline owns. A cloud stream is already encoded video and has
+    // neither, and NVIDIA turns frame generation off for video. The old path copied
+    // whole frames on this thread and then waited on vsync once per copy, which
+    // stalled the present and took the process down. Show the decoded frame only.
     bool unique_frame = false;
-    if (frame && requested >= 2 && isRepeatFrame(frame)) {
-        av_frame_free(&frame);
-        if (current_frame.num_planes)
-            return;
-    }
     if (!frame && !has_video && !keep_video) {
         pl_unmap_avframe(placebo_vulkan->gpu, &previous_frame);
         pl_unmap_avframe(placebo_vulkan->gpu, &current_frame);
@@ -1322,30 +1321,7 @@ void QmlMainWindow::render()
             session->ApplyDisplayCrop(frame);
         if (current_frame.num_planes && current_frame.planes[0].texture == *tex)
             tex = &placebo_tex[4];
-
-        int gap_count = 0;
-        if (requested >= 2 && held_sw) {
-            const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
-            double base = decoded_fps_ema;
-            if (last_decoded_ms > 0) {
-                const double dt = double(now_ms - last_decoded_ms);
-                if (dt >= 5.0 && dt <= 100.0)
-                    base = 1000.0 / dt;
-            }
-            if (base < 1.0)
-                base = 60.0;
-            float hz = display_hz.load(std::memory_order_relaxed);
-            if (hz < 30.f)
-                hz = 60.f;
-            int fit = (int)std::floor(hz / base + 1e-3);
-            if (fit < 1)
-                fit = 1;
-            gap_count = std::min(requested, fit) - 1;
-        }
-        if (gap_count > 0)
-            buildGenerated(held_sw, frame, gap_count);
-        else
-            clearGenerated();
+        clearGenerated();
 
         struct pl_avframe_params avparams = {
             .frame = frame,
@@ -1364,7 +1340,6 @@ void QmlMainWindow::render()
             }
         }
         av_frame_free(&held_sw);
-        held_sw = av_frame_clone(frame);
         av_frame_free(&frame);
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (last_decoded_ms > 0) {
@@ -1377,7 +1352,7 @@ void QmlMainWindow::render()
         last_decoded_ms = now;
     }
 
-    const int passes = (unique_frame && gen_count > 0) ? gen_count + 1 : 1;
+    const int passes = 1;
 
     for (int pass = 0; pass < passes; pass++) {
     struct pl_swapchain_frame sw_frame = {};
