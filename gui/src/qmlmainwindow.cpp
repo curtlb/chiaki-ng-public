@@ -1446,34 +1446,43 @@ bool QmlMainWindow::prepareFrameGen()
     var.var = pl_var_vec2("grid");
     var.data = grid;
     var.dynamic = true;
-    // One cell of the 160x90 grid is the search step, so the vector can follow
-    // a real camera move. The value is stored around 0.5 because a UNORM
-    // target cannot keep a negative offset.
+    // A vector is kept only when it beats "stay still" by a clear margin.
+    // Bright specks match almost anything, and those weak vectors are what
+    // shimmer. Confidence is stored in the third channel, around 0.5 so a
+    // UNORM target can keep a negative offset.
+    static const char *header =
+        "float fg_sad(vec2 uv, vec2 duv, vec2 texel) {\n"
+        "  vec3 w = vec3(0.2126, 0.7152, 0.0722);\n"
+        "  float sad = 0.0;\n"
+        "  for (int oy = -1; oy <= 1; oy++) {\n"
+        "    for (int ox = -1; ox <= 1; ox++) {\n"
+        "      vec2 o = vec2(float(ox), float(oy)) * texel;\n"
+        "      vec2 pa = clamp(uv + duv + o, vec2(0.002), vec2(0.998));\n"
+        "      vec2 pb = clamp(uv + o, vec2(0.002), vec2(0.998));\n"
+        "      sad += abs(dot(texture(prev_tex, pa).rgb, w) - dot(texture(curr_tex, pb).rgb, w));\n"
+        "    }\n"
+        "  }\n"
+        "  return sad;\n"
+        "}\n";
     static const char *body =
         "vec2 uv = (gl_FragCoord.xy + vec2(0.5)) / grid;\n"
         "vec2 texel = 1.0 / grid;\n"
-        "vec3 w = vec3(0.2126, 0.7152, 0.0722);\n"
-        "float best = 1e5;\n"
+        "float sad0 = fg_sad(uv, vec2(0.0), texel);\n"
+        "float best = sad0;\n"
         "vec2 found = vec2(0.0);\n"
-        "for (int y = -8; y <= 8; y++) {\n"
-        "  for (int x = -8; x <= 8; x++) {\n"
+        "for (int y = -5; y <= 5; y++) {\n"
+        "  for (int x = -5; x <= 5; x++) {\n"
+        "    if (x == 0 && y == 0) continue;\n"
         "    vec2 duv = vec2(float(x), float(y)) * texel;\n"
-        "    float sad = 0.0;\n"
-        "    for (int oy = -1; oy <= 1; oy++) {\n"
-        "      for (int ox = -1; ox <= 1; ox++) {\n"
-        "        vec2 o = vec2(float(ox), float(oy)) * texel;\n"
-        "        vec2 pa = clamp(uv + duv + o, vec2(0.002), vec2(0.998));\n"
-        "        vec2 pb = clamp(uv + o, vec2(0.002), vec2(0.998));\n"
-        "        sad += abs(dot(texture(prev_tex, pa).rgb, w) - dot(texture(curr_tex, pb).rgb, w));\n"
-        "      }\n"
-        "    }\n"
-        "    float bias = (x == 0 && y == 0) ? 0.0 : 0.004;\n"
-        "    if (sad + bias < best) { best = sad + bias; found = duv; }\n"
+        "    float sad = fg_sad(uv, duv, texel);\n"
+        "    if (sad + 0.12 < best) { best = sad; found = duv; }\n"
         "  }\n"
         "}\n"
-        "color = vec4(found * 8.0 + vec2(0.5), 0.0, 1.0);\n";
+        "float gain = clamp((sad0 - best) / 0.45, 0.0, 1.0);\n"
+        "color = vec4(found * 8.0 + vec2(0.5), gain, 1.0);\n";
     struct pl_custom_shader custom = {};
     custom.description = "framegen motion";
+    custom.header = header;
     custom.body = body;
     custom.input = PL_SHADER_SIG_NONE;
     custom.output = PL_SHADER_SIG_COLOR;
@@ -1497,33 +1506,25 @@ bool QmlMainWindow::drawFrameGen(float t, pl_frame *target)
     var.var = pl_var_float("mix_t");
     var.data = &t;
     var.dynamic = true;
-    // Shift both pictures along the vector and meet in the middle. A still
-    // pixel stays on the nearer original so it does not ghost. A moving pixel
-    // is taken from the shifted samples, which is what makes the motion finer.
+    // One source sample, shifted. Averaging two pictures drew bright lamps
+    // twice. A vector is used only when the neighbouring blocks agree, so a
+    // lit grid cannot be torn into rectangles.
     static const char *body =
         "vec2 uv = gl_FragCoord.xy / vec2(textureSize(prev_tex, 0));\n"
-        "vec2 base = (texture(motion_tex, uv).xy - vec2(0.5)) / 8.0;\n"
-        "vec2 px = 2.0 / vec2(textureSize(prev_tex, 0));\n"
-        "vec3 w = vec3(0.2126, 0.7152, 0.0722);\n"
-        "vec2 mv = base;\n"
-        "float best = 1e5;\n"
-        "for (int y = -2; y <= 2; y++) {\n"
-        "  for (int x = -2; x <= 2; x++) {\n"
-        "    vec2 cand = base + vec2(float(x), float(y)) * px;\n"
-        "    float sad = abs(dot(texture(prev_tex, clamp(uv + cand, vec2(0.0), vec2(1.0))).rgb, w)\n"
-        "                  - dot(texture(curr_tex, uv).rgb, w));\n"
-        "    if (sad < best) { best = sad; mv = cand; }\n"
-        "  }\n"
-        "}\n"
-        "vec3 prev_w = texture(prev_tex, clamp(uv + mv * mix_t, vec2(0.0), vec2(1.0))).rgb;\n"
-        "vec3 curr_w = texture(curr_tex, clamp(uv - mv * (1.0 - mix_t), vec2(0.0), vec2(1.0))).rgb;\n"
-        "vec3 moved = mix(prev_w, curr_w, mix_t);\n"
-        "float moving = smoothstep(0.0015, 0.006, length(mv));\n"
-        "float hole = smoothstep(0.15, 0.45, distance(prev_w, curr_w));\n"
-        "vec3 still = mix_t < 0.5 ? texture(prev_tex, uv).rgb : texture(curr_tex, uv).rgb;\n"
-        "vec3 hole_fill = mix(texture(prev_tex, uv).rgb, texture(curr_tex, uv).rgb, mix_t);\n"
-        "vec3 advanced = mix(moved, hole_fill, hole);\n"
-        "color = vec4(mix(still, advanced, moving), 1.0);\n";
+        "vec2 cell = 1.0 / vec2(textureSize(motion_tex, 0));\n"
+        "vec3 mot = texture(motion_tex, uv).xyz;\n"
+        "vec2 mv = (mot.xy - vec2(0.5)) / 8.0;\n"
+        "vec2 left = (texture(motion_tex, uv + vec2(cell.x, 0.0)).xy - vec2(0.5)) / 8.0;\n"
+        "vec2 right = (texture(motion_tex, uv - vec2(cell.x, 0.0)).xy - vec2(0.5)) / 8.0;\n"
+        "vec2 up = (texture(motion_tex, uv + vec2(0.0, cell.y)).xy - vec2(0.5)) / 8.0;\n"
+        "vec2 down = (texture(motion_tex, uv - vec2(0.0, cell.y)).xy - vec2(0.5)) / 8.0;\n"
+        "float spread = length(mv - left) + length(mv - right) + length(mv - up) + length(mv - down);\n"
+        "float stable = 1.0 - smoothstep(0.008, 0.03, spread * 0.25);\n"
+        "float gain = smoothstep(0.25, 0.7, mot.z) * stable;\n"
+        "vec2 shift = mv * gain;\n"
+        "vec3 prev_s = texture(prev_tex, clamp(uv + shift * mix_t, vec2(0.0), vec2(1.0))).rgb;\n"
+        "vec3 curr_s = texture(curr_tex, clamp(uv - shift * (1.0 - mix_t), vec2(0.0), vec2(1.0))).rgb;\n"
+        "color = vec4(mix_t < 0.5 ? prev_s : curr_s, 1.0);\n";
     struct pl_custom_shader custom = {};
     custom.description = "framegen warp";
     custom.body = body;
