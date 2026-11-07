@@ -1240,43 +1240,14 @@ void QmlMainWindow::render()
         }
     }
 
+    // One source per present. Mixing the two decoded frames on top of each
+    // other is what drew the double image.
     const bool generated_pass = passes > 1 && pass + 1 < passes;
-    if (generated_pass) {
-        const float toward_current = float(pass + 1) / float(passes);
-        const struct pl_frame *frames[] = { &previous_frame, &current_frame, };
-        const uint64_t signatures[] = { 1, 2 };
-        const float timestamps[] = { -toward_current, 1.f - toward_current };
-        struct pl_frame_mix frame_mix = {
-            .num_frames = 2,
-            .frames = frames,
-            .signatures = signatures,
-            .timestamps = timestamps,
-            .vsync_duration = 1.0,
-        };
-        struct pl_render_params params = *render_params;
-        params.frame_mixer = pl_find_filter_config("linear", PL_FILTER_FRAME_MIXING);
-        if (!pl_render_image_mix(placebo_renderer, &frame_mix, &target_frame, &params))
-            qCWarning(chiakiGui) << "Failed to render generated frame!";
-    } else if (passes == 1 && current_frame.num_planes && previous_frame.num_planes) {
-        const struct pl_frame *frames[] = { &previous_frame, &current_frame, };
-        const uint64_t sig = QDateTime::currentMSecsSinceEpoch();
-        const uint64_t signatures[] = { sig, sig + 1 };
-        const float timestamps[] = { -0.5, 0.5 };
-        struct pl_frame_mix frame_mix = {
-            .num_frames = 2,
-            .frames = frames,
-            .signatures = signatures,
-            .timestamps = timestamps,
-            .vsync_duration = 1.0,
-        };
-        struct pl_render_params params = *render_params;
-        params.frame_mixer = pl_find_filter_config("linear", PL_FILTER_FRAME_MIXING);
-        if (!pl_render_image_mix(placebo_renderer, &frame_mix, &target_frame, &params))
-            qCWarning(chiakiGui) << "Failed to render Placebo frame!";
-    } else {
-        if (!pl_render_image(placebo_renderer, current_frame.num_planes ? &current_frame : nullptr, &target_frame, render_params))
-            qCWarning(chiakiGui) << "Failed to render Placebo frame!";
-    }
+    const struct pl_frame *source = generated_pass
+            ? &previous_frame
+            : (current_frame.num_planes ? &current_frame : nullptr);
+    if (!pl_render_image(placebo_renderer, source, &target_frame, render_params))
+        qCWarning(chiakiGui) << "Failed to render Placebo frame!";
 
     const bool submitted = pl_swapchain_submit_frame(placebo_swapchain);
     if (!submitted)
