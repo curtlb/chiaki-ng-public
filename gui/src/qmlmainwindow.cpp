@@ -1321,6 +1321,8 @@ bool QmlMainWindow::ensureFrameGen(QSize size)
     const enum pl_fmt_caps caps = (enum pl_fmt_caps)(PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_LINEAR);
     pl_fmt rgba = pl_find_fmt(gpu, PL_FMT_UNORM, 4, 8, 0, caps);
     pl_fmt motion = pl_find_fmt(gpu, PL_FMT_FLOAT, 4, 16, 0, caps);
+    if (!motion)
+        motion = rgba;
     if (!rgba || !motion)
         return false;
     struct pl_tex_params color = {
@@ -1392,6 +1394,25 @@ static pl_shader_desc fg_sampler(const char *name, int binding, pl_tex tex)
     return desc;
 }
 
+static bool present_prepared(pl_renderer renderer, pl_tex tex, pl_frame *target)
+{
+    struct pl_frame src = {};
+    src.num_planes = 1;
+    src.planes[0].texture = tex;
+    src.planes[0].components = 4;
+    src.planes[0].component_mapping[0] = 0;
+    src.planes[0].component_mapping[1] = 1;
+    src.planes[0].component_mapping[2] = 2;
+    src.planes[0].component_mapping[3] = 3;
+    src.repr = pl_color_repr_rgb;
+    src.color = pl_color_space_srgb;
+    const float w = (float)tex->params.w;
+    const float h = (float)tex->params.h;
+    src.crop = {0.f, 0.f, w, h};
+    target->crop = src.crop;
+    return pl_render_image(renderer, &src, target, &pl_render_fast_params);
+}
+
 static bool dispatch_framegen(pl_dispatch dp, pl_tex target, const struct pl_custom_shader *custom)
 {
     pl_shader sh = pl_dispatch_begin(dp);
@@ -1425,28 +1446,32 @@ bool QmlMainWindow::prepareFrameGen()
     var.var = pl_var_vec2("grid");
     var.data = grid;
     var.dynamic = true;
+    // One cell of the 160x90 grid is the search step, so the vector can follow
+    // a real camera move. The value is stored around 0.5 because a UNORM
+    // target cannot keep a negative offset.
     static const char *body =
-        "vec2 uv = gl_FragCoord.xy / grid;\n"
-        "vec2 tex = vec2(textureSize(prev_tex, 0));\n"
-        "vec2 px = max(vec2(4.0), tex / vec2(180.0)) / tex;\n"
-        "float best = 1e6;\n"
+        "vec2 uv = (gl_FragCoord.xy + vec2(0.5)) / grid;\n"
+        "vec2 texel = 1.0 / grid;\n"
+        "vec3 w = vec3(0.2126, 0.7152, 0.0722);\n"
+        "float best = 1e5;\n"
         "vec2 found = vec2(0.0);\n"
-        "for (int y = -5; y <= 5; y++) {\n"
-        "  for (int x = -5; x <= 5; x++) {\n"
-        "    vec2 duv = vec2(float(x), float(y)) * px;\n"
+        "for (int y = -8; y <= 8; y++) {\n"
+        "  for (int x = -8; x <= 8; x++) {\n"
+        "    vec2 duv = vec2(float(x), float(y)) * texel;\n"
         "    float sad = 0.0;\n"
         "    for (int oy = -1; oy <= 1; oy++) {\n"
         "      for (int ox = -1; ox <= 1; ox++) {\n"
-        "        vec2 o = vec2(float(ox), float(oy)) * px;\n"
-        "        float a = dot(texture(prev_tex, clamp(uv + duv + o, vec2(0.0), vec2(1.0))).rgb, vec3(0.2126, 0.7152, 0.0722));\n"
-        "        float b = dot(texture(curr_tex, clamp(uv + o, vec2(0.0), vec2(1.0))).rgb, vec3(0.2126, 0.7152, 0.0722));\n"
-        "        sad += abs(a - b);\n"
+        "        vec2 o = vec2(float(ox), float(oy)) * texel;\n"
+        "        vec2 pa = clamp(uv + duv + o, vec2(0.002), vec2(0.998));\n"
+        "        vec2 pb = clamp(uv + o, vec2(0.002), vec2(0.998));\n"
+        "        sad += abs(dot(texture(prev_tex, pa).rgb, w) - dot(texture(curr_tex, pb).rgb, w));\n"
         "      }\n"
         "    }\n"
-        "    if (sad < best) { best = sad; found = duv; }\n"
+        "    float bias = (x == 0 && y == 0) ? 0.0 : 0.004;\n"
+        "    if (sad + bias < best) { best = sad + bias; found = duv; }\n"
         "  }\n"
         "}\n"
-        "color = vec4(found, 0.0, 1.0);\n";
+        "color = vec4(found * 8.0 + vec2(0.5), 0.0, 1.0);\n";
     struct pl_custom_shader custom = {};
     custom.description = "framegen motion";
     custom.body = body;
@@ -1472,18 +1497,33 @@ bool QmlMainWindow::drawFrameGen(float t, pl_frame *target)
     var.var = pl_var_float("mix_t");
     var.data = &t;
     var.dynamic = true;
+    // Shift both pictures along the vector and meet in the middle. A still
+    // pixel stays on the nearer original so it does not ghost. A moving pixel
+    // is taken from the shifted samples, which is what makes the motion finer.
     static const char *body =
         "vec2 uv = gl_FragCoord.xy / vec2(textureSize(prev_tex, 0));\n"
-        "vec2 mv = texture(motion_tex, uv).xy;\n"
+        "vec2 base = (texture(motion_tex, uv).xy - vec2(0.5)) / 8.0;\n"
+        "vec2 px = 2.0 / vec2(textureSize(prev_tex, 0));\n"
+        "vec3 w = vec3(0.2126, 0.7152, 0.0722);\n"
+        "vec2 mv = base;\n"
+        "float best = 1e5;\n"
+        "for (int y = -2; y <= 2; y++) {\n"
+        "  for (int x = -2; x <= 2; x++) {\n"
+        "    vec2 cand = base + vec2(float(x), float(y)) * px;\n"
+        "    float sad = abs(dot(texture(prev_tex, clamp(uv + cand, vec2(0.0), vec2(1.0))).rgb, w)\n"
+        "                  - dot(texture(curr_tex, uv).rgb, w));\n"
+        "    if (sad < best) { best = sad; mv = cand; }\n"
+        "  }\n"
+        "}\n"
         "vec3 prev_w = texture(prev_tex, clamp(uv + mv * mix_t, vec2(0.0), vec2(1.0))).rgb;\n"
         "vec3 curr_w = texture(curr_tex, clamp(uv - mv * (1.0 - mix_t), vec2(0.0), vec2(1.0))).rgb;\n"
-        "vec3 prev_h = texture(prev_tex, uv).rgb;\n"
-        "vec3 curr_h = texture(curr_tex, uv).rgb;\n"
-        "float err = distance(prev_w, curr_w);\n"
-        "float conf = 1.0 - smoothstep(0.04, 0.22, err);\n"
-        "vec3 warped = mix(prev_w, curr_w, mix_t);\n"
-        "vec3 held = mix_t < 0.5 ? prev_h : curr_h;\n"
-        "color = vec4(mix(held, warped, conf), 1.0);\n";
+        "vec3 moved = mix(prev_w, curr_w, mix_t);\n"
+        "float moving = smoothstep(0.0015, 0.006, length(mv));\n"
+        "float hole = smoothstep(0.15, 0.45, distance(prev_w, curr_w));\n"
+        "vec3 still = mix_t < 0.5 ? texture(prev_tex, uv).rgb : texture(curr_tex, uv).rgb;\n"
+        "vec3 hole_fill = mix(texture(prev_tex, uv).rgb, texture(curr_tex, uv).rgb, mix_t);\n"
+        "vec3 advanced = mix(moved, hole_fill, hole);\n"
+        "color = vec4(mix(still, advanced, moving), 1.0);\n";
     struct pl_custom_shader custom = {};
     custom.description = "framegen warp";
     custom.body = body;
@@ -1495,22 +1535,7 @@ bool QmlMainWindow::drawFrameGen(float t, pl_frame *target)
     custom.num_variables = 1;
     if (!dispatch_framegen(fg_dispatch, fg_out, &custom))
         return false;
-
-    struct pl_frame src = {};
-    src.num_planes = 1;
-    src.planes[0].texture = fg_out;
-    src.planes[0].components = 4;
-    src.planes[0].component_mapping[0] = 0;
-    src.planes[0].component_mapping[1] = 1;
-    src.planes[0].component_mapping[2] = 2;
-    src.planes[0].component_mapping[3] = 3;
-    src.repr = pl_color_repr_rgb;
-    src.color = pl_color_space_srgb;
-    const float w = (float)fg_out->params.w;
-    const float h = (float)fg_out->params.h;
-    src.crop = {0.f, 0.f, w, h};
-    target->crop = src.crop;
-    return pl_render_image(placebo_renderer, &src, target, &pl_render_fast_params);
+    return present_prepared(placebo_renderer, fg_out, target);
 }
 
 void QmlMainWindow::render()
@@ -1796,7 +1821,8 @@ void QmlMainWindow::render()
             fg_broken = true;
             qCWarning(chiakiGui) << "GPU frame warp failed, showing the decoded frame";
         }
-    }
+    } else if (gen_count > 0 && fg_curr)
+        drew = present_prepared(placebo_renderer, fg_curr, &target_frame);
     if (!drew) {
         const struct pl_frame *source = current_frame.num_planes ? &current_frame : nullptr;
         if (!pl_render_image(placebo_renderer, source, &target_frame, render_params))
